@@ -14,9 +14,10 @@ import sys
 import tarfile
 import time
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 
-from _process import _compress, _execute, _git, _save_rollout, _thread_id
+from _process import _capacity_error, _compress, _execute, _git, _save_rollout, _thread_id
 
 _ROOT = Path(__file__).resolve().parents[1]
 _OUTPUT = _ROOT / "baseline"
@@ -24,6 +25,7 @@ _WORK = _ROOT / "agent-workspace" / "baselines"
 _UPSTREAM = _ROOT / "agent-workspace" / "upstream"
 _BUDGET_SECONDS = 12 * 60 * 60
 _FINAL_SECONDS = 5 * 60
+_CAPACITY_BACKOFF_SECONDS = 60
 _PROBLEMS = ("gemm", "conv2d", "fmha", "gdn", "topk")
 _METHODS = ("KDA", "codex", "AKO4ALL")
 _MODELS = {"astra": ("gpt-6-astra", "xhigh"), "luna": ("gpt-5.6-luna", "max")}
@@ -33,6 +35,11 @@ _REVISIONS = {
 }
 _ARCHIVE_EXCLUDES = {".git", "__pycache__", ".venv", "build", ".cache"}
 _GPU_MARKERS = ("triton", "__global__", "cutlass", "cuda.tile")
+
+
+class _Existing(StrEnum):
+    REJECT = "reject"
+    RESUME = "resume"
 
 
 def _write(path, value) -> None:
@@ -222,7 +229,18 @@ def _publish(output, method, model, problem) -> None:
     _git(_ROOT, "push", "origin", "HEAD")
 
 
-def _run_job(method, model, problem) -> None:
+def _resume_state(path):
+    state = json.loads(path.read_text())
+    if state["status"] != "failed":
+        raise RuntimeError("only failed jobs can be explicitly resumed")
+    if time.time() >= state["deadline"]:
+        raise RuntimeError("the original job budget has expired")
+    state.update(status="running", runner_pid=os.getpid())
+    state.pop("error", None)
+    return state
+
+
+def _run_job(method, model, problem, existing=_Existing.REJECT) -> None:
     output = _OUTPUT / method / model / problem
     work = _WORK / method / model / problem
     output.mkdir(parents=True, exist_ok=True)
@@ -231,23 +249,33 @@ def _run_job(method, model, problem) -> None:
         state = json.loads(state_path.read_text())
         if state["status"] == "validated":
             return
-        raise RuntimeError(f"existing unfinished job requires inspection: {output}")
-
-    _prepare(method, problem, work)
-    start = time.time()
-    deadline = start + _BUDGET_SECONDS
-    state = {
-        "method": method, "model": _MODELS[model][0], "effort": _MODELS[model][1],
-        "problem": problem, "budget_seconds": _BUDGET_SECONDS,
-        "started_at": start, "deadline": deadline, "status": "running",
-        "runner_pid": os.getpid(), "framework": _REVISIONS.get(method),
-        "repository_commit": _git(_ROOT, "rev-parse", "HEAD"),
-    }
+        if existing != _Existing.RESUME:
+            raise RuntimeError(f"existing unfinished job requires inspection: {output}")
+        state = _resume_state(state_path)
+    else:
+        _prepare(method, problem, work)
+        start = time.time()
+        state = {
+            "method": method, "model": _MODELS[model][0], "effort": _MODELS[model][1],
+            "problem": problem, "budget_seconds": _BUDGET_SECONDS,
+            "started_at": start, "deadline": start + _BUDGET_SECONDS,
+            "status": "running", "runner_pid": os.getpid(),
+            "framework": _REVISIONS.get(method),
+            "repository_commit": _git(_ROOT, "rev-parse", "HEAD"),
+        }
+    start, deadline = state["started_at"], state["deadline"]
     _write(state_path, state)
     prompt = _prompt(method, model, problem, work, deadline)
-    (output / "prompt.txt").write_text(prompt)
-    session = None
-    turn = 0
+    if not (output / "prompt.txt").exists():
+        (output / "prompt.txt").write_text(prompt)
+    session = state.get("session")
+    turn = state.get("turns", 0)
+    if session:
+        prompt = (
+            "Resume the same experiment after an interrupted model turn. Inspect "
+            "existing candidates, notes and interrupted commands before continuing. "
+            "Do not restart from the seed.\n\n" + prompt
+        )
     try:
         while time.time() < deadline - _FINAL_SECONDS:
             turn += 1
@@ -257,11 +285,18 @@ def _run_job(method, model, problem) -> None:
             remaining = deadline - _FINAL_SECONDS - time.time()
             code = _execute(command, work, trace, remaining, prompt)
             session = session or _thread_id(trace)
+            capacity = _capacity_error(trace)
             _compress(trace)
             if session:
                 _save_rollout(session, output / "rollout.jsonl.gz")
             state.update(turns=turn, session=session, last_exit=code)
             _write(state_path, state)
+            if code and capacity:
+                # Capacity delays consume the same budget; never switch models.
+                delay = min(_CAPACITY_BACKOFF_SECONDS, deadline - _FINAL_SECONDS - time.time())
+                if delay > 0:
+                    time.sleep(delay)
+                continue
             if code and code != -signal.SIGTERM:
                 raise RuntimeError(f"Codex failed with exit {code}; inspect traces")
             prompt = (
@@ -285,6 +320,8 @@ def _run_job(method, model, problem) -> None:
 def _main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--job", nargs=3, metavar=("METHOD", "MODEL", "PROBLEM"))
+    parser.add_argument("--resume", dest="existing", action="store_const",
+                        const=_Existing.RESUME, default=_Existing.REJECT)
     args = parser.parse_args()
     os.environ["PYTHONPATH"] = str(_ROOT / "src")
     _WORK.mkdir(parents=True, exist_ok=True)
@@ -295,7 +332,7 @@ def _main() -> None:
             if method not in _METHODS or model not in _MODELS or problem not in _PROBLEMS:
                 parser.error("unknown method, model or problem")
             print(f"Starting {method}/{model}/{problem}", flush=True)
-            _run_job(method, model, problem)
+            _run_job(method, model, problem, args.existing)
 
 
 if __name__ == "__main__":

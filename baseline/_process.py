@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 _TERM_GRACE_SECONDS = 5
+_CAPACITY_MESSAGE = "Selected model is at capacity."
 
 
 def _execute(command, cwd, output, timeout, prompt=None) -> int:
@@ -70,6 +71,21 @@ def _thread_id(trace: Path) -> str | None:
             if event.get("type") == "thread.started":
                 return event["thread_id"]
     return None
+
+
+def _capacity_error(trace: Path) -> bool:
+    with trace.open() as stream:
+        for line in stream:
+            event = json.loads(line)
+            if event.get("type") == "error":
+                message = event.get("message", "")
+            elif event.get("type") == "turn.failed":
+                message = event.get("error", {}).get("message", "")
+            else:
+                continue
+            if _CAPACITY_MESSAGE in message:
+                return True
+    return False
 
 
 def _save_rollout(thread_id: str, destination: Path) -> None:

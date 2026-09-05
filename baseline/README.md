@@ -28,12 +28,15 @@ KDA requires its pinned submodules (`git submodule update --init --recursive`).
 python baseline/run.py
 # One job:
 python baseline/run.py --job KDA astra gemm
+# Resume a failed job after inspecting its saved error:
+python baseline/run.py --resume
 ```
 
-Each finished job is committed and pushed to `origin`. A failure saves and
-publishes its evidence, then stops the queue for inspection. A running lock
-prevents concurrent suite processes. Existing unfinished jobs require inspection;
-restarting the runner does not silently reset their budgets.
+Each finished job is committed and pushed to `origin`. Model-capacity failures
+retry after 60 seconds with the same session, model and deadline. Other failures
+save and publish their evidence, then stop the queue for inspection. `--resume`
+continues failed jobs within their original deadlines. A running lock prevents
+concurrent suite processes; restarting never silently resets a budget.
 
 Each job saves:
 
