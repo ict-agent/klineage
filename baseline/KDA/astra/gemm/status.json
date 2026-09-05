@@ -1,0 +1,21 @@
+{
+  "method": "KDA",
+  "model": "gpt-6-astra",
+  "effort": "xhigh",
+  "problem": "gemm",
+  "budget_seconds": 43200,
+  "started_at": 1788604279.2958522,
+  "deadline": 1788647479.2958522,
+  "status": "failed",
+  "runner_pid": 7887,
+  "framework": [
+    "https://github.com/mit-han-lab/kernel-design-agents.git",
+    "9f5ee5d5cd623c2d69c4ff71c8a5155edcb8c43b"
+  ],
+  "repository_commit": "22a1fc49312748e158d75f798f1f55c70bac4fd3",
+  "turns": 1,
+  "session": "01a0711f-6acf-7701-b3c3-51b1085c930c",
+  "last_exit": 1,
+  "error": "Codex failed with exit 1; inspect traces",
+  "elapsed_seconds": 417.9582395553589
+}

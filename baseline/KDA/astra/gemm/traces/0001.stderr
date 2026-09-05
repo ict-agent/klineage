@@ -1,0 +1,1 @@
+2026-09-05T10:34:35.523227Z ERROR codex_core::tools::router: error=apply_patch verification failed: invalid patch: multiple operations target /workspace/klineage/agent-workspace/baselines/KDA/astra/gemm/solution/kernel.py
