@@ -4,6 +4,7 @@ Five default workloads, three methods, two models. Every job receives 43,200
 seconds, including generation, compilation and validation. The runner reserves
 five minutes for independent final validation. It completes Astra before Luna
 and runs one job at a time on the visible GPU.
+Each isolated workspace receives the repository's [AGENTS.md](../AGENTS.md).
 
 | Directory | Model | Reasoning |
 | --- | --- | --- |

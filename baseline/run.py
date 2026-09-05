@@ -35,6 +35,7 @@ _REVISIONS = {
 }
 _ARCHIVE_EXCLUDES = {".git", "__pycache__", ".venv", "build", ".cache"}
 _GPU_MARKERS = ("triton", "__global__", "cutlass", "cuda.tile")
+_RULES_FILE = "AGENTS.md"
 
 
 class _Existing(StrEnum):
@@ -58,6 +59,8 @@ def _jobs():
 
 def _prepare(method, problem, work) -> None:
     work.mkdir(parents=True, exist_ok=True)
+    # Isolated Git roots need their own copy of the repository instructions.
+    shutil.copyfile(_ROOT / _RULES_FILE, work / _RULES_FILE)
     reference = work / "reference.py"
     if reference.exists():
         return

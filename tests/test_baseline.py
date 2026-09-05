@@ -19,6 +19,24 @@ import _process as process
 
 
 class BaselineRunTests(unittest.TestCase):
+    def test_prepare_inherits_rules(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.object(runner, "_git"):
+            work = Path(temporary) / "work"
+            rules = work / "AGENTS.md"
+            expected = (runner._ROOT / rules.name).read_bytes()
+            runner._prepare("codex", "gemm", work)
+            self.assertTrue(rules.exists(), "Workspace lacks repository instructions")
+            self.assertEqual(rules.read_bytes(), expected)
+
+            # Repair staged workspaces without replacing their kernel.
+            rules.unlink()
+            kernel = work / "solution" / "kernel.py"
+            candidate = "preserved candidate\n"
+            kernel.write_text(candidate)
+            runner._prepare("codex", "gemm", work)
+            self.assertEqual(rules.read_bytes(), expected)
+            self.assertEqual(kernel.read_text(), candidate)
+
     def test_capacity_is_retryable(self):
         with tempfile.TemporaryDirectory() as temporary:
             trace = Path(temporary) / "trace.jsonl"
