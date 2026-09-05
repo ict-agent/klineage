@@ -1,0 +1,10 @@
+{
+  "python": "3.12",
+  "torch": "2.10.0a0+b4e4ee81d3.nv25.12",
+  "triton": "3.5.1",
+  "pytorch-triton": "3.5.1+gitbfeb0668.nv25.12",
+  "cuda_toolkit": "13.1.80",
+  "nvidia_driver": "590.48.01",
+  "gpu": "NVIDIA H100 PCIe (114 SMs, SM90)",
+  "evaluation_only": {"flashinfer-python": "0.6.18.post1", "ncu": "2025.4.0"}
+}

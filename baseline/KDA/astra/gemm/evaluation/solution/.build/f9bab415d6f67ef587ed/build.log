@@ -1,0 +1,12 @@
+/workspace/klineage/baseline/KDA/astra/gemm/evaluation/solution/kernel.cu(13): warning #177-D: variable "<unnamed>::kFirstMathThread" was declared but never referenced
+  constexpr int kFirstMathThread = 1 ? 0 : kWarpgroup;
+                ^
+
+Remark: The warnings can be suppressed with "-diag-suppress <warning-number>"
+
+ptxas info    : 0 bytes gmem
+ptxas info    : Compiling entry function '_ZN39_GLOBAL__N__0acdf7d3_9_kernel_cu_launch8raw_gemmE14CUtensorMap_stS0_S0_S0_S0_' for 'sm_90a'
+ptxas info    : Function properties for _ZN39_GLOBAL__N__0acdf7d3_9_kernel_cu_launch8raw_gemmE14CUtensorMap_stS0_S0_S0_S0_
+    0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads
+ptxas info    : Used 168 registers, used 16 barriers
+ptxas info    : Compile time = 373.619 ms
