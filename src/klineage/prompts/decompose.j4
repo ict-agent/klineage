@@ -1,0 +1,12 @@
+Propose one guided deoptimization of the current expert-side kernel. This is
+decomposition step {{ step_number }}. Remove or weaken exactly one optimization
+while preserving the operator contract. Prefer removing autotuning and
+templates before pipelines and specialized instructions; remove pipelines,
+async copies, and shared-memory layouts before staging; remove staging,
+vectorization, matrix instructions, and fusion before tiling. This order is a
+soft prior, not a fixed vocabulary or a substitute for validation.
+
+Return exactly one JSON object. If no meaningful simplification remains,
+return {"done": true}. Otherwise write the complete simplified kernel to
+output_path and return done=false, action_category, locus, and backward_edit
+(a concise description). Do not claim it passes validation.

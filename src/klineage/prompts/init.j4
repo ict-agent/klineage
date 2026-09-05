@@ -1,0 +1,18 @@
+Inspect the staged repository and locate the requested provided kernel and its
+call contract. Produce a complete, standalone pure CUDA C/C++ implementation
+of that kernel. It must execute the generated CUDA kernel itself: no PyTorch or
+framework fallback, subprocess, precomputed outputs, or delegation to the
+provided implementation.
+
+Treat INPUT_JSON.problem and INPUT_JSON.kernel_abi as the authoritative
+operator semantics and data contract. Preserve every input/output, dtype,
+shape, layout, and mutation requirement they declare. This init artifact is
+still the requested standalone CUDA source; the later code_gen step owns the
+python-callable evaluator adapter declared by kernel_abi.interface.
+The external verifier compares this artifact with the requested executable
+Expert under the same timing policy and requires the relative performance in
+INPUT_JSON.minimum_expert_ratio.
+
+Write the implementation to output_path and return exactly {"done": true}.
+Do not claim validation; an external harness will compile, check, and profile
+the source.

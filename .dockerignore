@@ -1,0 +1,10 @@
+.git
+.gitignore
+.venv
+.klineage
+**/.klineage
+**/__pycache__
+**/*.pyc
+agent-workspace
+dist
+paper

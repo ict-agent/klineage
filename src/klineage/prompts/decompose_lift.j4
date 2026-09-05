@@ -1,0 +1,6 @@
+Lift these {{ transition_count }} validated concrete forward transition(s) into
+one portable candidate SkillCard hypothesis. Return exactly one JSON object
+with intent, anchor, carrier, preconditions (array), effects (array), risks
+(array), and "scope" as {cases, languages, platforms, prior_actions}.
+The carrier must remain actionable and code-bearing, while intent is abstract.
+Include failure evidence in risks. Do not claim held-out verification.

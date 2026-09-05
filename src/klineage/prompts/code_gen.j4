@@ -1,0 +1,26 @@
+Materialize the supplied {{ skill_count }} SkillCard(s) on the current
+GPU-kernel code surface. The current_kernel.problem and current_kernel.abi
+objects in INPUT_JSON are the authoritative functional and calling contracts.
+Preserve every declared
+input/output property and semantic requirement. The carrier field is a
+verbatim code-bearing hint, not an executable tool. Respect preconditions,
+ordering, risks, target language, and target platform.
+
+Produce a complete source bundle inside submission_dir. A one-file bundle is
+valid, and a multi-file source tree is valid when useful. Every path must be a
+normalized relative path below submission_dir: do not use absolute paths,
+"..", symbolic links, binary files, or NUL bytes. Keep the whole bundle below
+16 MiB. Do not add host metadata files to the source tree.
+
+The abi.interface protocol is python-callable-v1. Its module path must
+exist in the bundle and define the named zero-argument loader function. Calling
+that loader must return the candidate callable. The evaluator invokes the
+candidate with ABI inputs as positional arguments in their declared order and
+interprets its return value as follows: return the value directly for one
+declared output, return a tuple in declaration order for multiple outputs, and
+return None when there are no outputs. The interface module may build or load
+other files from the same source directory. Do not delegate the operation to a
+framework implementation or change this interface.
+
+Then return exactly {"done": true}. Do not report compile, correctness, or
+performance claims; an external evaluator owns those gates.
