@@ -2,16 +2,28 @@
 
 from __future__ import annotations
 
+import fcntl
 import gzip
 import json
 import os
 import shutil
 import signal
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 
 _TERM_GRACE_SECONDS = 5
 _CAPACITY_MESSAGE = "Selected model is at capacity."
+_GPU_LOCK_PATH = Path(__file__).resolve().parents[1] / "agent-workspace" / "baseline-gpu.lock"
+
+
+@contextmanager
+def _gpu_slot():
+    # Serialize evaluators, including detached agent finalizers.
+    _GPU_LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _GPU_LOCK_PATH.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
 
 
 def _execute(command, cwd, output, timeout, prompt=None) -> int:

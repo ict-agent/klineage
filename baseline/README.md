@@ -52,6 +52,7 @@ source review remains necessary before accepting the experimental result.
 The evaluator uses unchanged default shapes, seeds 17/43/101, and an additional
 input mutation check after timing. Timing uses FlashInfer CUPTI, 10 warmups,
 50 repeats, three trials and cold L2. Final evaluations also time the reference.
+A shared process lock prevents concurrent evaluator GPU work.
 All outputs must preserve reference shapes and dtypes. Top-K instead returns
 unique int32 indices whose selected values match exactly, regardless of order.
 

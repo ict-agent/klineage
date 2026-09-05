@@ -14,6 +14,7 @@ from pathlib import Path
 
 import torch
 
+from _process import _gpu_slot
 from klineage.harness.timing import FlashInferCuptiTimer, TimingPolicy
 
 _SEEDS = (17, 43, 101)
@@ -172,7 +173,7 @@ def _main() -> None:
     torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
     torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
     try:
-        with torch.inference_mode():
+        with _gpu_slot(), torch.inference_mode():
             result = _evaluate(args)
     except Exception as error:
         result = {"status": "failed", "error": str(error), "traceback": traceback.format_exc()}

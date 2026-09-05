@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -115,6 +117,55 @@ class BaselineRunTests(unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec("torch"), "PyTorch unavailable")
 class BaselineCheckTests(unittest.TestCase):
+    def test_serializes_evaluations(self):
+        script = """
+import json, sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import evaluate
+import _process
+root, name = Path(sys.argv[2]), sys.argv[3]
+_process._GPU_LOCK_PATH = root / 'gpu.lock'
+
+def measure(args):
+    entered = time.monotonic()
+    time.sleep(0.3)
+    return {'status': 'passed', 'entered': entered, 'exited': time.monotonic()}
+
+evaluate._evaluate = measure
+(root / (name + '.ready')).touch()
+deadline = time.monotonic() + 10
+while len(list(root.glob('*.ready'))) != 2:
+    if time.monotonic() >= deadline:
+        raise RuntimeError('second evaluator did not start')
+    time.sleep(0.01)
+sys.argv = ['evaluate', '--problem', 'gemm', '--reference', str(root / 'reference.py'),
+            '--output', str(root / (name + '.json'))]
+evaluate._main()
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            environment = dict(os.environ, CUDA_VISIBLE_DEVICES="")
+            workers = [subprocess.Popen(
+                [sys.executable, "-c", script, str(_BASELINE), temporary, name],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                env=environment,
+            ) for name in ("left", "right")]
+            try:
+                for worker in workers:
+                    _, error = worker.communicate(timeout=20)
+                    self.assertEqual(worker.returncode, 0, error)
+            finally:
+                for worker in workers:
+                    if worker.poll() is None:
+                        worker.kill()
+                        worker.wait()
+            rows = sorted(
+                (json.loads((Path(temporary) / f"{name}.json").read_text())
+                 for name in ("left", "right")),
+                key=lambda row: row["entered"],
+            )
+            self.assertLessEqual(rows[0]["exited"], rows[1]["entered"])
+
     def test_topk_rejects_duplicates(self):
         import torch
         import evaluate
