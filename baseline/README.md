@@ -68,3 +68,7 @@ Tolerances are experiment choices, fixed across methods and models. Timings
 measure GPU activity with reused inputs and cold L2, excluding compilation and
 allocation; they are not end-to-end application latency. No GPU clock locking
 is assumed. Compare each final candidate with its contemporaneous reference.
+
+The [GEMM contiguous-output comparison](KDA/astra/gemm/contiguous/README.md)
+tests direct contiguous output and the original kernel followed by a timed
+`.contiguous()` copy. Reproduce it with `baseline/compare_gemm_layout.py`.
