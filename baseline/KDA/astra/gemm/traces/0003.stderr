@@ -1,2 +1,0 @@
-2026-09-05T15:02:11.349102Z ERROR codex_core::tools::router: error=write_stdin failed: Unknown process id 14200
-2026-09-05T20:23:22.859471Z ERROR codex_models_manager::manager: failed to refresh available models: timeout waiting for child process to exit
