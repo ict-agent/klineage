@@ -225,6 +225,14 @@ class FakeSandbox:
         (self._runner.sandbox_dir / name).mkdir(parents=True)
         return name
 
+    def _snapshot(self, sources: dict[str, str]) -> str:
+        root = Path(tempfile.mkdtemp(prefix="audit-", dir=self._runner.sandbox_dir))
+        for name, source in sources.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(source, encoding="utf-8")
+        return str(root)
+
     def _ask(
         self,
         purpose: str,

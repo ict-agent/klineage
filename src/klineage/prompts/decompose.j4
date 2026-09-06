@@ -10,7 +10,9 @@ Do not call budget exhaustion a naive kernel. Otherwise write the complete
 simplified kernel to output_path and return done=false, action_category, locus,
 backward_edit, before_features, and after_features. Each feature is {locus, name};
 before means the simpler predecessor, after means the current kernel. Inventory
-all optimization mechanisms across loci; remove one at the declared locus.
+reusable algorithm/hardware strategies across stable loci; remove one at its locus.
+Supporting instructions, compiler hints, and loop instances are carrier details
+when they implement the same strategy, not separate state features.
 These are claims for independent
 verification, not validated state. Do not claim validation or performance results.
 

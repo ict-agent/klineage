@@ -11,6 +11,7 @@ from klineage.harness.artifacts import require_cuda_source_bundle, require_pure_
 from klineage.errors import ValidationGateError
 from klineage.harness.eval import ValidationResult
 from klineage.harness.fidelity import (
+    EvidenceMode,
     check_evidence,
     verify_mechanism,
     verify_performance,
@@ -141,6 +142,11 @@ class FidelityTests(unittest.TestCase):
                 [{"path": "candidate.cu", "start": 1, "end": 1}],
                 {"candidate.cu": "mma.sync;\n"},
             )
+        ranges = check_evidence(
+            [{"path": "candidate.cu", "start": 1, "end": 1}],
+            {"candidate.cu": "mma.sync;\n"}, EvidenceMode.RANGES,
+        )
+        self.assertEqual(ranges, checked)
 
     def test_materializes_audit_ranges(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

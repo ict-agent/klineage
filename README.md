@@ -154,6 +154,11 @@ each result. Pending checkpoints remain unaccepted until independent confirmatio
 Exhausted retries raise `ValidationGateError` with the candidate attached.
 Checkpoints preserve evidence; there is no public cross-process resume API.
 
+Feature audits read a fresh, read-only snapshot of the current sources. Present
+and absent findings both require bounded citations and an explanation; unknown
+findings fail. State features describe reusable strategies, with supporting
+instructions and compiler choices retained in the carrier.
+
 ## Isolation
 
 Runs live under `agent-workspace/runs/`. Each action has separate writable

@@ -34,6 +34,7 @@ _RUN_FILE = "run.json"
 _WORKSPACE_DIR = "agent-workspace"
 _RUNS_DIR = "runs"
 _INPUT_DIR = "input"
+_SOURCE_DIR = "sources"
 _ACTIONS_DIR = "actions"
 _WORK_DIR = "work"
 _ARTIFACTS_DIR = "artifacts"
@@ -114,6 +115,19 @@ class _Sandbox:
         payload: Mapping[str, Any],
     ) -> dict[str, Any]:
         return run_json(self._runner, purpose, instructions, payload)
+
+    def _snapshot(self, sources: Mapping[str, str]) -> str:
+        sources = {relative_source_path(name, "audit source"): source
+                   for name, source in sources.items()}
+        directory = self._run / _INPUT_DIR / _SOURCE_DIR / operation_id("source")
+        directory.mkdir(mode=0o700, parents=True)
+
+        # Inputs are read-only to Codex; each audit sees its exact kernel state.
+        for name, source in sources.items():
+            path = directory / name
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            path.write_text(source, encoding="utf-8")
+        return str(directory.resolve(strict=True))
 
     def _take_file(self, name: str, label: str) -> tuple[str, Path]:
         relative = _output_name(name, "sandbox output file")

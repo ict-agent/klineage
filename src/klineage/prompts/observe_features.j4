@@ -1,10 +1,21 @@
 Independently inspect executable code for each requested {locus, name} feature.
 Do not trust comments, identifiers, requested edits, or prior_actions as proof.
 Follow the actual data flow at that locus. A mechanism elsewhere does not count.
-Report unknown when the supplied sources cannot establish its presence.
+Use only INPUT_JSON.source_files, available at INPUT_JSON.source_dir/<file key>.
+This read-only snapshot is authoritative. Never scan sharedwork, repositories,
+or prior artifacts. Report unknown if these sources cannot establish presence
+or absence.
 
 Return {"checks": [{"feature": {"locus": "...", "name": "..."},
-"status": "present|absent|unknown", "evidence": [
-{"path": "relative source path", "start": 1, "end": 1, "quote": "exact full lines"}
-]}]}. Include exactly one check per requested feature. Present requires source
-citations with one-based inclusive lines and exact text. Do not edit files.
+"status": "present|absent|unknown", "reason": "Brief source-based explanation.",
+"evidence": [{"path": "source_files key", "start": 1, "end": 1}]}]}.
+Include exactly one check per feature. Present AND absent require a reason and
+source evidence: for absence, inspect the whole locus and relevant callees,
+cite decisive ranges, and explain why they exclude the mechanism at that locus.
+Missing definitions mean unknown.
+Use one-based inclusive line ranges, at most {{ citation_limit }} citations per
+feature and {{ line_limit }} lines per citation. Cite source_files keys, not absolute
+paths. Omit quote: the verifier restores exact source text and hashes locally.
+Choose minimal decisive ranges and keep
+each reason to one or two sentences. Do not copy source into intermediate
+evidence catalogs, edit files, or omit unresolved checks. Return only the JSON.

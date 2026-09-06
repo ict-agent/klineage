@@ -5,7 +5,7 @@ from dataclasses import replace
 
 from klineage.action._sandbox import _Sandbox
 from klineage.errors import StructuredOutputError
-from klineage.harness.fidelity import check_evidence
+from klineage.harness.fidelity import EvidenceMode, check_evidence
 from klineage.kernel import Feature, Kernel
 from klineage.prompts import render_prompt
 
@@ -18,8 +18,13 @@ def _observe(
         return replace(kernel, features=())
 
     sources = kernel.source_files or {"kernel.cu": kernel.source}
-    response = sandbox._ask("observe-features", render_prompt("observe_features"), {
+    citation_limit, line_limit = EvidenceMode.RANGES.value
+    prompt = render_prompt(
+        "observe_features", citation_limit=citation_limit, line_limit=line_limit,
+    )
+    response = sandbox._ask("observe-features", prompt, {
         "source_files": sources,
+        "source_dir": sandbox._snapshot(sources),
         "target": kernel.context.to_dict(),
         "features": [item.to_dict() for item in wanted],
     })
@@ -39,9 +44,11 @@ def _observe(
                 raise ValueError("invalid feature status")
             if status == "unknown":
                 raise ValueError(f"unresolved feature: {feature.locus}/{feature.name}")
-            citations = []
+            reason = check.get("reason")
+            if not isinstance(reason, str) or not reason.strip():
+                raise ValueError("feature checks require a source-based explanation")
+            citations = check_evidence(check["evidence"], sources, EvidenceMode.RANGES)
             if status == "present":
-                citations = check_evidence(check["evidence"], sources)
                 observed.append(feature)
             evidence.append({**check, "evidence": citations})
     except (KeyError, TypeError, ValueError) as exc:

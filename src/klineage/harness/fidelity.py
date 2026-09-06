@@ -8,6 +8,7 @@ import re
 import statistics
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,11 @@ _PRESERVED = frozenset(("preserved", "not_applicable"))
 _MAX_ROLE_CITATIONS = 4
 _MAX_CITATION_LINES = 12
 _INCLUDE_RE = re.compile(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]', re.MULTILINE)
+
+
+class EvidenceMode(Enum):
+    QUOTED = (None, None)
+    RANGES = (_MAX_ROLE_CITATIONS, _MAX_CITATION_LINES)
 
 
 def verify_performance(
@@ -68,15 +74,21 @@ def verify_performance(
 def check_evidence(
     evidence: Sequence[Mapping[str, Any]],
     sources: Mapping[str, str],
+    mode: EvidenceMode = EvidenceMode.QUOTED,
 ) -> list[dict[str, Any]]:
-    """Validate exact line quotations and bind them to source hashes."""
+    """Validate quotations or bounded ranges and bind them to source hashes."""
 
+    if not isinstance(mode, EvidenceMode):
+        raise ValueError("invalid evidence mode")
     if (
         not isinstance(evidence, Sequence)
         or isinstance(evidence, (str, bytes))
         or not evidence
     ):
         raise ValueError("evidence must contain source citations")
+    citation_limit, line_limit = mode.value
+    if citation_limit is not None and len(evidence) > citation_limit:
+        raise ValueError(f"each evidence role requires 1-{citation_limit} citations")
     checked = []
     for citation in evidence:
         if not isinstance(citation, Mapping):
@@ -90,8 +102,11 @@ def check_evidence(
         lines = source.splitlines()
         if not 1 <= start <= end <= len(lines):
             raise ValueError("citation lines are outside the source")
+        if line_limit is not None and end - start + 1 > line_limit:
+            raise ValueError(f"citations must span 1-{line_limit} lines")
         quote = "\n".join(lines[start - 1:end])
-        if not quote.strip() or citation.get("quote") != quote:
+        supplied = citation.get("quote", quote if mode is EvidenceMode.RANGES else None)
+        if not quote.strip() or supplied != quote:
             raise ValueError("citation quote does not match the source lines")
         checked.append({
             "path": path, "start": start, "end": end, "quote": quote,
@@ -185,26 +200,9 @@ def _mechanism_evidence(
 ) -> list[dict[str, Any]]:
     """Materialize bounded ranges without making the auditor copy source text."""
 
-    if not isinstance(evidence, list) or not 1 <= len(evidence) <= _MAX_ROLE_CITATIONS:
-        raise ValueError(f"each evidence role requires 1-{_MAX_ROLE_CITATIONS} citations")
-    citations = []
-    for citation in evidence:
-        if not isinstance(citation, Mapping):
-            raise ValueError("each citation must be an object")
-        path, start, end = (citation.get(key) for key in ("path", "start", "end"))
-        if not isinstance(path, str) or path not in sources:
-            raise ValueError("citation path is not an allowed source")
-        if type(start) is not int or type(end) is not int:
-            raise ValueError("citation lines must be integers")
-        if not 1 <= end - start + 1 <= _MAX_CITATION_LINES:
-            raise ValueError(f"citations must span 1-{_MAX_CITATION_LINES} lines")
-
-        # Explicit quotations still require an exact match.
-        item = dict(citation)
-        if "quote" not in item:
-            item["quote"] = "\n".join(sources[path].splitlines()[start - 1:end])
-        citations.append(item)
-    return check_evidence(citations, sources)
+    if not isinstance(evidence, list):
+        raise ValueError("mechanism evidence must be a citation array")
+    return check_evidence(evidence, sources, EvidenceMode.RANGES)
 
 
 def _timing(
@@ -271,4 +269,4 @@ def _uses_library(expert: Kernel, repository: Path) -> bool:
     return False
 
 
-__all__ = ["check_evidence", "verify_mechanism", "verify_performance"]
+__all__ = ["EvidenceMode", "check_evidence", "verify_mechanism", "verify_performance"]

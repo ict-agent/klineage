@@ -53,3 +53,12 @@ Anti-pattern: tile 128 -> 64 -> 32 or vector width 4 -> 2 -> 1 produces repeated
 "use tiling" or "vectorize loads" cards. These are parameter variants of one
 mechanism: retain them as carrier choices/evidence. Remove the mechanism itself
 in one step; do not exhaust the budget tuning it while MMA remains in "naive".
+
+Inventory anti-pattern: mma + ldmatrix_operand_loads + fragment_mapping +
+forced_inlining + loop_unrolling at every helper fragments one strategy.
+Group MMA with required operand/fragment adapters under mma; group async copies,
+staging, buffer rotation, and producer/consumer ordering under pipeline_scheduling.
+Stage counts, compiler hints, and helper loop choices belong in the carrier.
+Keep independently removable shared-memory swizzles and CTA/L2 ordering separate;
+never merge independent strategies to shrink the inventory. Include only observed
+mechanisms, without requiring warp specialization, clustering, or a fixed sequence.

@@ -62,8 +62,8 @@ class _AuditSandbox(FakeSandbox):
         return {"checks": [{
             "feature": item,
             "status": "present" if Feature.from_dict(item) in present else "absent",
-            "evidence": [{"path": name, "start": 1, "end": 1,
-                          "quote": source.splitlines()[0]}],
+            "reason": "The fixture's recorded mechanism state determines this result.",
+            "evidence": [{"path": name, "start": 1, "end": 1}],
         } for item in payload["features"]]}
 
 

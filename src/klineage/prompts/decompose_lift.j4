@@ -9,6 +9,8 @@ requires lists needed code features; provides lists introduced features;
 conflicts lists incompatible or already-present features at the same locus.
 The carrier must remain actionable and code-bearing, while intent is abstract.
 Keep tuning choices in the carrier; one card describes one semantic transformation.
+Preserve the transition's strategy-level feature contract. Supporting instructions
+and compiler choices belong in the carrier, not additional skills or features.
 Include failure evidence in risks. Do not claim held-out verification or gains
 without measurements. The example illustrates granularity, not a required skill.
 
