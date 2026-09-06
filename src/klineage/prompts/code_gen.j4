@@ -27,5 +27,21 @@ return None when there are no outputs. The interface module may build or load
 other files from the same source directory. Do not delegate the operation to a
 framework implementation or change this interface.
 
+For CUDA targets, implement tensor computation in raw CUDA C/C++; Python is
+only loader, allocation, metadata validation, and launch glue. A minimal bundle
+is the declared interface module plus kernel.cu and an optional C++ binding.
+Build/load the extension before the loader returns its callable, never inside
+the timed invocation. Resolve sources relative to __file__; keep build products
+outside the source bundle. Derive extension names from source and build flags.
+
+Validate tensor device, dtype, shape, and stride against the ABI. Guard the
+tensor device and allocate outputs there. Submit every kernel and asynchronous
+copy to the caller's current CUDA stream for that device; pass it explicitly
+as the fourth chevron-launch argument. Do not substitute a default/new stream,
+read tensor values on the CPU, or synchronize the device in the callable.
+Propagate CUDA launch/runtime errors through the binding; never swallow them.
+Recompute outputs from each call's inputs; do not cache or replay output values.
+Do not add input generators, benchmark code, or framework arithmetic fallbacks.
+
 Then return exactly {"done": true}. Do not report compile, correctness, or
 performance claims; an external evaluator owns those gates.

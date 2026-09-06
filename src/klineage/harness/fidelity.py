@@ -22,6 +22,8 @@ _CUPTI_BACKEND = "cupti"
 _ROUNDING_TOLERANCE = 1e-9
 _MECHANISMS = frozenset(("compute", "tiling", "pipeline", "layout", "scheduling"))
 _PRESERVED = frozenset(("preserved", "not_applicable"))
+_MAX_ROLE_CITATIONS = 4
+_MAX_CITATION_LINES = 12
 _INCLUDE_RE = re.compile(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]', re.MULTILINE)
 
 
@@ -115,7 +117,11 @@ def verify_mechanism(
         "checks": None,
     }
     try:
-        report = ask("verify-mechanism", render_prompt("verify_mechanism"), {
+        prompt = render_prompt(
+            "verify_mechanism", citation_limit=_MAX_ROLE_CITATIONS,
+            line_limit=_MAX_CITATION_LINES,
+        )
+        report = ask("verify-mechanism", prompt, {
             "repository": str(repository),
             "expert_path": str(expert.artifact_path) if expert.artifact_path else None,
             "expert": expert.source,
@@ -135,7 +141,7 @@ def verify_mechanism(
             raise ValueError("standalone execution requires an explanation")
         result["standalone"] = {
             **standalone,
-            "candidate": check_evidence(
+            "candidate": _mechanism_evidence(
                 standalone.get("candidate"), {"candidate": candidate.source},
             ),
         }
@@ -157,8 +163,8 @@ def verify_mechanism(
                 raise ValueError("the compute mechanism must be preserved")
             if not isinstance(check.get("reason"), str) or not check["reason"].strip():
                 raise ValueError("mechanism checks require a source-based explanation")
-            baseline = check_evidence(check.get("expert"), sources)
-            generated = check_evidence(
+            baseline = _mechanism_evidence(check.get("expert"), sources)
+            generated = _mechanism_evidence(
                 check.get("candidate"), {"candidate": candidate.source},
             )
             expert_paths.update(item["path"] for item in baseline)
@@ -171,6 +177,34 @@ def verify_mechanism(
     except (KeyError, TypeError, ValueError, OSError, StructuredOutputError) as exc:
         result["error"] = str(exc)
     return result
+
+
+def _mechanism_evidence(
+    evidence: Sequence[Mapping[str, Any]],
+    sources: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    """Materialize bounded ranges without making the auditor copy source text."""
+
+    if not isinstance(evidence, list) or not 1 <= len(evidence) <= _MAX_ROLE_CITATIONS:
+        raise ValueError(f"each evidence role requires 1-{_MAX_ROLE_CITATIONS} citations")
+    citations = []
+    for citation in evidence:
+        if not isinstance(citation, Mapping):
+            raise ValueError("each citation must be an object")
+        path, start, end = (citation.get(key) for key in ("path", "start", "end"))
+        if not isinstance(path, str) or path not in sources:
+            raise ValueError("citation path is not an allowed source")
+        if type(start) is not int or type(end) is not int:
+            raise ValueError("citation lines must be integers")
+        if not 1 <= end - start + 1 <= _MAX_CITATION_LINES:
+            raise ValueError(f"citations must span 1-{_MAX_CITATION_LINES} lines")
+
+        # Explicit quotations still require an exact match.
+        item = dict(citation)
+        if "quote" not in item:
+            item["quote"] = "\n".join(sources[path].splitlines()[start - 1:end])
+        citations.append(item)
+    return check_evidence(citations, sources)
 
 
 def _timing(

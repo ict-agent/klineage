@@ -17,12 +17,14 @@ from klineage.harness.artifacts import (
     is_cuda_language,
     require_pure_cuda,
 )
+from klineage.harness.codex_runner import CodexRunnerError
 from klineage.harness.eval import ValidationResult
 from klineage.harness.fidelity import verify_mechanism, verify_performance
 from klineage.kernel import Kernel
 from klineage.prompts import render_prompt
 
 _MAX_ATTEMPTS = 6
+_AUDIT_ATTEMPTS = 3
 _MINIMUM_EXPERT_RATIO = 0.99
 _EXPERT_DIR = ".klineage-expert"
 
@@ -123,9 +125,10 @@ def _generate(
             sandbox._evaluate(candidate, reference=expert_kernel),
             expert_kernel=expert_kernel,
         )
+        selection = validation
         if validation.accepted:
-            mechanism = verify_mechanism(
-                sandbox._ask, expert_kernel, candidate, sandbox._repo,
+            mechanism = _audit(
+                sandbox, expert_kernel, candidate.with_validation(selection), attempt,
             )
             validation = replace(
                 validation,
@@ -151,10 +154,7 @@ def _generate(
         candidate = candidate.with_validation(validation)
         last_kernel = candidate
         feedback = validation.to_dict()
-        (sandbox._logs / f"fidelity-{attempt:02d}.json").write_text(
-            json.dumps(feedback, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        _checkpoint(sandbox, expert_kernel, candidate, selection, attempt)
         if validation.accepted:
             return candidate
 
@@ -162,6 +162,67 @@ def _generate(
         f"could not initialize a validated expert kernel in {_MAX_ATTEMPTS} attempts",
         kernel=last_kernel,
     )
+
+
+def _audit(
+    sandbox: _Sandbox, expert: Kernel, candidate: Kernel, attempt: int,
+) -> dict[str, Any]:
+    selection = candidate.validation
+    assert selection is not None
+    errors = []
+
+    def save(report: Mapping[str, Any]) -> Kernel:
+        # Neither selection nor an audit alone establishes full admission.
+        pending = candidate.with_validation(replace(
+            selection, profile_passed=False,
+            details={**selection.details, "mechanism_verifier": dict(report)},
+        ))
+        _checkpoint(sandbox, expert, pending, selection, attempt)
+        return pending
+
+    save({"passed": False, "status": "pending", "attempts": []})
+    for index in range(1, _AUDIT_ATTEMPTS + 1):
+        try:
+            report = verify_mechanism(sandbox._ask, expert, candidate, sandbox._repo)
+        except CodexRunnerError as error:
+            errors.append({
+                "attempt": index, "error_type": type(error).__name__,
+                "error": str(error),
+                "trace_path": str(error.trace_path) if error.trace_path else None,
+            })
+            pending = save({"passed": False, "error": str(error), "attempts": errors})
+            if index == _AUDIT_ATTEMPTS:
+                raise ValidationGateError(
+                    f"mechanism verifier failed after {_AUDIT_ATTEMPTS} attempts; "
+                    f"checkpoint: {sandbox._logs / f'checkpoint-{attempt:02d}.json'}",
+                    kernel=pending,
+                ) from error
+            continue
+
+        report = {**report, "attempts": errors}
+        save(report)
+        return report
+    raise AssertionError("audit attempt budget must be positive")
+
+
+def _checkpoint(
+    sandbox: _Sandbox, expert: Kernel, candidate: Kernel,
+    selection: ValidationResult, attempt: int,
+) -> None:
+    assert candidate.validation is not None
+    records = {
+        f"checkpoint-{attempt:02d}.json": {
+            "expert": expert.to_dict(), "candidate": candidate.to_dict(),
+            "selection": selection.to_dict(),
+        },
+        f"fidelity-{attempt:02d}.json": candidate.validation.to_dict(),
+    }
+    for name, value in records.items():
+        path = sandbox._logs / name
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n",
+                             encoding="utf-8")
+        temporary.replace(path)
 
 
 def _verify_candidate(

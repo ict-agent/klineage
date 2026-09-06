@@ -131,6 +131,8 @@ use `python-callable-v1`: import the declared module, call its zero-argument
 loader outside timing, then invoke the returned callable with ABI inputs in
 order. A single output is returned directly; multiple outputs use a tuple.
 Python supplies build and binding glue; CUDA targets require kernel code.
+CUDA bundles build in the loader, validate ABI metadata, and launch on the
+input device's current stream. Every call recomputes its outputs.
 
 Correctness uses the problem reference. Timing uses FlashInfer's CUPTI activity
 timer; loading, compilation, and input creation occur outside the timed region.
@@ -141,8 +143,16 @@ covers only the declared case, expert instance, hardware, and timing policy.
 
 Mechanism fidelity separately audits computation, tiling, pipeline, layout,
 and scheduling against the instantiated expert and library definitions. Source
-citations are checked against exact lines and hashes. This is a semantic audit,
+citations use bounded line ranges; the verifier restores exact quotes and
+hashes locally. This is a semantic audit,
 not a formal proof; changed, unknown, or unsupported findings fail the gate.
+
+Runner failures retry the frozen candidate's audit up to three times, without
+regenerating its code. Init atomically saves `checkpoint-NN.json` (expert,
+candidate, selection evidence) and `fidelity-NN.json` before auditing and after
+each result. Pending checkpoints remain unaccepted until independent confirmation.
+Exhausted retries raise `ValidationGateError` with the candidate attached.
+Checkpoints preserve evidence; there is no public cross-process resume API.
 
 ## Isolation
 

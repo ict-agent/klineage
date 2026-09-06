@@ -27,14 +27,19 @@ An unused CUDA kernel beside a library call does not count. Missing callees
 mean unknown. Cite the ABI dispatch and actual computation, not declarations.
 
 Return only {"standalone": {"status": "standalone|delegated|unknown",
-"reason": "Explain the complete ABI-to-device execution path.", "candidate":
-[{"path": "candidate", "start": 1, "end": 1, "quote": "exact source line"}]},
+"reason": "Briefly explain the complete ABI-to-device execution path.", "candidate":
+[{"path": "candidate", "start": 1, "end": 1}]},
 "checks": [{"mechanism": "compute", "status": "preserved",
-"reason": "Explain the concrete correspondence, including relevant parameters.",
-"expert": [{"path": "expert", "start": 1, "end": 1, "quote": "exact source line"}],
-"candidate": [{"path": "candidate", "start": 1, "end": 1, "quote": "exact source line"}]}]}.
+"reason": "Briefly explain the correspondence and relevant parameters.",
+"expert": [{"path": "expert", "start": 1, "end": 1}],
+"candidate": [{"path": "candidate", "start": 1, "end": 1}]}]}.
 Include one check per axis. Citations use one-based inclusive line ranges and
-must quote ALL those lines exactly, without Markdown fences. Cite expert for
-INPUT_JSON.expert, candidate for INPUT_JSON.candidate, and repository-relative
-paths for actual library definitions. Cite the expert instance at least once.
+omit quote: the verifier extracts exact source text and hashes locally.
+Cite expert for INPUT_JSON.expert, candidate for INPUT_JSON.candidate, and
+repository-relative paths for actual library definitions. Cite the expert instance at least once.
 Every check requires both expert and candidate evidence, even when absent.
+Use at most {{ citation_limit }} citations per expert/candidate array and at most
+{{ line_limit }} lines per citation, including standalone.candidate. Choose minimal
+decisive ranges; never copy source blocks into the response or intermediate
+evidence catalogs. Keep each reason to one or two sentences. Read enough to
+check every axis, then return the JSON; unresolved behavior must remain unknown.
