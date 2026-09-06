@@ -6,16 +6,22 @@
   "budget_seconds": 43200,
   "started_at": 1788647242.4221084,
   "deadline": 1788690442.4221084,
-  "status": "failed",
-  "runner_pid": 11249,
+  "status": "stopped",
+  "runner_pid": 1265879,
   "framework": [
     "https://github.com/mit-han-lab/kernel-design-agents.git",
     "9f5ee5d5cd623c2d69c4ff71c8a5155edcb8c43b"
   ],
   "repository_commit": "149ed401ac51b8e95a4068f04de009bd7f4ffefc",
-  "turns": 1,
+  "turns": 2,
   "session": "01a073ae-fcc3-7a90-8a5b-d23a10a73815",
   "last_exit": 1,
-  "error": "Codex failed with exit 1; inspect traces",
-  "elapsed_seconds": 11932.796519994736
+  "elapsed_seconds": 11932.796519994736,
+  "archived_at": "2026-09-06T07:04:02.672803+00:00",
+  "stop_reason": "User stopped experiments and rejected the experimental setup.",
+  "archive_note": "elapsed_seconds and last_exit describe the initial failed attempt; the resumed attempt has no final verdict.",
+  "candidate_counts": {
+    "passed": 1125,
+    "failed": 18
+  }
 }
