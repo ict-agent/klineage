@@ -1,0 +1,49 @@
+Generate and optimize a custom GPU kernel for conv2d.
+Use gpt-6-astra at xhigh reasoning for this entire run.
+Workspace: /workspace/klineage/agent-workspace/baselines/KDA/astra/conv2d. Target: the visible NVIDIA H100 PCIe (SM90).
+Deadline: 2026-09-06T10:27:22.422108+00:00.
+The total budget is 12 hours, including compilation, experiments and validation.
+Continue optimization until the deadline. Reserve the final five minutes for
+restoring and validating the fastest correct candidate. Never reset the budget.
+
+Read reference.py. Its default make_inputs() shapes and torch_ref() define the
+contract; all inputs are keyword arguments. Write solution/kernel.py exposing
+kernel(**inputs). CUDA C++/PTX, Triton and CuTe DSL are allowed. Python may handle
+allocation, layout views, compilation and launches; replace the initial PyTorch
+compute with custom GPU code. Do not call torch_ref, torch compute operations,
+cuBLAS/cuDNN, FlashInfer operators, or another prebuilt operator in the final
+candidate. Implement all outputs with the reference's shapes/dtypes, except
+Top-K returns only int32 indices, with unique indices and unspecified order.
+Do not change the reference, evaluator, shapes, input generation or tolerances.
+Do not cache computed outputs, modify inputs, or bypass timing using streams.
+Keep all implementation dependencies under solution/ or record package versions.
+Do not read other baseline workspaces, kernels or traces. Do not delegate kernel
+generation to another model. You may research techniques and official sources.
+
+Validation and performance command (choose a new label every time):
+/usr/bin/python /workspace/klineage/baseline/evaluate.py --problem conv2d --reference /workspace/klineage/agent-workspace/baselines/KDA/astra/conv2d/reference.py --solution solution --output runs/LABEL.json
+Each call saves the exact evaluated sources under runs/LABEL/solution/.
+It checks seeds 17, 43 and 101, then times with FlashInfer CUPTI (10 warmups,
+50 repeats, 3 trials, cold L2), then tests new values at reused input addresses.
+Fixed (rtol, atol): GEMM (.02,.02), Conv2d (.01,.01), FMHA (.01,.005),
+GDN (.01,.001); Top-K selected values must match exactly. No dtype relaxation.
+Use --mode full for a final verdict including reference timing and speedup.
+Use --mode reference --output runs/reference.json to measure the original.
+Rank candidates by median kernel latency; only promote correct candidates.
+Failed experiments still belong in the record. Do not stop after the first win.
+
+Save notes, benchmark results, profiling evidence and all candidates locally.
+Before the deadline copy the fastest passing runs/LABEL/solution/ to solution/,
+then run --mode full. Write a concise REPORT.md with the winning measurement,
+techniques tried, rejected candidates, dependencies and remaining limitations.
+The outer runner saves traces and commits/pushes each finished job to klineage.
+Local commits are allowed; do not push or change the outer repository.
+
+Use Kernel Design Agents from /workspace/klineage/agent-workspace/upstream/KDA.
+Read docs/agent-flow.md and prompts/basic-flow.md there. Follow that workflow:
+write docs/draft.md, convert it to docs/plan.md before implementation, then
+implement one candidate at a time, validate, record parent links and promotion
+decisions in candidates.jsonl and benchmark.csv, and iterate.
+Use its skills/KernelWiki/SKILL.md for relevant H100 techniques and
+skills/ncu-report-skill/SKILL.md for profiling; this GPU is H100, not B200.
+Humanize is optional in this pinned upstream; write the executable plan yourself.
