@@ -9,9 +9,17 @@ operator semantics and data contract. Preserve every input/output, dtype,
 shape, layout, and mutation requirement they declare. This init artifact is
 still the requested standalone CUDA source; the later code_gen step owns the
 python-callable evaluator adapter declared by kernel_abi.interface.
-The external verifier compares this artifact with the requested executable
-Expert under the same timing policy and requires the relative performance in
-INPUT_JSON.minimum_expert_ratio.
+Preserve the selected expert instance's mechanisms: MMA instruction family
+and shapes, tiling, pipeline stages and synchronization, memory/fragment
+layouts, and warp/CTA scheduling. Follow instantiated library definitions;
+expand those mechanisms into raw CUDA rather than inventing a same-speed
+replacement. Do not claim preservation of unavailable definitions.
+
+The external verifier requires CUPTI timing, matching policies and at least
+INPUT_JSON.minimum_expert_ratio of expert performance in every trial, followed
+by an independent remeasurement. A separate source audit checks mechanism
+preservation against the expert and its actual library definitions. Correctness
+and performance alone cannot pass init.
 
 Write the implementation to output_path and return exactly {"done": true}.
 Do not claim validation; an external harness will compile, check, and profile

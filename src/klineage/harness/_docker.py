@@ -108,6 +108,7 @@ class _DockerRuntime:
         build = self._container_path(host_build_root)
 
         config = {
+            "image_id": self._image,
             "problem_path": str(problem),
             "seed": _SEED,
             "timing": {

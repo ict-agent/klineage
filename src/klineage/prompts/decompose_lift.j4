@@ -1,6 +1,15 @@
 Lift these {{ transition_count }} validated concrete forward transition(s) into
 one portable candidate SkillCard hypothesis. Return exactly one JSON object
 with intent, anchor, carrier, preconditions (array), effects (array), risks
-(array), and "scope" as {cases, languages, platforms, prior_actions}.
+(array), requires/provides/conflicts (arrays of {locus, name}), and "scope" as
+{cases, languages, platforms, prior_actions}. Copy applicable case, language,
+and platform identifiers from the input context; do not invent hardware names.
+Use stable semantic loci and mechanism names shared with the transitions.
+requires lists needed code features; provides lists introduced features;
+conflicts lists incompatible or already-present features at the same locus.
 The carrier must remain actionable and code-bearing, while intent is abstract.
-Include failure evidence in risks. Do not claim held-out verification.
+Keep tuning choices in the carrier; one card describes one semantic transformation.
+Include failure evidence in risks. Do not claim held-out verification or gains
+without measurements. The example illustrates granularity, not a required skill.
+
+{% include "decompose_example.j4" %}

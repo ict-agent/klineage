@@ -2,25 +2,28 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from klineage.action._contract import _contract
 from klineage.action._sandbox import _Kind, _new, _Sandbox
-from klineage.contract import RAW_CUDA_ABI, KernelABI, ProblemSpec, relative_source_path
+from klineage.contract import relative_source_path
 from klineage.errors import StructuredOutputError, ValidationGateError
 from klineage.harness.artifacts import (
     is_cuda_language,
     require_pure_cuda,
 )
 from klineage.harness.eval import ValidationResult
-from klineage.kernel import Kernel, TargetContext
+from klineage.harness.fidelity import verify_mechanism, verify_performance
+from klineage.kernel import Kernel
 from klineage.prompts import render_prompt
 
 _MAX_ATTEMPTS = 6
-_MINIMUM_EXPERT_RATIO = 0.95
+_MINIMUM_EXPERT_RATIO = 0.99
 _EXPERT_DIR = ".klineage-expert"
 
 
@@ -99,7 +102,7 @@ def _generate(
             "expert kernel source",
         )
         try:
-            require_pure_cuda(source)
+            require_pure_cuda(source, repository=sandbox._repo)
         except ValidationGateError as error:
             feedback = {
                 "artifact_gate": {
@@ -120,11 +123,40 @@ def _generate(
             sandbox._evaluate(candidate, reference=expert_kernel),
             expert_kernel=expert_kernel,
         )
+        if validation.accepted:
+            mechanism = verify_mechanism(
+                sandbox._ask, expert_kernel, candidate, sandbox._repo,
+            )
+            validation = replace(
+                validation,
+                profile_passed=mechanism["passed"],
+                details={**validation.details, "mechanism_verifier": mechanism},
+            )
+        if validation.accepted:
+            # Remeasure the frozen artifact and expert in a fresh worker.
+            confirmation = _verify_candidate(
+                sandbox._evaluate(candidate, reference=expert_kernel),
+                expert_kernel=expert_kernel,
+            )
+            validation = replace(
+                confirmation,
+                details={
+                    **confirmation.details,
+                    "mechanism_verifier": validation.details["mechanism_verifier"],
+                    "confirmation": {
+                        "independent": True, "selection": validation.to_dict(),
+                    },
+                },
+            )
         candidate = candidate.with_validation(validation)
         last_kernel = candidate
+        feedback = validation.to_dict()
+        (sandbox._logs / f"fidelity-{attempt:02d}.json").write_text(
+            json.dumps(feedback, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
         if validation.accepted:
             return candidate
-        feedback = validation.to_dict()
 
     raise ValidationGateError(
         f"could not initialize a validated expert kernel in {_MAX_ATTEMPTS} attempts",
@@ -137,21 +169,17 @@ def _verify_candidate(
     *,
     expert_kernel: Kernel,
 ) -> ValidationResult:
-    ratio = validation.relative_performance
-    details = dict(validation.details)
-    details["init_verifier"] = {
-        "expert_fingerprint": expert_kernel.fingerprint,
-        "minimum_expert_ratio": _MINIMUM_EXPERT_RATIO,
-        "relative_performance": ratio,
-    }
+    validation = verify_performance(validation, _MINIMUM_EXPERT_RATIO)
     return replace(
         validation,
-        profile_passed=(
-            validation.profile_passed
-            and ratio is not None
-            and ratio >= _MINIMUM_EXPERT_RATIO
-        ),
-        details=details,
+        details={
+            **validation.details,
+            "init_verifier": {
+                "expert_fingerprint": expert_kernel.fingerprint,
+                "minimum_expert_ratio": _MINIMUM_EXPERT_RATIO,
+                "relative_performance": validation.relative_performance,
+            },
+        },
     )
 
 
@@ -195,47 +223,6 @@ def _copy_expert(repository: Path, source: Path) -> Path:
     snapshot = directory / source.name
     snapshot.write_bytes(source.read_bytes())
     return snapshot.resolve(strict=True)
-
-
-def _contract(
-    problem_path: Path,
-    description: Mapping[str, Any],
-) -> tuple[ProblemSpec, KernelABI, TargetContext]:
-    try:
-        name = description["problem_name"]
-        raw_abi = description["abi"]
-        platform = description["platform"]
-    except KeyError as exc:
-        raise ValueError(f"problem inspection omitted {exc.args[0]!r}") from exc
-    if not isinstance(name, str) or not isinstance(platform, str):
-        raise TypeError("problem inspection name and platform must be strings")
-    if not isinstance(raw_abi, Mapping):
-        raise TypeError("problem inspection ABI must be an object")
-
-    source = problem_path.read_text(encoding="utf-8")
-    relative = f"{problem_path.parent.name}/{problem_path.name}"
-    statement = f"""Authoritative input problem ({relative}):
-
-```python
-{source}
-```
-
-Implement exactly those semantics with this standalone raw CUDA ABI:
-    {RAW_CUDA_ABI}
-`inputs[i]` and `outputs[i]` follow kernel_abi declaration order. Shapes and
-dtypes are fixed by kernel_abi. Launch on the supplied stream, do not
-synchronize it, and return the CUDA launch status. Do not call PyTorch, cuBLAS,
-another framework/library implementation, a subprocess, or a precomputed
-result.
-""".strip()
-    problem = ProblemSpec(name=name, statement=statement)
-    abi = KernelABI.from_dict(raw_abi)
-    context = TargetContext(
-        case=problem.name,
-        language="cuda",
-        platform=platform,
-    )
-    return problem, abi, context
 
 
 __all__ = ["init"]

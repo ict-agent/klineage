@@ -4,13 +4,11 @@ KLineage extracts reusable GPU optimization skills from validated kernel
 lineages, then retrieves and applies them to a target kernel.
 
 ```text
-repository → init → expert → decompose → naive + SkillCards
-                                          │         │
-                                          │      retrieve
-                                          │         │
-                                          └── apply ←┘
-                                                │
-                                         validated kernel
+repository → init → raw expert → decompose → lineage + SkillCards
+                                                     │
+new problem / current kernel → apply ← retrieve path ─┘
+                                 │
+                           code_gen → verify → replan
 ```
 
 Code generation occurs during initialization, backward and forward
@@ -35,41 +33,60 @@ kernels, and skills.
 ```python
 from pathlib import Path
 
-from klineage.action import apply, decompose, init
-from klineage.memory import retrieve, save_lineage
+from klineage.action import decompose, init
+from klineage.memory import save_lineage
 
 expert = init(
     "problems/gemm/reference.py",
     "https://github.com/NVIDIA/cutlass.git",
-    Path("experiments/cutlass_gemm/sm80_bf16_gemm.cu").resolve(),
+    Path("path/to/executable_expert.cu").resolve(),
 )
 lineage = decompose(expert)
 save_lineage(lineage, "agent-workspace/lineage.json")
+```
 
-current = lineage.naive_kernel
-pending = lineage.skills
-while cards := retrieve(pending, current.context):
-    current = apply(current, cards)
-    applied = {card.skill_id for card in cards}
-    pending = tuple(card for card in pending if card.skill_id not in applied)
+Apply the saved lineage to another problem file:
+
+Set `OPERATOR = "gemm"` in that file to retain the operator identity across
+different case names; otherwise it defaults to the problem name.
+
+```python
+from klineage.action import apply
+from klineage.memory import load_lineage
+
+lineage = load_lineage("agent-workspace/lineage.json")
+new_problem = "path/to/new_gemm.py"
+optimized = apply(new_problem, (lineage,))
 ```
 
 - `init(problem, repo, expert_kernel)` snapshots inputs, discovers the tensor
-  ABI, and generates raw CUDA reaching at least 95% of the expert's performance.
+  ABI, and accepts raw CUDA only after 99% performance and mechanism fidelity
+  checks, followed by independent performance confirmation.
 - `decompose(expert)` validates simpler predecessors and independently
-  re-derived forward edits, then lifts accepted transitions into SkillCards.
-- `retrieve(skills, target)` filters case, language, platform, and prior-action
-  prerequisites. It preserves memory order and deduplicates skill IDs. Scope
-  dimensions match exact values or `"*"`; semantic preconditions remain for
-  the generator to check.
-- `apply(current, skills)` generates once and enforces the compile,
-  correctness, and profiling gates against the current kernel.
+  re-derived forward edits, then lifts transitions into SkillCards. A shared
+  MMA few-shot defines semantic granularity; necessary fragment, layout, and
+  thread-mapping changes belong together. Tile/vector-width tuning remains
+  carrier choices and evidence, not repeated high-level skills.
+- `retrieve_paths(lineages, current_or_context, problem=..., abi=...)` returns
+  ranked plans with `lineage`, `entry_index`, and `skills`. It filters operator,
+  hardware, and ABI compatibility, then follows applicable lineage subpaths.
+- `apply(problem_path, lineages)` retrieves before generating a baseline.
+  `apply(current, lineages)` starts from an existing kernel. Both generate,
+  verify, and replan from the resulting state.
+- `apply(current, skills)` retains explicit-card application; `retrieve(skills,
+  context)` retains flat scope/prior-action filtering for existing callers.
 - `code_gen(current, skills)` returns an unvalidated candidate.
 
-Remove successfully applied IDs from the pending pool before retrieving
-again. One action category can apply at several code locations. An empty
-retrieval means no remaining card currently matches; it does not prove the
-kernel is fully optimized.
+Path retrieval checks `requires / provides / conflicts` against verified
+`{locus, name}` features. History alone does not establish a mechanism. Plans
+preserve source transitions, skip already-present features at the same locus,
+and rank by operator similarity, shape proximity, and measured source gains.
+Source gains guide search; they do not predict target speedup. Legacy cards
+without feature contracts remain available through flat retrieval.
+
+`Lineage.termination` distinguishes `complete`, `step_limit`, `rejection_limit`,
+and `unknown`; `reason` records the stopping evidence. Limits do not establish
+a naive kernel. Empty retrieval does not establish optimality.
 
 `save_lineage` / `load_lineage` persist the complete lineage;
 `save_memory` / `load_memory` persist a flat SkillCard pool.
@@ -80,7 +97,7 @@ kernel is fully optimized.
 within a lineage. Enable admission to require held-out evidence:
 
 ```python
-from klineage.memory import SkillAdmission
+from klineage.memory import SkillAdmission, retrieve
 
 lineage = decompose(
     expert,
@@ -89,9 +106,9 @@ lineage = decompose(
     skill_admission=SkillAdmission.ON,
 )
 cards = retrieve(
-    lineage.skills, current.context, skill_admission=SkillAdmission.ON,
+    lineage.skills, held_out_kernel.context, skill_admission=SkillAdmission.ON,
 )
-current = apply(current, cards, skill_admission=SkillAdmission.ON)
+current = apply(held_out_kernel, cards, skill_admission=SkillAdmission.ON)
 ```
 
 A card is admitted after a trial in a context absent from its source lineage
@@ -117,6 +134,15 @@ Python supplies build and binding glue; CUDA targets require kernel code.
 
 Correctness uses the problem reference. Timing uses FlashInfer's CUPTI activity
 timer; loading, compilation, and input creation occur outside the timed region.
+Performance fidelity requires matching timing policies and
+`expert_ms / candidate_ms >= 0.99` overall and in every trial. Init repeats the
+check on the frozen candidate in a fresh worker before acceptance. This gate
+covers only the declared case, expert instance, hardware, and timing policy.
+
+Mechanism fidelity separately audits computation, tiling, pipeline, layout,
+and scheduling against the instantiated expert and library definitions. Source
+citations are checked against exact lines and hashes. This is a semantic audit,
+not a formal proof; changed, unknown, or unsupported findings fail the gate.
 
 ## Isolation
 
@@ -136,5 +162,3 @@ uv run python -m unittest discover -s tests -q
 ```
 
 PyTorch-dependent tests also run in the CUDA image with GPU access disabled.
-The existing CUTLASS initialization example is
-`experiments/cutlass_gemm/run_init.py`.

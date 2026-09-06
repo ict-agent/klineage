@@ -10,6 +10,7 @@ from typing import Any
 
 from klineage._utils import nonempty, signature, stable_id
 from klineage.action._sandbox import _Kind, _next, _Sandbox
+from klineage.action._state import _observe
 from klineage.action.code_gen import _materialize
 from klineage.errors import StructuredOutputError, ValidationGateError
 from klineage.harness.artifacts import (
@@ -17,9 +18,10 @@ from klineage.harness.artifacts import (
     require_pure_cuda,
 )
 from klineage.harness.eval import EffectVerifier, ValidationResult
+from klineage.harness.fidelity import verify_performance
 from klineage.harness.structured import response_strings
-from klineage.kernel import Kernel
-from klineage.memory.lineage import Lineage
+from klineage.kernel import Feature, Kernel
+from klineage.memory.lineage import Lineage, Termination
 from klineage.memory.skillcard import (
     Scope,
     SkillAdmission,
@@ -91,6 +93,7 @@ def _decompose(
     backward_states = [expert_kernel]
     rejected_by_category: dict[str, list[str]] = defaultdict(list)
     rejection_count = 0
+    termination, reason = Termination.STEP_LIMIT, "decomposition step budget exhausted"
 
     for step in range(max_steps):
         predecessor_name = f"step-{step:02d}-predecessor{suffix}"
@@ -113,6 +116,13 @@ def _decompose(
         if not isinstance(done, bool):
             raise StructuredOutputError("deoptimization 'done' is required and boolean")
         if done:
+            reason = nonempty(proposal.get("reason"), "termination reason")
+            termination = Termination.COMPLETE
+            if current.features:
+                termination = Termination.UNKNOWN
+                reason += "; remaining mechanisms: " + ", ".join(
+                    f"{item.locus}/{item.name}" for item in current.features
+                )
             break
 
         category = nonempty(proposal["action_category"], "action category")
@@ -123,7 +133,7 @@ def _decompose(
             "deoptimized source",
         )
         if is_cuda_language(current.context.language):
-            require_pure_cuda(predecessor_source)
+            require_pure_cuda(predecessor_source, repository=sandbox._repo)
         predecessor = Kernel(
             name=f"{current.name}.deopt{len(backward_transitions) + 1}",
             source=predecessor_source,
@@ -137,12 +147,22 @@ def _decompose(
             reference=expert_kernel,
         )
         predecessor = predecessor.with_validation(predecessor_validation)
+        if predecessor_validation.accepted:
+            try:
+                audited, predecessor = _audit_transition(
+                    sandbox, current, predecessor, proposal, locus,
+                )
+                predecessor_validation = predecessor.validation
+            except (StructuredOutputError, ValidationGateError) as error:
+                predecessor_validation = _audit_failure(predecessor_validation, error)
         if not predecessor_validation.accepted:
             rejection_count += 1
             rejected_by_category[category].append(
                 _validation_summary(predecessor_validation)
             )
             if rejection_count >= max_rejections:
+                termination = Termination.REJECTION_LIMIT
+                reason = "decomposition rejection budget exhausted"
                 break
             continue
 
@@ -153,6 +173,8 @@ def _decompose(
             "action_category": category,
             "locus": locus,
             "backward_edit": backward_edit,
+            "before_features": [item.to_dict() for item in predecessor.features],
+            "after_features": [item.to_dict() for item in audited.features],
             "output_path": sandbox._file(roundtrip_name),
         }
         forward_instructions = render_prompt("decompose_rederive")
@@ -166,7 +188,7 @@ def _decompose(
             "forward source",
         )
         if is_cuda_language(current.context.language):
-            require_pure_cuda(roundtrip_source)
+            require_pure_cuda(roundtrip_source, repository=sandbox._repo)
         roundtrip = Kernel(
             name=f"{predecessor.name}.roundtrip",
             source=roundtrip_source,
@@ -175,13 +197,28 @@ def _decompose(
             abi=current.abi,
             artifact_path=roundtrip_artifact,
         )
-        roundtrip_validation = sandbox._evaluate(roundtrip, reference=current)
+        roundtrip_validation = verify_performance(
+            sandbox._evaluate(roundtrip, reference=current)
+        )
+        if roundtrip_validation.accepted:
+            try:
+                roundtrip = _observe(
+                    sandbox, roundtrip.with_validation(roundtrip_validation),
+                    audited.features,
+                )
+                if set(roundtrip.features) != set(audited.features):
+                    raise ValidationGateError("forward roundtrip did not restore mechanisms")
+                roundtrip_validation = roundtrip.validation
+            except (StructuredOutputError, ValidationGateError) as error:
+                roundtrip_validation = _audit_failure(roundtrip_validation, error)
         if not roundtrip_validation.accepted:
             rejection_count += 1
             rejected_by_category[category].append(
                 "forward roundtrip failed: " + _validation_summary(roundtrip_validation)
             )
             if rejection_count >= max_rejections:
+                termination = Termination.REJECTION_LIMIT
+                reason = "decomposition rejection budget exhausted"
                 break
             continue
 
@@ -198,6 +235,7 @@ def _decompose(
             rejected_evidence=tuple(rejected_by_category.get(category, ())),
         )
         backward_transitions.append(evidence)
+        backward_states[-1] = audited
         backward_states.append(predecessor)
         current = predecessor
 
@@ -221,7 +259,51 @@ def _decompose(
         states=states,
         transitions=forward_transitions,
         skills=skills,
+        termination=termination,
+        reason=reason,
     )
+
+
+def _features(response: Mapping[str, Any], name: str) -> tuple[Feature, ...]:
+    try:
+        values = response[name]
+        if not isinstance(values, list):
+            raise TypeError("expected an array")
+        if any(not isinstance(item, Mapping) for item in values):
+            raise TypeError("features must be objects")
+        return tuple(dict.fromkeys(Feature.from_dict(item) for item in values))
+    except (KeyError, TypeError, ValueError) as error:
+        raise StructuredOutputError(f"invalid {name}: {error}") from error
+
+
+def _audit_transition(
+    sandbox: _Sandbox,
+    current: Kernel,
+    predecessor: Kernel,
+    proposal: Mapping[str, Any],
+    locus: str,
+) -> tuple[Kernel, Kernel]:
+    before = set(_features(proposal, "before_features"))
+    after = set(_features(proposal, "after_features"))
+    removed = after - before
+    if not before < after or len(removed) != 1 or next(iter(removed)).locus != locus:
+        raise StructuredOutputError("decomposition must remove one mechanism at its locus")
+
+    # Check retained features too; a claimed edit cannot erase unrelated state.
+    wanted = tuple(dict.fromkeys((*current.features, *sorted(after))))
+    current = _observe(sandbox, current, wanted)
+    predecessor = _observe(sandbox, predecessor, wanted)
+    if set(current.features) != set(wanted):
+        raise ValidationGateError("current kernel lacks declared mechanisms")
+    if set(predecessor.features) != set(wanted) - removed:
+        raise ValidationGateError("predecessor did not remove exactly the declared mechanism")
+    return current, predecessor
+
+
+def _audit_failure(validation: ValidationResult, error: Exception) -> ValidationResult:
+    return replace(validation, profile_passed=False, details={
+        **validation.details, "feature_verifier": {"error": str(error)},
+    })
 
 
 def _lift_transitions(
@@ -230,12 +312,17 @@ def _lift_transitions(
     states: Sequence[Kernel],
     sandbox: _Sandbox,
 ) -> tuple[SkillCard, ...]:
-    grouped: dict[tuple[str, str], list[int]] = defaultdict(list)
+    grouped = defaultdict(list)
     for index, evidence in enumerate(transitions):
-        grouped[(evidence.action_category, signature(evidence.locus))].append(index)
+        key = (
+            evidence.action_category, signature(evidence.locus),
+            tuple(sorted(states[index].features)),
+            tuple(sorted(states[index + 1].features)),
+        )
+        grouped[key].append(index)
 
     cards: list[SkillCard] = []
-    for (category, _), group in grouped.items():
+    for (category, *_), group in grouped.items():
         evidence = tuple(transitions[index] for index in group)
         payload = {
             "action_category": category,
@@ -247,6 +334,8 @@ def _lift_transitions(
                 {
                     "before": states[index].source_files or states[index].source,
                     "after": states[index + 1].source_files or states[index + 1].source,
+                    "before_features": [feature.to_dict() for feature in states[index].features],
+                    "after_features": [feature.to_dict() for feature in states[index + 1].features],
                     "locus": item.locus,
                     "backward_edit": item.backward_edit,
                     "forward_edit": item.forward_edit,
@@ -267,7 +356,20 @@ def _lift_transitions(
             instructions,
             payload,
         )
-        scope = _scope_from_response(response.get("scope"))
+        context = states[0].context
+        scope = replace(
+            _scope_from_response(response.get("scope")), cases=(context.case,),
+            languages=(context.language,), platforms=(context.platform,),
+        )
+        features = {name: _features(response, name)
+                    for name in ("requires", "provides", "conflicts")}
+        for index in group:
+            before = set(states[index].features)
+            added = set(states[index + 1].features) - before
+            if (not features["provides"] or set(features["provides"]) != added
+                    or not set(features["requires"]).issubset(before)
+                    or set(features["conflicts"]) & before):
+                raise StructuredOutputError("skill feature contract lacks transition evidence")
         intent = nonempty(response["intent"], "intent")
         skill_id = stable_id(
             "skill",
@@ -286,6 +388,7 @@ def _lift_transitions(
                 evidence=evidence,
                 risks=response_strings(response, "risks"),
                 scope=scope,
+                **features,
             )
         )
 
@@ -314,6 +417,10 @@ def _admit_skills(
                 )
 
             for index, card in enumerate(skills):
+                present = set(baseline.features)
+                if (not set(card.requires).issubset(present)
+                        or set(card.conflicts) & present):
+                    continue
                 candidate = _materialize(
                     sandbox,
                     baseline,
@@ -322,13 +429,28 @@ def _admit_skills(
                 )
                 validation = sandbox._evaluate(candidate, reference=baseline)
                 candidate = candidate.with_validation(validation)
+                if validation.accepted and card.provides:
+                    try:
+                        candidate = _observe(
+                            sandbox, candidate, (*baseline.features, *card.provides),
+                        )
+                        if not (present | set(card.provides)).issubset(candidate.features):
+                            raise ValidationGateError("skill effects absent")
+                        validation = candidate.validation
+                    except (StructuredOutputError, ValidationGateError) as error:
+                        validation = _audit_failure(validation, error)
+                    candidate = candidate.with_validation(validation)
                 trial = VerificationTrial(
                     target=baseline.context,
                     validation=validation,
-                    expected_effect_observed=effect_verifier(card, baseline, candidate),
+                    expected_effect_observed=(
+                        validation.accepted and effect_verifier(card, baseline, candidate)
+                    ),
                     held_out=baseline.context not in lineage_contexts,
                 )
                 trials[index].append(trial)
+                if validation.accepted and trial.expected_effect_observed:
+                    baseline = candidate
 
     return tuple(
         replace(card, verification_log=tuple(log))

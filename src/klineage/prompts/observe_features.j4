@@ -1,0 +1,10 @@
+Independently inspect executable code for each requested {locus, name} feature.
+Do not trust comments, identifiers, requested edits, or prior_actions as proof.
+Follow the actual data flow at that locus. A mechanism elsewhere does not count.
+Report unknown when the supplied sources cannot establish its presence.
+
+Return {"checks": [{"feature": {"locus": "...", "name": "..."},
+"status": "present|absent|unknown", "evidence": [
+{"path": "relative source path", "start": 1, "end": 1, "quote": "exact full lines"}
+]}]}. Include exactly one check per requested feature. Present requires source
+citations with one-based inclusive lines and exact text. Do not edit files.

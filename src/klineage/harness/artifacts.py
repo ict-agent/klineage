@@ -10,6 +10,9 @@ from klineage._utils import nonempty, signature
 from klineage.contract import EvaluatorInterface, relative_source_path
 from klineage.errors import StructuredOutputError, ValidationGateError
 
+_COMMENT_RE = re.compile(r"//[^\n]*|/\*[\s\S]*?\*/")
+_INCLUDE_RE = re.compile(r'^\s*#\s*include\s+(.+)$', re.MULTILINE)
+_LIBRARY_RE = re.compile(r"\b(?:cutlass|cute)\s*(?:::|/)|\bcublas\w*", re.IGNORECASE)
 _CUDA_TOKEN_RE = re.compile(r"\b(?:__global__|__device__)\b")
 _NON_CUDA_MARKERS = ("@triton.jit", "import torch", "from torch", "def forward(")
 _MAX_SOURCE_BYTES = 16 * 1024 * 1024
@@ -142,11 +145,14 @@ def read_generated_source_bundle(
     return source_files
 
 
-def require_pure_cuda(source: str) -> None:
+def require_pure_cuda(source: str, *, repository: Path | None = None) -> None:
     """Reject obvious framework delegation and non-CUDA output."""
 
-    lowered = source.lower()
-    if not _CUDA_TOKEN_RE.search(source):
+    code = _COMMENT_RE.sub("", source)
+    lowered = code.lower()
+    _require_standalone(code, repository)
+
+    if not _CUDA_TOKEN_RE.search(code):
         raise ValidationGateError(
             "generated source does not contain a CUDA __global__ or __device__ kernel"
         )
@@ -157,10 +163,14 @@ def require_pure_cuda(source: str) -> None:
         )
 
 
-def require_cuda_source_bundle(source_files: Mapping[str, str]) -> None:
+def require_cuda_source_bundle(
+    source_files: Mapping[str, str], *, repository: Path | None = None,
+) -> None:
     """Require CUDA implementation code while allowing Python loader glue."""
 
     sources = tuple(source_files.values())
+    for source in sources:
+        _require_standalone(_COMMENT_RE.sub("", source), repository)
     if not any(_CUDA_TOKEN_RE.search(source) for source in sources):
         raise ValidationGateError(
             "generated source bundle does not contain a CUDA __global__ or "
@@ -170,6 +180,24 @@ def require_cuda_source_bundle(source_files: Mapping[str, str]) -> None:
         raise ValidationGateError(
             "generated source bundle contains a non-CUDA fallback marker: @triton.jit"
         )
+
+
+def _require_standalone(code: str, repository: Path | None) -> None:
+    if _LIBRARY_RE.search(code):
+        raise ValidationGateError("raw CUDA cannot delegate to an expert library")
+    roots = () if repository is None else (
+        repository, repository / "include", repository / "tools/util/include",
+    )
+    for include in _INCLUDE_RE.findall(code):
+        match = re.fullmatch(r'[<"]([^>"]+)[>"]\s*', include)
+        if match is None:
+            raise ValidationGateError("raw CUDA requires literal include paths")
+        name = Path(match[1])
+        if (
+            name.is_absolute() or ".." in name.parts
+            or any((root / name).is_file() for root in roots)
+        ):
+            raise ValidationGateError("raw CUDA cannot include repository implementation files")
 
 
 def is_cuda_language(language: str) -> bool:

@@ -46,7 +46,8 @@ class CudaWorkerTests(unittest.TestCase):
 
             with patch.object(worker, "load_torch_extension") as compile:
                 compile.return_value = SimpleNamespace(launch=lambda *_: None)
-                self.assertTrue(callable(worker._RawLoader(config).load(kernel)))
+                loader = worker._RawLoader(config)
+                self.assertTrue(callable(loader.load(kernel)))
 
             options = compile.call_args.kwargs
             self.assertEqual(
@@ -56,6 +57,24 @@ class CudaWorkerTests(unittest.TestCase):
             self.assertEqual(Path(options["build_directory"]).parent, build)
             self.assertFalse(options["verbose"])
             self.assertEqual(config.seed, 17)
+            self.assertEqual(loader._builds[kernel.fingerprint]["cuda_flags"], list(options["extra_cuda_cflags"]))
+
+    def test_inspects_operator(self) -> None:
+        module = SimpleNamespace(PROBLEM_NAME="new_gemm", OPERATOR="gemm")
+        with (
+            patch.object(worker, "_load_problem", return_value=(module, Path("gemm/reference.py"))),
+            patch.object(worker, "_make_inputs", return_value={}),
+            patch.object(worker, "_reference"),
+            patch.object(worker, "_infer_abi", return_value=KernelABI()),
+            patch.object(worker, "_platform", return_value="sm80"),
+        ):
+            self.assertEqual(worker.inspect_problem("reference.py")["operator"], "gemm")
+            del module.OPERATOR
+            self.assertEqual(worker.inspect_problem("reference.py")["operator"], "new_gemm")
+            for value in ("", " ", None, 5):
+                module.OPERATOR = value
+                with self.assertRaises(ValueError):
+                    worker.inspect_problem("reference.py")
 
     def test_operation_is_required(self) -> None:
         with self.assertRaisesRegex(ValueError, "operation"):

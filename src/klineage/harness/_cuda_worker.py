@@ -15,15 +15,19 @@ import inspect
 import json
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 import torch
-from torch.utils.cpp_extension import load as load_torch_extension
+from torch.utils.cpp_extension import (
+    CUDA_HOME as _CUDA_HOME,
+    load as load_torch_extension,
+)
 
 from klineage.contract import ABIValue, EvaluatorInterface, KernelABI
+from klineage.harness._environment import _runtime_info
 from klineage.harness.callable_eval import (
     CallableKernelEvaluator,
     CallInputs,
@@ -36,6 +40,8 @@ from klineage.kernel import Kernel
 
 _BINDING_SOURCE = Path(__file__).with_name("_cuda_binding.cpp")
 _DEFAULT_SEED = 0
+_CFLAGS = ("-O3", "-std=c++17")
+_CUDA_FLAGS = (*_CFLAGS, "--expt-relaxed-constexpr", "--expt-extended-lambda")
 _DEFAULT_TIMING = TimingPolicy()
 _DTYPE_ALIASES = {
     "bool": torch.bool,
@@ -74,6 +80,7 @@ class _RawLoader:
         self._config = config
         self._directory_loader = PythonEntrypointLoader()
         self._extensions: dict[str, Any] = {}
+        self._builds: dict[str, Any] = {}
 
     def load(self, kernel: Kernel):
         artifact = kernel.artifact_path
@@ -103,24 +110,27 @@ class _RawLoader:
         if extension is None:
             build_dir = self._config.build_root / name
             build_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            self._builds[kernel.fingerprint] = {
+                "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                "include_paths": [str(path) for path in self._config.include_paths],
+                "cflags": list(_CFLAGS), "cuda_flags": list(_CUDA_FLAGS),
+            }
             extension = load_torch_extension(
                 name=name,
                 sources=(str(_BINDING_SOURCE), str(source)),
                 extra_include_paths=tuple(
                     str(path) for path in self._config.include_paths
                 ),
-                extra_cflags=("-O3", "-std=c++17"),
-                extra_cuda_cflags=(
-                    "-O3",
-                    "-std=c++17",
-                    "--expt-relaxed-constexpr",
-                    "--expt-extended-lambda",
-                ),
+                extra_cflags=_CFLAGS,
+                extra_cuda_cflags=_CUDA_FLAGS,
                 with_cuda=True,
                 build_directory=str(build_dir),
                 verbose=False,
             )
             self._extensions[name] = extension
+            recipe = build_dir / "build.ninja"
+            if recipe.is_file():
+                self._builds[kernel.fingerprint]["build_ninja"] = recipe.read_text()
 
         launch = getattr(extension, "launch", None)
         if not callable(launch):
@@ -161,8 +171,13 @@ def inspect_problem(
     expected = _reference(module, inputs)
     abi = _infer_abi(inputs, expected)
 
+    name = _problem_name(module, path)
+    operator = getattr(module, "OPERATOR", name)
+    if not isinstance(operator, str) or not operator.strip():
+        raise ValueError("problem OPERATOR must be a non-empty string")
     return {
-        "problem_name": _problem_name(module, path),
+        "problem_name": name,
+        "operator": operator.strip(),
         "abi": abi.to_dict(),
         "platform": _platform(),
     }
@@ -188,12 +203,21 @@ def evaluate_request(request: Mapping[str, Any]) -> ValidationResult:
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is unavailable to the evaluator worker")
+    loader = _RawLoader(config)
     evaluator = CallableKernelEvaluator(
         _runtime(module, config.seed),
-        loader=_RawLoader(config),
+        loader=loader,
         timer=FlashInferCuptiTimer(config.timing),
     )
-    return evaluator.evaluate(kernel, reference=reference)
+    result = evaluator.evaluate(kernel, reference=reference)
+    return replace(result, details={
+        **result.details,
+        "environment": {
+            **_runtime_info(torch, _CUDA_HOME),
+            "image_id": request["config"].get("image_id"),
+            "builds": loader._builds,
+        },
+    })
 
 
 def _runtime(module: ModuleType, seed: int) -> ProblemRuntime:

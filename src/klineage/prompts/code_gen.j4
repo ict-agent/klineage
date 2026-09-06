@@ -5,6 +5,11 @@ Preserve every declared
 input/output property and semantic requirement. The carrier field is a
 verbatim code-bearing hint, not an executable tool. Respect preconditions,
 ordering, risks, target language, and target platform.
+Bind requires/provides/conflicts to the same locus in the actual target code;
+prior_actions alone does not establish a prerequisite. Preserve existing
+mechanisms and implement the declared provides, including necessary layout and
+thread mapping. Adapt carrier parameters to the target contract.
+Use locus and forward_edit as the concrete source transition to adapt.
 
 Produce a complete source bundle inside submission_dir. A one-file bundle is
 valid, and a multi-file source tree is valid when useful. Every path must be a

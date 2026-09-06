@@ -24,7 +24,7 @@ from klineage.harness.artifacts import (
 )
 from klineage.harness.eval import ValidationResult
 from klineage.harness.structured import run_json
-from klineage.kernel import Kernel, TargetContext
+from klineage.kernel import Feature, Kernel, TargetContext
 from klineage.memory import (
     Scope,
     SkillAdmission,
@@ -42,12 +42,23 @@ LOADER_SOURCE = "def load():\n    return lambda x: x\n"
 
 
 def accepted(latency: float = 1.0, reference: float = 2.0) -> ValidationResult:
+    def timing(value: float) -> dict[str, object]:
+        return {
+            "samples_ms": [[value], [value]], "median_ms": value,
+            "backend_used": "cupti",
+            "details": {
+                "cupti_version": "13.0",
+                "policy": {"warmup": 1, "repeat": 1, "trials": 2, "cold_l2": True},
+            },
+        }
+
     return ValidationResult(
         compile_passed=True,
         correctness_passed=True,
         profile_passed=True,
         latency_ms=latency,
         reference_latency_ms=reference,
+        details={"timing": {"candidate": timing(latency), "reference": timing(reference)}},
     )
 
 
@@ -362,6 +373,8 @@ class ActionTests(unittest.TestCase):
                 [{
                     "intent": card.intent,
                     "anchor": card.anchor,
+                    "locus": card.evidence[0].locus,
+                    "forward_edit": card.evidence[0].forward_edit,
                     "carrier": card.carrier,
                     "precondition": list(card.preconditions),
                     "effect": list(card.effects),
@@ -658,7 +671,8 @@ class ActionTests(unittest.TestCase):
             )
 
             module = importlib.import_module("klineage.action.init")
-            result = module._generate(sandbox, expert)
+            with patch.object(module, "verify_mechanism", return_value={"passed": True}):
+                result = module._generate(sandbox, expert)
 
             self.assertTrue(result.validation.accepted)
             self.assertGreaterEqual(result.validation.relative_performance, 0.9)
@@ -668,9 +682,12 @@ class ActionTests(unittest.TestCase):
             self.assertEqual((staged / "provided.cu").read_text(), CUDA_SOURCE)
             self.assertEqual(payload["problem"], problem.to_dict())
             self.assertEqual(payload["kernel_abi"], abi.to_dict())
-            self.assertEqual(payload["minimum_expert_ratio"], 0.95)
+            self.assertEqual(payload["minimum_expert_ratio"], 0.99)
             self.assertIsNone(evaluator.calls[0][1])
             self.assertEqual(evaluator.calls[1][1].fingerprint, expert.fingerprint)
+            self.assertEqual(len(evaluator.calls), 3)
+            self.assertTrue(result.validation.details["confirmation"]["independent"])
+            self.assertTrue((sandbox._logs / "fidelity-01.json").is_file())
 
     def test_init_retries_after_a_non_raw_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -694,7 +711,8 @@ class ActionTests(unittest.TestCase):
             sandbox = FakeSandbox(runner, repo=source_repo)
 
             module = importlib.import_module("klineage.action.init")
-            result = module._generate(sandbox, expert)
+            with patch.object(module, "verify_mechanism", return_value={"passed": True}):
+                result = module._generate(sandbox, expert)
 
             self.assertTrue(result.validation.accepted)
             payload = json.loads(runner.prompts[1].split("INPUT_JSON:\n", 1)[1])
@@ -745,10 +763,48 @@ class ActionTests(unittest.TestCase):
             self.assertEqual(validation.relative_performance, 0.5)
             self.assertEqual(
                 validation.details["init_verifier"]["minimum_expert_ratio"],
-                0.95,
+                0.99,
             )
 
+    def test_init_rechecks_performance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runner = FakeRunner(Path(temporary), [{"_write_source": CUDA_SOURCE, "done": True}])
+            sandbox = FakeSandbox(runner)
+            expert = replace(kernel(), problem=ProblemSpec("gemm", "GEMM"), abi=KernelABI())
+            module = importlib.import_module("klineage.action.init")
+            with (
+                patch.object(module, "_MAX_ATTEMPTS", 1),
+                patch.object(module, "verify_mechanism", return_value={"passed": True}),
+                patch.object(sandbox, "_evaluate", side_effect=[
+                    accepted(1.0, 1.0), accepted(1.0, 1.0), accepted(1.0, 0.98),
+                ]),
+                self.assertRaises(ValidationGateError) as raised,
+            ):
+                module._generate(sandbox, expert)
+            validation = raised.exception.kernel.validation
+            self.assertFalse(validation.accepted)
+            self.assertTrue(validation.details["confirmation"]["independent"])
+            self.assertTrue(validation.details["confirmation"]["selection"]["profile_passed"])
+
+    def test_init_requires_audit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runner = FakeRunner(Path(temporary), [{"_write_source": CUDA_SOURCE, "done": True}])
+            sandbox = FakeSandbox(runner)
+            expert = replace(kernel(), problem=ProblemSpec("gemm", "GEMM"), abi=KernelABI())
+            module = importlib.import_module("klineage.action.init")
+            with (
+                patch.object(module, "_MAX_ATTEMPTS", 1),
+                patch.object(module, "verify_mechanism", return_value={"passed": False, "error": "unknown"}),
+                self.assertRaises(ValidationGateError) as raised,
+            ):
+                module._generate(sandbox, expert)
+            validation = raised.exception.kernel.validation
+            self.assertFalse(validation.accepted)
+            self.assertEqual(validation.details["mechanism_verifier"]["error"], "unknown")
+            self.assertEqual(len(sandbox._evaluator.calls), 2)
+
     def test_decompose_rederives_forward_transition_and_admits_on_heldout(self) -> None:
+        feature = Feature("global load", "vectorize_global")
         responses = [
             {
                 "done": False,
@@ -756,13 +812,15 @@ class ActionTests(unittest.TestCase):
                 "locus": "global load",
                 "_write_source": CUDA_SOURCE + " // naive",
                 "backward_edit": "replace vector load with scalar load",
+                "before_features": [],
+                "after_features": [feature.to_dict()],
             },
             {
                 "_write_source": CUDA_SOURCE + " // roundtrip optimized",
                 "forward_edit": "restore aligned vector load",
                 "carrier": "reinterpret as aligned float4 and keep a scalar tail",
             },
-            {"done": True},
+            {"done": True, "reason": "Only scalar loads and stores remain."},
             {
                 "intent": "vectorize aligned contiguous global loads",
                 "anchor": "the global-load expression",
@@ -770,6 +828,9 @@ class ActionTests(unittest.TestCase):
                 "preconditions": ["16-byte alignment", "safe tail handling"],
                 "effects": ["fewer global load instructions"],
                 "risks": ["misaligned vector access"],
+                "requires": [],
+                "provides": [feature.to_dict()],
+                "conflicts": [feature.to_dict()],
                 "scope": {
                     "cases": ["gemm"],
                     "languages": ["cuda"],
@@ -789,6 +850,10 @@ class ActionTests(unittest.TestCase):
             candidate: Kernel,
         ) -> bool:
             return candidate.source != baseline.source
+
+        def observe(_, candidate, features):
+            present = () if "naive" in candidate.source else tuple(features)
+            return replace(candidate, features=present)
 
         with tempfile.TemporaryDirectory() as temporary:
             runner = FakeRunner(Path(temporary) / "sandbox", responses[:-1])
@@ -810,10 +875,13 @@ class ActionTests(unittest.TestCase):
             sandbox = FakeSandbox(runner, evaluator)
             heldout_sandbox = FakeSandbox(heldout_runner)
 
-            with patch(
-                "klineage.action.decompose._next",
-                return_value=nullcontext(heldout_sandbox),
-            ) as resume:
+            with (
+                patch(
+                    "klineage.action.decompose._next",
+                    return_value=nullcontext(heldout_sandbox),
+                ) as resume,
+                patch("klineage.action.decompose._observe", side_effect=observe),
+            ):
                 lineage = _decompose(
                     sandbox,  # type: ignore[arg-type]
                     expert,

@@ -212,7 +212,7 @@ class _Sandbox:
 def _new(
     kind: _Kind,
     problem: str | os.PathLike[str],
-    repo: str | os.PathLike[str],
+    repo: str | os.PathLike[str] | None = None,
 ) -> Iterator[_Sandbox]:
     """Create a run and open its first action sandbox."""
 
@@ -224,7 +224,11 @@ def _new(
     inputs = run / _INPUT_DIR
     inputs.mkdir(mode=0o700, parents=True)
     problem_path = _copy_problem(source, inputs)
-    repo_path = stage_repository(repo, inputs / "repository")
+    repo_path = inputs / "repository"
+    if repo is None:
+        repo_path.mkdir(mode=0o700)
+    else:
+        repo_path = stage_repository(repo, repo_path)
     _write_json(
         run / _RUN_FILE,
         {

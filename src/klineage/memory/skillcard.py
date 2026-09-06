@@ -9,7 +9,7 @@ from typing import Any
 
 from klineage._utils import boolean, mapping, nonempty, string_tuple
 from klineage.harness.eval import ValidationResult
-from klineage.kernel import TargetContext
+from klineage.kernel import Feature, TargetContext
 
 
 class SkillAdmission(StrEnum):
@@ -190,6 +190,9 @@ class SkillCard:
     risks: tuple[str, ...]
     scope: Scope
     verification_log: tuple[VerificationTrial, ...] = ()
+    requires: tuple[Feature, ...] = ()
+    provides: tuple[Feature, ...] = ()
+    conflicts: tuple[Feature, ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("skill_id", "intent", "anchor", "carrier"):
@@ -203,6 +206,11 @@ class SkillCard:
         object.__setattr__(self, "evidence", tuple(self.evidence))
         object.__setattr__(self, "risks", string_tuple(self.risks, "risk"))
         object.__setattr__(self, "verification_log", tuple(self.verification_log))
+        for name in ("requires", "provides", "conflicts"):
+            features = tuple(getattr(self, name))
+            if any(not isinstance(item, Feature) for item in features):
+                raise TypeError(f"skill {name} must contain Feature objects")
+            object.__setattr__(self, name, tuple(dict.fromkeys(features)))
         if not self.evidence:
             raise ValueError("a SkillCard must be anchored by transition evidence")
         if not self.preconditions or not self.effects:
@@ -238,6 +246,9 @@ class SkillCard:
             "risk": list(self.risks),
             "scope": self.scope.to_dict(),
             "verification_log": [trial.to_dict() for trial in self.verification_log],
+            "requires": [item.to_dict() for item in self.requires],
+            "provides": [item.to_dict() for item in self.provides],
+            "conflicts": [item.to_dict() for item in self.conflicts],
         }
 
     @classmethod
@@ -259,6 +270,13 @@ class SkillCard:
                 VerificationTrial.from_dict(mapping(item, "skill verification trial"))
                 for item in value.get("verification_log", ())
             ),
+            **{
+                name: tuple(
+                    Feature.from_dict(mapping(item, f"skill {name}"))
+                    for item in value.get(name, ())
+                )
+                for name in ("requires", "provides", "conflicts")
+            },
         )
 
 

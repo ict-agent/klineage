@@ -14,6 +14,25 @@ from klineage.contract import KernelABI, ProblemSpec, relative_source_path
 from klineage.harness.eval import ValidationResult
 
 
+@dataclass(frozen=True, slots=True, order=True)
+class Feature:
+    """A mechanism at a stable semantic locus, e.g. ``gemm.main / mma``."""
+
+    locus: str
+    name: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "locus", nonempty(self.locus, "feature locus"))
+        object.__setattr__(self, "name", nonempty(self.name, "feature name"))
+
+    def to_dict(self) -> dict[str, str]:
+        return {"locus": self.locus, "name": self.name}
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> Feature:
+        return cls(locus=value["locus"], name=value["name"])
+
+
 @dataclass(frozen=True, slots=True)
 class TargetContext:
     """The paper's target tuple ``T = (case, language, platform, actions)``."""
@@ -22,6 +41,7 @@ class TargetContext:
     language: str
     platform: str
     prior_actions: tuple[str, ...] = ()
+    capabilities: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "case", nonempty(self.case, "case"))
@@ -31,6 +51,9 @@ class TargetContext:
             self,
             "prior_actions",
             string_tuple(self.prior_actions, "prior action"),
+        )
+        object.__setattr__(
+            self, "capabilities", string_tuple(self.capabilities, "capability"),
         )
 
     def with_actions(self, actions: Iterable[str]) -> TargetContext:
@@ -48,6 +71,7 @@ class TargetContext:
             "language": self.language,
             "platform": self.platform,
             "prior_actions": list(self.prior_actions),
+            "capabilities": list(self.capabilities),
         }
 
     @classmethod
@@ -57,6 +81,7 @@ class TargetContext:
             language=str(value["language"]),
             platform=str(value["platform"]),
             prior_actions=tuple(str(item) for item in value.get("prior_actions", ())),
+            capabilities=tuple(str(item) for item in value.get("capabilities", ())),
         )
 
 
@@ -72,9 +97,14 @@ class Kernel:
     problem: ProblemSpec | None = None
     abi: KernelABI | None = None
     source_files: Mapping[str, str] | None = None
+    features: tuple[Feature, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", nonempty(self.name, "kernel name"))
+        features = tuple(self.features)
+        if any(not isinstance(item, Feature) for item in features):
+            raise TypeError("kernel features must contain Feature objects")
+        object.__setattr__(self, "features", tuple(dict.fromkeys(features)))
         if not isinstance(self.source, str) or not self.source.strip():
             raise ValueError("kernel source must be non-empty")
         if self.artifact_path is not None:
@@ -156,6 +186,8 @@ class Kernel:
             value["source"] = self.source
         else:
             value["source_files"] = dict(sorted(self.source_files.items()))
+        if self.features:
+            value["features"] = [item.to_dict() for item in self.features]
         return value
 
     def to_dict(self) -> dict[str, Any]:
@@ -167,6 +199,7 @@ class Kernel:
             "problem": self.problem.to_dict() if self.problem else None,
             "abi": self.abi.to_dict() if self.abi else None,
             "source": self.source,
+            "features": [item.to_dict() for item in self.features],
             "source_files": (
                 dict(sorted(self.source_files.items()))
                 if self.source_files is not None
@@ -208,7 +241,11 @@ class Kernel:
                 if source_files is not None
                 else None
             ),
+            features=tuple(
+                Feature.from_dict(mapping(item, "kernel feature"))
+                for item in value.get("features", ())
+            ),
         )
 
 
-__all__ = ["Kernel", "TargetContext"]
+__all__ = ["Feature", "Kernel", "TargetContext"]

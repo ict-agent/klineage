@@ -1,0 +1,55 @@
+MMA few-shot (forward direction; decompose reverses it): one warp computes
+C=A*B for one row-major FP16 tile, accumulating FP32. Assume staged, synchronized,
+32-byte-aligned A/B/C tiles, a supported WMMA target, and no boundary remainder.
+Both excerpts use constexpr int tile = 16; lane is the warp lane index.
+
+Before:
+```cuda
+for (int item = lane; item < tile * tile; item += warpSize) {
+    const int row = item / tile, col = item % tile;
+    float acc = 0.0f;
+    for (int k = 0; k < tile; ++k)
+        acc = fmaf(__half2float(a_tile[row * tile + k]),
+                   __half2float(b_tile[k * tile + col]), acc);
+    c_tile[item] = acc;
+}
+```
+
+After:
+```cuda
+namespace wmma = nvcuda::wmma;  // Requires <mma.h>.
+wmma::fragment<wmma::matrix_a, tile, tile, tile, half, wmma::row_major> a;
+wmma::fragment<wmma::matrix_b, tile, tile, tile, half, wmma::row_major> b;
+wmma::fragment<wmma::accumulator, tile, tile, tile, float> acc;
+wmma::fill_fragment(acc, 0.0f);
+wmma::load_matrix_sync(a, a_tile, tile);
+wmma::load_matrix_sync(b, b_tile, tile);
+wmma::mma_sync(acc, a, b, acc);
+wmma::store_matrix_sync(c_tile, acc, tile, wmma::mem_row_major);
+```
+Changing scalar ownership to warp fragments and adapting loads/stores belong to
+this single MMA transformation. All lanes execute each WMMA call together.
+
+Example SkillCard:
+```json
+{
+  "intent": "Use tensor-core MMA for the tiled contraction.",
+  "anchor": "gemm.main",
+  "carrier": "Replace the scalar reduction with matrix_a/matrix_b/accumulator fragments; load_matrix_sync both operands, wmma::mma_sync(acc, a, b, acc), then store_matrix_sync. Adapt fragment shape and layout together.",
+  "preconditions": ["Compatible tensor-core target, dtype, tile shape, alignment, and strides; all warp lanes participate."],
+  "effects": ["The tiled contraction uses warp-level tensor-core MMA."],
+  "requires": [{"locus": "gemm.main", "name": "shared_memory_tiling"}],
+  "provides": [{"locus": "gemm.main", "name": "mma"}],
+  "conflicts": [{"locus": "gemm.main", "name": "mma"}],
+  "risks": ["Check numerical tolerance and remainder handling; speedup needs measurement."],
+  "scope": {"cases": ["gemm"], "languages": ["cuda"], "platforms": ["sm80"], "prior_actions": []}
+}
+```
+For this example, before_features contains shared_memory_tiling at gemm.main;
+after_features contains both shared_memory_tiling and mma there. The example's
+sm80 scope assumes that exact input context; use the actual input identifiers.
+
+Anti-pattern: tile 128 -> 64 -> 32 or vector width 4 -> 2 -> 1 produces repeated
+"use tiling" or "vectorize loads" cards. These are parameter variants of one
+mechanism: retain them as carrier choices/evidence. Remove the mechanism itself
+in one step; do not exhaust the budget tuning it while MMA remains in "naive".

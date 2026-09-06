@@ -1,0 +1,7 @@
+Generate a simple standalone raw CUDA C/C++ baseline for the target problem
+and kernel_abi. The source_example is a retrieved lineage entry: adapt its
+mechanisms to this case, never copy its shapes or semantics over the target
+contract. Implement initial_features at their named semantic loci. Leave the
+planned_intents for later optimization steps. Use no expert-library or framework
+delegation. Write the complete source to output_path with the raw ABI declared
+in problem. Return exactly {"done": true}; external checks own validation.

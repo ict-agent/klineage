@@ -56,6 +56,7 @@ class DockerDriverTests(unittest.TestCase):
                 self.assertEqual(restored.context, kernel.context)
                 self.assertEqual(restored.artifact_path, mount / artifact.name)
             self.assertNotIn("verbose_build", request["config"])
+            self.assertEqual(request["config"]["image_id"], "klineage-image")
             self.assertEqual(result, validation)
             self.assertEqual(kernel.validation, validation)
 
