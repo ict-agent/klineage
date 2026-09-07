@@ -6,9 +6,9 @@ lineages, then retrieves and applies them to a target kernel.
 ```text
 repository → init → raw expert → decompose → lineage + SkillCards
                                                      │
-new problem / current kernel → apply ← retrieve path ─┘
-                                 │
-                           code_gen → verify → replan
+apply: baseline/current → profile → retrieve path ←───┘
+                             ↑           │
+                             └─ verify ← code_gen
 ```
 
 Code generation occurs during initialization, backward and forward
@@ -68,11 +68,16 @@ optimized = apply(new_problem, (lineage,))
   thread-mapping changes belong together. Tile/vector-width tuning remains
   carrier choices and evidence, not repeated high-level skills.
 - `retrieve_paths(lineages, current_or_context, problem=..., abi=...)` returns
-  ranked plans with `lineage`, `entry_index`, and `skills`. It filters operator,
+  structural plans with `lineage`, `entry_index`, and `skills`. It filters operator,
   hardware, and ABI compatibility, then follows applicable lineage subpaths.
+- `profile(current)` captures NCU diagnostics and returns a kernel carrying
+  `KernelProfile`: metrics, device, tool version, and raw/report paths.
+- `klineage.action.retrieve(current, lineages)` profiles when needed, then asks
+  the agent to rank eligible paths using current source, ABI, verified features,
+  measured profile, and SkillCard memory. Ranking reasons are saved in its trace.
 - `apply(problem_path, lineages)` retrieves before generating a baseline.
   `apply(current, lineages)` starts from an existing kernel. Both generate,
-  verify, and replan from the resulting state.
+  verify, profile, and retrieve again from the resulting state.
 - `apply(current, skills)` retains explicit-card application; `retrieve(skills,
   context)` retains flat scope/prior-action filtering for existing callers.
 - `code_gen(current, skills)` returns an unvalidated candidate.
@@ -83,6 +88,31 @@ preserve source transitions, skip already-present features at the same locus,
 and rank by operator similarity, shape proximity, and measured source gains.
 Source gains guide search; they do not predict target speedup. Legacy cards
 without feature contracts remain available through flat retrieval.
+
+Profile-based ranking preserves each path's edge order and dependencies. The
+agent cannot add or alter paths. Source, ABI, problem, or target changes discard
+the old profile. A new case uses structural retrieval until a runnable baseline
+exists; subsequent retrieval uses its measurements.
+If later profiling or retrieval fails, `apply` records the failure and retains
+the best validated kernel.
+
+```python
+from klineage.action import profile, retrieve
+from klineage.profiling import ProfileOptions
+
+current = profile(current, options=ProfileOptions(
+    set="detailed", sections=("WarpStateStats",), timeout_seconds=180,
+))
+plans = retrieve(current, (lineage,))
+```
+
+Profiling uses CUDA-platform Nsight Compute, as in AKO4X. Only candidate calls
+inside a dedicated NVTX range are captured; compilation, inputs, warmup, and
+the problem reference stay outside. `kernel_filter` optionally selects a
+demangled kernel-name regex. Complete CSV and `.ncu-rep` reports are retained
+per capture. Missing tools, denied GPU counters, and empty captures fail the
+action. The host must permit NCU counters; containers do not elevate privileges.
+NCU diagnostics never replace CUPTI performance measurements or fidelity gates.
 
 `Lineage.termination` distinguishes `complete`, `step_limit`, `rejection_limit`,
 and `unknown`; `reason` records the stopping evidence. Limits do not establish

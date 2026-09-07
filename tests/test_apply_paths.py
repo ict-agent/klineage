@@ -16,6 +16,11 @@ from klineage.action.code_gen import _materialize
 from klineage.action.decompose import _decompose
 from klineage.errors import ValidationGateError
 from klineage.memory import SkillAdmission
+from klineage.memory.paths import retrieve_paths
+
+
+def ranked(_, current, lineages, admission):
+    return retrieve_paths(lineages, current, skill_admission=admission)
 
 
 class ApplyPathTests(unittest.TestCase):
@@ -125,7 +130,11 @@ class ApplyPathTests(unittest.TestCase):
                     card.provides[0] for card in lineage.skills[:count]
                 ))
 
-            with patch("klineage.action.apply._observe", side_effect=observed):
+            with (
+                patch("klineage.action.apply._observe", side_effect=observed),
+                patch("klineage.action.apply._profile", side_effect=lambda _, k: k),
+                patch("klineage.action.apply._retrieve", side_effect=ranked),
+            ):
                 result = _run_paths(sandbox, baseline, (lineage,), SkillAdmission.OFF)
 
         self.assertIn("pipeline-step", result.source)
@@ -142,13 +151,100 @@ class ApplyPathTests(unittest.TestCase):
             sandbox = FakeSandbox(FakeRunner(Path(temporary), [{
                 "done": True, "_write_bundle": bundle("# no effect\n"),
             }]))
-            with patch("klineage.action.apply._observe", side_effect=lambda _, k, fs:
-                       replace(k, features=())):
+            with (
+                patch("klineage.action.apply._observe", side_effect=lambda _, k, fs:
+                      replace(k, features=())),
+                patch("klineage.action.apply._profile", side_effect=lambda _, k: k),
+                patch("klineage.action.apply._retrieve", side_effect=ranked),
+            ):
                 result = _run_paths(sandbox, baseline, (lineage,), SkillAdmission.OFF)
 
         self.assertEqual(result.fingerprint, baseline.fingerprint)
         self.assertEqual(result.context.prior_actions, ())
         self.assertIn("error", result.validation.details["apply_search"]["attempts"][0])
+
+    def test_replans_with_fresh_profile(self):
+        from test_profile_action import measured
+        from test_retrieval import _lineage
+        from klineage.action.apply import _run_paths
+
+        lineage = _lineage()
+        seen = []
+
+        def collect(_, current):
+            return replace(current, profile=measured(current))
+
+        def retrieve(_, current, memory, admission):
+            self.assertIsNotNone(current.profile)
+            self.assertTrue(current.profile.matches(current))
+            seen.append(current.fingerprint)
+            return ranked(_, current, memory, admission)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            sandbox = FakeSandbox(FakeRunner(Path(temporary), []))
+            with (
+                patch("klineage.action.apply._observe", side_effect=lambda _, k, fs: k),
+                patch("klineage.action.apply._step", side_effect=lineage.states[1:]),
+                patch("klineage.action.apply._profile", side_effect=collect),
+                patch("klineage.action.apply._retrieve", side_effect=retrieve),
+            ):
+                result = _run_paths(sandbox, lineage.states[0], (lineage,), SkillAdmission.OFF)
+        self.assertEqual(set(seen), {state.fingerprint for state in lineage.states})
+        self.assertIsNotNone(result.profile)
+        self.assertTrue(result.profile.matches(result))
+
+    def test_replan_failure_keeps_best(self):
+        from klineage.errors import ActionError
+        from test_profile_action import measured
+        from test_retrieval import _lineage
+        from klineage.action.apply import _run_paths
+
+        lineage = _lineage()
+        start, improved = lineage.states[:2]
+        improved = replace(improved, validation=accepted(0.5, 1.0))
+        start = replace(start, profile=measured(start))
+
+        def collect(_, current):
+            if current.fingerprint != start.fingerprint:
+                raise ActionError("NCU counter access lost")
+            return current
+
+        with tempfile.TemporaryDirectory() as temporary:
+            sandbox = FakeSandbox(FakeRunner(Path(temporary), []))
+            with (
+                patch("klineage.action.apply._observe", side_effect=lambda _, k, fs: k),
+                patch("klineage.action.apply._step", return_value=improved),
+                patch("klineage.action.apply._profile", side_effect=collect),
+                patch("klineage.action.apply._retrieve", side_effect=ranked),
+            ):
+                result = _run_paths(sandbox, start, (lineage,), SkillAdmission.OFF)
+        self.assertEqual(result.fingerprint, improved.fingerprint)
+        self.assertTrue(result.validation.accepted)
+        failure = result.validation.details["apply_search"]["attempts"][-1]
+        self.assertEqual(failure["stage"], "retrieve")
+        self.assertIn("NCU counter access lost", failure["error"])
+
+    def test_step_limit_profiles_best(self):
+        from test_profile_action import measured
+        from test_retrieval import _lineage
+        from klineage.action.apply import _run_paths
+
+        lineage = _lineage()
+        improved = replace(lineage.states[1], validation=accepted(0.5, 1.0))
+        with tempfile.TemporaryDirectory() as temporary:
+            sandbox = FakeSandbox(FakeRunner(Path(temporary), []))
+            with (
+                patch("klineage.action.apply._MAX_STEPS", 1),
+                patch("klineage.action.apply._observe", side_effect=lambda _, k, fs: k),
+                patch("klineage.action.apply._step", return_value=improved),
+                patch("klineage.action.apply._profile", side_effect=lambda _, k:
+                      replace(k, profile=measured(k))),
+                patch("klineage.action.apply._retrieve", side_effect=ranked),
+            ):
+                result = _run_paths(sandbox, lineage.states[0], (lineage,), SkillAdmission.OFF)
+        self.assertEqual(result.fingerprint, improved.fingerprint)
+        self.assertIsNotNone(result.profile)
+        self.assertTrue(result.profile.matches(result))
 
     def test_codegen_has_no_claims(self):
         with tempfile.TemporaryDirectory() as temporary:

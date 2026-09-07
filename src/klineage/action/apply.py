@@ -10,6 +10,8 @@ from klineage.action._contract import _contract
 from klineage.action._sandbox import _Kind, _new, _next, _Sandbox
 from klineage.action._state import _observe
 from klineage.action.code_gen import _materialize, _seed, _skill_sequence
+from klineage.action.profile import _profile
+from klineage.action.retrieve import _retrieve
 from klineage.errors import ActionError, ValidationGateError
 from klineage.harness.fidelity import verify_performance
 from klineage.kernel import Feature, Kernel
@@ -130,13 +132,22 @@ def _run_paths(
     if not set(required).issubset(current.features):
         raise ValidationGateError("baseline is missing the retrieved entry mechanisms",
                                   kernel=current)
-    plans = retrieve_paths(lineages, current, skill_admission=skill_admission)
+    current = _profile(sandbox, current)
+    plans = _retrieve(sandbox, current, lineages, skill_admission)
     best, attempts = current, 0
     history = []
     for plan in plans:
         candidate = current
         while attempts < _MAX_STEPS:
-            pending = retrieve_paths((plan.lineage,), candidate, skill_admission=skill_admission)
+            try:
+                candidate = _profile(sandbox, candidate)
+                if candidate.fingerprint == best.fingerprint:
+                    best = replace(best, profile=candidate.profile)
+                pending = _retrieve(sandbox, candidate, (plan.lineage,), skill_admission)
+            except ActionError as error:
+                history.append({"stage": "retrieve", "kernel": candidate.fingerprint,
+                                "error": str(error)})
+                break
             if not pending:
                 break
             attempts += 1
@@ -162,6 +173,12 @@ def _run_paths(
                 best = candidate.with_validation(replace(
                     checked, details={**candidate.validation.details, **checked.details},
                 ))
+    if best.profile is None and attempts == _MAX_STEPS:
+        try:
+            best = _profile(sandbox, best)
+        except ActionError as error:
+            history.append({"stage": "profile", "kernel": best.fingerprint,
+                            "error": str(error)})
     return best.with_validation(replace(best.validation, details={
         **best.validation.details,
         "apply_search": {"attempts": history, "step_limit": _MAX_STEPS},

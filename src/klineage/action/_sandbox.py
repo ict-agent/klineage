@@ -27,6 +27,7 @@ from klineage.harness.codex_runner import CodexRunner
 from klineage.harness.eval import ValidationResult
 from klineage.harness.structured import run_json
 from klineage.kernel import Kernel, TargetContext
+from klineage.profiling import ProfileOptions
 from klineage.repository import stage_repository
 
 _RUN_VERSION = 2
@@ -50,6 +51,8 @@ class _Kind(StrEnum):
     DECOMPOSE = "decompose"
     CODE_GEN = "code-gen"
     APPLY = "apply"
+    PROFILE = "profile"
+    RETRIEVE = "retrieve"
 
 
 class _PathKind(StrEnum):
@@ -167,6 +170,18 @@ class _Sandbox:
     def _inspect(self) -> Mapping[str, Any]:
         return self._runtime().inspect(self._problem, log_dir=self._logs)
 
+    def _profile(self, kernel: Kernel, options: ProfileOptions) -> dict[str, Any]:
+        return self._runtime().profile(
+            kernel, problem=self._problem, options=options,
+            build_root=self._action / _BUILD_DIR, log_dir=self._logs,
+            read_paths=(self._run / _INPUT_DIR,), include_paths=self._includes(),
+        )
+
+    def _includes(self) -> tuple[Path, ...]:
+        return tuple(path for path in (
+            self._repo / "include", self._repo / "tools/util/include",
+        ) if path.is_dir())
+
     def _evaluate(
         self,
         kernel: Kernel,
@@ -174,17 +189,9 @@ class _Sandbox:
         reference: Kernel | None = None,
     ) -> ValidationResult:
         if self._evaluator is None:
-            include_paths = tuple(
-                path
-                for path in (
-                    self._repo / "include",
-                    self._repo / "tools/util/include",
-                )
-                if path.is_dir()
-            )
             self._evaluator = self._runtime().evaluator(
                 self._problem,
-                include_paths=include_paths,
+                include_paths=self._includes(),
                 build_root=self._action / _BUILD_DIR,
                 log_dir=self._logs,
                 read_paths=(self._run / _INPUT_DIR,),

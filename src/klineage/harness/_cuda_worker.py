@@ -13,6 +13,7 @@ import hashlib
 import importlib.util
 import inspect
 import json
+import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -29,6 +30,7 @@ from torch.utils.cpp_extension import (
 from klineage.contract import ABIValue, EvaluatorInterface, KernelABI, OutputStyle, bundle_build
 from klineage.harness._cuda_bundle import _BundleLoader
 from klineage.harness._environment import _runtime_info
+from klineage.harness._profiling import _NCU, _RANGE
 from klineage.harness.callable_eval import (
     CallableKernelEvaluator,
     CallInputs,
@@ -41,6 +43,7 @@ from klineage.kernel import Kernel
 
 _BINDING_SOURCE = Path(__file__).with_name("_cuda_binding.cpp")
 _DEFAULT_SEED = 0
+_TOOL_TIMEOUT_SECONDS = 10
 _CFLAGS = ("-O3", "-std=c++17")
 _CUDA_FLAGS = (*_CFLAGS, "--expt-relaxed-constexpr", "--expt-extended-lambda")
 _DEFAULT_TIMING = TimingPolicy()
@@ -262,6 +265,33 @@ def evaluate_request(request: Mapping[str, Any]) -> ValidationResult:
             "builds": loader._builds,
         },
     })
+
+
+def _profile_request(request: Mapping[str, Any]) -> dict[str, Any]:
+    kernel = Kernel.from_dict(_mapping(request.get("kernel"), "kernel"))
+    config = _config(_mapping(request.get("config"), "config"))
+    module, _ = _load_problem(config.problem_path)
+    inputs = _make_inputs(module, config.seed)
+    device = next(iter(inputs.values())).device
+    version = subprocess.check_output(
+        (_NCU, "--version"), text=True, timeout=_TOOL_TIMEOUT_SECONDS,
+    ).strip()
+
+    with torch.cuda.device(device), torch.inference_mode():
+        properties = torch.cuda.get_device_properties(device)
+        function = _RawLoader(config).load(kernel)
+        function(*inputs.values())
+        torch.cuda.synchronize(device)
+
+        # Compilation, input generation and warmup stay outside the measured range.
+        with torch.cuda.nvtx.range(_RANGE):
+            _output = function(*inputs.values())
+            torch.cuda.synchronize(device)
+
+    return {"tool_version": version, "device": {
+        "name": properties.name, "uuid": str(properties.uuid),
+        "capability": f"sm{properties.major}{properties.minor}",
+    }}
 
 
 def _runtime(module: ModuleType, seed: int) -> ProblemRuntime:
@@ -519,8 +549,8 @@ def _mapping(value: Any, label: str) -> Mapping[str, Any]:
 
 def _operation(request: Mapping[str, Any]) -> str:
     value = request.get("operation")
-    if value not in {"inspect", "evaluate"}:
-        raise ValueError("operation must be 'inspect' or 'evaluate'")
+    if value not in {"inspect", "evaluate", "profile"}:
+        raise ValueError("operation must be 'inspect', 'evaluate' or 'profile'")
     return value
 
 
@@ -549,6 +579,8 @@ def main() -> int:
                 if isinstance(seed, bool) or not isinstance(seed, int):
                     raise TypeError("seed must be an integer")
                 result: Any = inspect_problem(request["problem_path"], seed=seed)
+            elif operation == "profile":
+                result = _profile_request(request)
             else:
                 result = evaluate_request(request).to_dict()
     except Exception as exc:  # noqa: BLE001 - worker failures cross a JSON boundary

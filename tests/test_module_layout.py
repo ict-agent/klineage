@@ -13,7 +13,7 @@ class ModuleLayoutTests(unittest.TestCase):
     def test_action_module_contains_only_public_action_functions(self) -> None:
         self.assertEqual(
             action.__all__,
-            ["apply", "code_gen", "decompose", "init"],
+            ["apply", "code_gen", "decompose", "init", "profile", "retrieve"],
         )
 
     def test_actions_are_defined_by_their_action_modules(self) -> None:
@@ -22,6 +22,8 @@ class ModuleLayoutTests(unittest.TestCase):
             action.code_gen: "klineage.action.code_gen",
             action.decompose: "klineage.action.decompose",
             action.init: "klineage.action.init",
+            action.profile: "klineage.action.profile",
+            action.retrieve: "klineage.action.retrieve",
         }
         for function, module in expected_modules.items():
             with self.subTest(function=function.__name__):

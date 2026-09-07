@@ -12,6 +12,7 @@ from typing import Any
 from klineage._utils import mapping, nonempty, string_tuple
 from klineage.contract import KernelABI, ProblemSpec, relative_source_path, source_entry
 from klineage.harness.eval import ValidationResult
+from klineage.profiling import KernelProfile
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -98,6 +99,7 @@ class Kernel:
     abi: KernelABI | None = None
     source_files: Mapping[str, str] | None = None
     features: tuple[Feature, ...] = ()
+    profile: KernelProfile | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "name", nonempty(self.name, "kernel name"))
@@ -139,6 +141,13 @@ class Kernel:
             if entry is not None and source_files[entry] != self.source:
                 raise ValueError("kernel source must match its ABI interface module")
             object.__setattr__(self, "source_files", source_files)
+
+        if self.profile is not None:
+            if not isinstance(self.profile, KernelProfile):
+                raise TypeError("kernel profile must be a KernelProfile")
+            # Source, contract, or target edits invalidate captured evidence.
+            if not self.profile.matches(self):
+                object.__setattr__(self, "profile", None)
 
     @property
     def fingerprint(self) -> str:
@@ -186,6 +195,8 @@ class Kernel:
             value["source_files"] = dict(sorted(self.source_files.items()))
         if self.features:
             value["features"] = [item.to_dict() for item in self.features]
+        if self.profile is not None:
+            value["profile"] = self.profile.to_dict()
         return value
 
     def to_dict(self) -> dict[str, Any]:
@@ -194,6 +205,7 @@ class Kernel:
             "context": self.context.to_dict(),
             "artifact_path": str(self.artifact_path) if self.artifact_path else None,
             "validation": self.validation.to_dict() if self.validation else None,
+            "profile": self.profile.to_dict() if self.profile else None,
             "problem": self.problem.to_dict() if self.problem else None,
             "abi": self.abi.to_dict() if self.abi else None,
             "source": self.source,
@@ -212,6 +224,7 @@ class Kernel:
         problem = value.get("problem")
         abi = value.get("abi")
         source_files = value.get("source_files")
+        profile = value.get("profile")
         return cls(
             name=str(value["name"]),
             source=str(value["source"]),
@@ -243,6 +256,7 @@ class Kernel:
                 Feature.from_dict(mapping(item, "kernel feature"))
                 for item in value.get("features", ())
             ),
+            profile=KernelProfile.from_dict(profile) if profile is not None else None,
         )
 
 

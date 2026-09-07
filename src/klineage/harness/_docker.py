@@ -7,13 +7,19 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from klineage.errors import ActionError
+from klineage.harness._profiling import _ncu_command, _parse_metrics
 from klineage.harness.eval import ValidationResult
 from klineage.kernel import Kernel
+
+if TYPE_CHECKING:
+    from klineage.profiling import ProfileOptions
 
 _SERVICE = "dev"
 _GPU = 0
@@ -127,6 +133,71 @@ class _DockerRuntime:
             read_paths,
         )
 
+    def profile(
+        self,
+        kernel: Kernel,
+        *,
+        problem: Path,
+        build_root: Path,
+        log_dir: Path,
+        read_paths: Sequence[Path] = (),
+        include_paths: Sequence[Path] = (),
+        options: ProfileOptions,
+    ) -> dict[str, Any]:
+        logs = _log_dir(log_dir)
+        try:
+            return self._collect_profile(kernel, problem, build_root, logs, read_paths, include_paths, options)
+        except (OSError, ValueError, TypeError, _DockerError) as exc:
+            _write_json(logs / "profile-error.json", {"error": str(exc)})
+            raise ActionError(f"NCU profiling failed: {exc}; see {logs}") from exc
+
+    def _collect_profile(self, kernel, problem, build_root, logs, read_paths, include_paths, options):
+        build = _log_dir(build_root)
+        # Separate reports prevent a failed rerun from reusing stale metrics.
+        reports = Path(tempfile.mkdtemp(prefix="ncu-", dir=logs))
+        raw, report = reports / "metrics.csv", reports / "profile.ncu-rep"
+        output = self._container_path(reports)
+        request = {
+            "operation": "profile", "kernel": self._kernel(kernel),
+            "config": {"problem_path": str(self._container_path(problem)),
+                       "build_root": str(self._container_path(build)), "seed": _SEED,
+                       "include_paths": [str(self._container_path(path)) for path in include_paths]},
+        }
+        inputs = [problem, *read_paths, *include_paths]
+        if kernel.artifact_path is not None:
+            inputs.append(kernel.artifact_path)
+        try:
+            payload = self._invoke(
+                request, reports, "profile", read_paths=inputs, write_paths=(reports,),
+                command_prefix=_ncu_command(options, output / raw.name, output / report.name),
+                timeout=options.timeout_seconds,
+            )
+        except _DockerError as exc:
+            if raw.is_file():
+                try:
+                    _parse_metrics(raw.read_text(encoding="utf-8"))
+                except ValueError as diagnostic:
+                    raise _DockerError(f"{exc}; {diagnostic}") from exc
+            raise
+
+        if not isinstance(payload, Mapping) or "error" in payload:
+            raise _DockerError(f"invalid profile worker result: {payload}")
+        if (not isinstance(payload.get("tool_version"), str) or not payload["tool_version"].strip()
+                or not isinstance(payload.get("device"), Mapping)):
+            raise _DockerError("profile worker metadata is incomplete")
+        if not raw.is_file():
+            raise _DockerError("NCU did not produce raw CSV")
+        metrics = _parse_metrics(raw.read_text(encoding="utf-8"))
+        if not report.is_file() or not report.stat().st_size:
+            raise _DockerError("NCU did not produce a report")
+        result = {
+            "tool": "ncu", "tool_version": payload["tool_version"], "device": payload["device"],
+            "metrics": metrics,
+            "report_path": str(report), "raw_path": str(raw), "collected_at": _now(),
+        }
+        _write_json(reports / "profile-result.json", result)
+        return result
+
     def _container_path(self, path: Path) -> Path:
         host_path = Path(path).expanduser().resolve(strict=True)
         try:
@@ -140,8 +211,9 @@ class _DockerRuntime:
 
     def _kernel(self, kernel: Kernel) -> dict[str, Any]:
         payload = kernel.to_dict()
-        # The worker measures fresh evidence; prior timing samples stay on the host.
+        # The worker collects fresh evidence; prior results stay on the host.
         payload.pop("validation")
+        payload.pop("profile", None)
         artifact = kernel.artifact_path
         if artifact is not None:
             payload["artifact_path"] = str(self._container_path(artifact))
@@ -164,6 +236,9 @@ class _DockerRuntime:
         stem: str,
         *,
         read_paths: Sequence[Path] = (),
+        write_paths: Sequence[Path] = (),
+        command_prefix: Sequence[str] = (),
+        timeout: float | None = None,
     ) -> Any:
         request_path = log_dir / f"{stem}-request.json"
         stdout_path = log_dir / f"{stem}-stdout.log"
@@ -174,7 +249,13 @@ class _DockerRuntime:
         _write_json(request_path, request)
 
         worker = self._mount / _WORKER_PATH
+        application = (*command_prefix, str(_CONTAINER_PYTHON), str(worker))
+        timeout = self._timeout if timeout is None else timeout
         read_mounts = self._read_mounts(read_paths)
+        write_mounts = tuple(
+            item for path in write_paths
+            for item in ("--mount", _mount_spec(path, self._container_path(path)))
+        )
         build_root = _build_root(request, self._mount)
         build_mount: tuple[str, ...] = ()
         if build_root is not None:
@@ -209,6 +290,7 @@ class _DockerRuntime:
             str(self._mount),
             *read_mounts,
             *build_mount,
+            *write_mounts,
             "--env",
             f"CUDA_VISIBLE_DEVICES={_CONTAINER_GPU}",
             "--env",
@@ -234,9 +316,9 @@ class _DockerRuntime:
             "--env",
             f"TORCH_EXTENSIONS_DIR={extensions}",
             "--entrypoint",
-            str(_CONTAINER_PYTHON),
+            application[0],
             self._image,
-            str(worker),
+            *application[1:],
         )
         started_at = _now()
         try:
@@ -248,7 +330,7 @@ class _DockerRuntime:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=self._timeout,
+                    timeout=timeout,
                     check=False,
                 )
             except subprocess.TimeoutExpired as exc:
@@ -260,11 +342,11 @@ class _DockerRuntime:
                         "started_at": started_at,
                         "finished_at": _now(),
                         "timed_out": True,
-                        "timeout_seconds": self._timeout,
+                        "timeout_seconds": timeout,
                     },
                 )
                 raise _DockerError(
-                    f"CUDA worker timed out after {self._timeout:g}s; "
+                    f"CUDA worker timed out after {timeout:g}s; "
                     f"see {stderr_path}"
                 ) from exc
         finally:
