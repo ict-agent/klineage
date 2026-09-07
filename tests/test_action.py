@@ -101,8 +101,17 @@ def materializable(value: Kernel, marker: str = "") -> Kernel:
 
 def bundle(marker: str = "") -> dict[str, str]:
     return {
-        "submission.py": LOADER_SOURCE + marker,
-        "kernel.cu": CUDA_SOURCE,
+        "config.toml": '''[solution]
+name = "gemm"
+definition = "gemm"
+author = "klineage"
+[build]
+language = "cuda"
+entry_point = "binding.py::kernel"
+destination_passing_style = false
+''',
+        "solution/binding.py": "def kernel(x):\n    return x\n" + marker,
+        "solution/kernel.cu": CUDA_SOURCE,
     }
 
 

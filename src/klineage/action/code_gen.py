@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 from klineage.action._sandbox import _Kind, _next, _Sandbox
 from klineage.errors import StructuredOutputError
-from klineage.contract import KernelABI, ProblemSpec
+from klineage.contract import CudaBuild, KernelABI, ProblemSpec, source_entry
 from klineage.harness.artifacts import (
     is_cuda_language, require_cuda_source_bundle, require_pure_cuda,
 )
@@ -62,9 +62,10 @@ def _materialize(
         ],
         "submission_dir": submission,
     }
+    cuda = is_cuda_language(current_kernel.context.language)
     response = sandbox._ask(
         "materialize",
-        render_prompt("code_gen", skill_count=len(skills)),
+        render_prompt("code_gen", skill_count=len(skills), language="cuda" if cuda else "python"),
         payload,
     )
     if response != {"done": True}:
@@ -75,9 +76,13 @@ def _materialize(
         "generated source bundle",
         current_kernel.abi.interface,
     )
-    if is_cuda_language(current_kernel.context.language):
+    if cuda:
+        try:
+            CudaBuild.from_sources(source_files)
+        except (KeyError, TypeError, ValueError) as error:
+            raise StructuredOutputError(f"invalid CUDA config.toml: {error}") from error
         require_cuda_source_bundle(source_files, repository=sandbox._repo)
-    source = source_files[current_kernel.abi.interface.module]
+    source = source_files[source_entry(source_files, current_kernel.abi.interface)]
     return Kernel(
         name=f"{current_kernel.name}.materialized",
         source=source,

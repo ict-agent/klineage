@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from klineage._utils import nonempty, signature
-from klineage.contract import EvaluatorInterface, relative_source_path
+from klineage.contract import EvaluatorInterface, relative_source_path, source_entry
 from klineage.errors import StructuredOutputError, ValidationGateError
 
 _COMMENT_RE = re.compile(r"//[^\n]*|/\*[\s\S]*?\*/")
@@ -134,12 +134,16 @@ def read_generated_source_bundle(
     if not source_files:
         raise StructuredOutputError(f"agent did not write {label}")
 
-    if interface.module not in source_files:
+    try:
+        entry = source_entry(source_files, interface)
+    except (KeyError, TypeError, ValueError) as error:
+        raise StructuredOutputError(f"invalid {label} configuration: {error}") from error
+    if entry not in source_files:
         raise StructuredOutputError(
-            f"{label} does not contain ABI interface module {interface.module!r}"
+            f"{label} does not contain ABI interface module {entry!r}"
         )
     try:
-        nonempty(source_files[interface.module], "ABI interface module")
+        nonempty(source_files[entry], "ABI interface module")
     except ValueError as error:
         raise StructuredOutputError(str(error)) from error
     return source_files

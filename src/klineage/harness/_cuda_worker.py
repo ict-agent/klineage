@@ -26,7 +26,8 @@ from torch.utils.cpp_extension import (
     load as load_torch_extension,
 )
 
-from klineage.contract import ABIValue, EvaluatorInterface, KernelABI
+from klineage.contract import ABIValue, EvaluatorInterface, KernelABI, OutputStyle, bundle_build
+from klineage.harness._cuda_bundle import _BundleLoader
 from klineage.harness._environment import _runtime_info
 from klineage.harness.callable_eval import (
     CallableKernelEvaluator,
@@ -79,6 +80,7 @@ class _RawLoader:
     def __init__(self, config: _Config) -> None:
         self._config = config
         self._directory_loader = PythonEntrypointLoader()
+        self._bundle_loader = _BundleLoader(config.build_root)
         self._extensions: dict[str, Any] = {}
         self._builds: dict[str, Any] = {}
 
@@ -88,6 +90,10 @@ class _RawLoader:
             raise ValueError("kernel.artifact_path is required")
         artifact = artifact.resolve(strict=True)
         if artifact.is_dir():
+            if (kernel.abi is not None and kernel.source_files is not None
+                    and bundle_build(kernel.source_files, kernel.abi.interface) is not None):
+                function, build = self._bundle_loader.load(kernel)
+                return _BundleCallable(kernel.abi, function, build.output_style)
             return self._directory_loader.load(kernel)
         if artifact.suffix.lower() != ".cu" or not artifact.is_file():
             raise ValueError("raw kernel artifact_path must identify a .cu file")
@@ -159,6 +165,44 @@ class _RawCallable:
         if len(outputs) == 1:
             return outputs[0]
         return outputs
+
+
+class _BundleCallable:
+    def __init__(self, abi: KernelABI, function: Any, style: OutputStyle) -> None:
+        self._abi, self._function, self._style = abi, function, style
+
+    def __call__(self, *inputs: torch.Tensor):
+        if len(inputs) != len(self._abi.inputs):
+            raise ValueError("CUDA bundle input count does not match its ABI")
+        tensors = tuple(_check_tensor(value, spec, "input")
+                        for value, spec in zip(inputs, self._abi.inputs, strict=True))
+        device = tensors[0].device if tensors else torch.device("cuda", torch.cuda.current_device())
+        if any(value.device != device for value in tensors):
+            raise ValueError("CUDA bundle inputs must share a device")
+
+        # The evaluator supplies trailing destinations; return-style entries own allocation.
+        with torch.cuda.device(device):
+            if self._style is OutputStyle.DESTINATION:
+                outputs = tuple(_allocate(spec, device) for spec in self._abi.outputs)
+                self._function(*tensors, *outputs)
+            else:
+                result = self._function(*tensors)
+                outputs = (result,) if len(self._abi.outputs) == 1 else result
+                if not self._abi.outputs and result is None:
+                    outputs = ()
+                if (not isinstance(outputs, Sequence) or isinstance(outputs, (str, bytes))
+                        or len(outputs) != len(self._abi.outputs)):
+                    raise ValueError("CUDA bundle output count does not match its ABI")
+
+            outputs = tuple(value if isinstance(value, torch.Tensor) else torch.from_dlpack(value)
+                            for value in outputs)
+            for value, spec in zip(outputs, self._abi.outputs, strict=True):
+                _check_tensor(value, spec, "output")
+                if value.device != device:
+                    raise ValueError("CUDA bundle outputs must use the input device")
+        if not outputs:
+            return None
+        return outputs[0] if len(outputs) == 1 else outputs
 
 
 def inspect_problem(

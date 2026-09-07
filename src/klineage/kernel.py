@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from klineage._utils import mapping, nonempty, string_tuple
-from klineage.contract import KernelABI, ProblemSpec, relative_source_path
+from klineage.contract import KernelABI, ProblemSpec, relative_source_path, source_entry
 from klineage.harness.eval import ValidationResult
 
 
@@ -130,15 +130,13 @@ class Kernel:
                 if "\x00" in contents:
                     raise ValueError("kernel source files must not contain NUL bytes")
                 source_files[path] = contents
-            if self.abi is not None and self.abi.interface.module not in source_files:
+            entry = source_entry(source_files, self.abi.interface) if self.abi else None
+            if entry is not None and entry not in source_files:
                 raise ValueError(
                     "kernel source_files do not contain the ABI interface module "
-                    f"{self.abi.interface.module!r}"
+                    f"{entry!r}"
                 )
-            if (
-                self.abi is not None
-                and source_files[self.abi.interface.module] != self.source
-            ):
+            if entry is not None and source_files[entry] != self.source:
                 raise ValueError("kernel source must match its ABI interface module")
             object.__setattr__(self, "source_files", source_files)
 

@@ -11,28 +11,49 @@ mechanisms and implement the declared provides, including necessary layout and
 thread mapping. Adapt carrier parameters to the target contract.
 Use locus and forward_edit as the concrete source transition to adapt.
 
-Produce a complete source bundle inside submission_dir. A one-file bundle is
-valid, and a multi-file source tree is valid when useful. Every path must be a
-normalized relative path below submission_dir: do not use absolute paths,
-"..", symbolic links, binary files, or NUL bytes. Keep the whole bundle below
-16 MiB. Do not add host metadata files to the source tree.
+Produce a complete source bundle inside submission_dir. Every path must be a
+normalized relative path: no absolute paths, "..", symbolic links, binary files,
+or NUL bytes. Keep the bundle below 16 MiB.
 
-The abi.interface protocol is python-callable-v1. Its module path must
-exist in the bundle and define the named zero-argument loader function. Calling
-that loader must return the candidate callable. The evaluator invokes the
-candidate with ABI inputs as positional arguments in their declared order and
-interprets its return value as follows: return the value directly for one
-declared output, return a tuple in declaration order for multiple outputs, and
-return None when there are no outputs. The interface module may build or load
-other files from the same source directory. Do not delegate the operation to a
-framework implementation or change this interface.
+{% if language|default('cuda') == 'cuda' %}
+Use the AKO4X CUDA artifact layout, with exactly config.toml at the bundle root
+and all implementation files under solution/. The generated config.toml defines
+the entry point; the current kernel's legacy abi.interface is not the output
+format. Its ABI inputs/outputs and problem remain authoritative.
 
-For CUDA targets, implement tensor computation in raw CUDA C/C++; Python is
-only loader, allocation, metadata validation, and launch glue. A minimal bundle
-is the declared interface module plus kernel.cu and an optional C++ binding.
-Build/load the extension before the loader returns its callable, never inside
-the timed invocation. Resolve sources relative to __file__; keep build products
-outside the source bundle. Derive extension names from source and build flags.
+Direct CUDA symbol export (recommended):
+```toml
+[solution]
+name = "<candidate-name>"
+definition = "<operator-name>"
+author = "klineage"
+
+[build]
+language = "cuda"
+entry_point = "kernel.cu::kernel"
+destination_passing_style = true
+```
+Write solution/kernel.cu. Include <tvm/ffi/container/tensor.h>, receive
+tvm::ffi::TensorView arguments, and export the host wrapper with
+TVM_FFI_DLL_EXPORT_TYPED_FUNC(kernel, kernel). The evaluator appends preallocated
+outputs to the ABI inputs, both in declaration order. Write outputs in place.
+
+Python binding alternative: use entry_point = "binding.py::kernel" and
+destination_passing_style = false in [build]. Write solution/binding.py with
+def kernel(...), accepting ABI inputs directly and returning one output directly,
+multiple outputs as a tuple, or None for no outputs. Do not define a loader.
+For language = "cuda", the evaluator builds/loads all .cu/.c/.cc/.cpp/.cxx files
+under solution/ before importing the binding. A binding can call raw CUDA through
+torch custom ops registered by that compiled code. Use distinct source-derived
+custom-op namespaces so candidate and reference can coexist.
+For language = "python", the binding builds/loads its CUDA extension during
+module import. Use installed tvm_ffi APIs if needed, not the obsolete
+tvm.ffi Python import. All compilation/loading stays outside kernel(...).
+
+Implement tensor computation in raw CUDA C/C++; Python is allocation, metadata,
+and launch glue. Do not include CUTLASS/CuTe headers or delegate to expert
+libraries. Build products stay outside the source bundle. Resolve source paths
+relative to __file__; derive extension names from sources and build flags.
 
 Validate tensor device, dtype, shape, and stride against the ABI. Guard the
 tensor device and allocate outputs there. Submit every kernel and asynchronous
@@ -41,7 +62,14 @@ as the fourth chevron-launch argument. Do not substitute a default/new stream,
 read tensor values on the CPU, or synchronize the device in the callable.
 Propagate CUDA launch/runtime errors through the binding; never swallow them.
 Recompute outputs from each call's inputs; do not cache or replay output values.
-Do not add input generators, benchmark code, or framework arithmetic fallbacks.
+Do not add input generators, benchmark configuration/code, ITERATIONS.md,
+per-iteration commits, or framework arithmetic fallbacks.
+{% else %}
+Use the declared python-callable-v1 abi.interface: its module defines the named
+zero-argument loader, which returns a callable accepting ABI inputs in order.
+Return one output directly, multiple outputs as a tuple, or None for no outputs.
+Build/load dependencies before the loader returns, outside timed invocation.
+{% endif %}
 
 Then return exactly {"done": true}. Do not report compile, correctness, or
 performance claims; an external evaluator owns those gates.

@@ -29,6 +29,18 @@ ABI_SCHEMA_VERSION = 1
 LOADER_SOURCE = "def load():\n    return object()\n"
 CUDA_SOURCE = 'extern "C" __global__ void candidate(float *x) { x[0] += 1; }'
 SOURCE_FILES = {"submission.py": LOADER_SOURCE, "src/candidate.cu": CUDA_SOURCE}
+CUDA_FILES = {
+    "config.toml": '''[solution]
+name = "vector-add"
+definition = "vector-add"
+author = "klineage"
+[build]
+language = "cuda"
+entry_point = "kernel.cu::candidate"
+destination_passing_style = true
+''',
+    "solution/kernel.cu": CUDA_SOURCE,
+}
 
 
 def accepted() -> ValidationResult:
@@ -276,6 +288,15 @@ class ContractTests(unittest.TestCase):
 
 
 class SourceBundleTests(TempTest):
+    def test_reads_cuda_config_entry(self) -> None:
+        submission = self.root / "submission"
+        submission.mkdir()
+        write_tree(submission, CUDA_FILES)
+
+        self.assertEqual(read_bundle(self.root, submission), CUDA_FILES)
+        value = replace(kernel(), source=CUDA_SOURCE, source_files=CUDA_FILES)
+        self.assertEqual(Kernel.from_dict(value.to_dict()), value)
+
     def test_reads_source_dir_with_nested_interface(self) -> None:
         interface = EvaluatorInterface("python/entrypoint.py", "load_candidate")
         files = {
@@ -333,7 +354,7 @@ class MaterializeTests(TempTest):
             )
 
     def test_writes_source_dir_and_embeds_contract(self) -> None:
-        runner = FakeRunner(self.root, SOURCE_FILES)
+        runner = FakeRunner(self.root, CUDA_FILES)
         sandbox = FakeSandbox(runner)
         generated = _materialize(  # type: ignore[arg-type]
             sandbox,
@@ -346,10 +367,28 @@ class MaterializeTests(TempTest):
         self.assertEqual(current["problem"], problem().to_dict())
         self.assertEqual(current["abi"], abi().to_dict())
         self.assertTrue(generated.artifact_path.is_dir())
-        self.assertEqual(generated.source_files, SOURCE_FILES)
+        self.assertEqual(generated.source_files, CUDA_FILES)
+        self.assertEqual(generated.source, CUDA_SOURCE)
+
+    def test_cuda_requires_build_config(self) -> None:
+        runner = FakeRunner(self.root, SOURCE_FILES)
+        with self.assertRaisesRegex((ValueError, StructuredOutputError), "config.toml"):
+            _materialize(FakeSandbox(runner), kernel(), (skill(),))
+
+    def test_cuda_bundle_rejects_cutlass(self) -> None:
+        files = {**CUDA_FILES, "solution/kernel.cu":
+                 "#include <cutlass/cutlass.h>\n" + CUDA_SOURCE}
+        runner = FakeRunner(self.root, files)
+        with self.assertRaisesRegex(ValidationGateError, "expert library"):
+            _materialize(FakeSandbox(runner), kernel(), (skill(),))
 
     def test_requires_cuda_in_cuda_source_dir(self) -> None:
-        runner = FakeRunner(self.root, {"submission.py": LOADER_SOURCE})
+        runner = FakeRunner(self.root, {
+            "config.toml": CUDA_FILES["config.toml"].replace(
+                "kernel.cu::candidate", "binding.py::kernel"
+            ).replace("true", "false"),
+            "solution/binding.py": "def kernel(x):\n    return x\n",
+        })
         sandbox = FakeSandbox(runner)
         with self.assertRaisesRegex(ValidationGateError, "does not contain a CUDA"):
             _materialize(  # type: ignore[arg-type]

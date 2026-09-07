@@ -126,13 +126,30 @@ Every kernel carries a `ProblemSpec`, `KernelABI`, and `TargetContext`.
 Generation receives the contract and source once; full validation evidence
 stays in the saved lineage and evaluator logs.
 
-Raw CUDA uses the `klineage_launch` ABI in `klineage.contract`. Source bundles
-use `python-callable-v1`: import the declared module, call its zero-argument
-loader outside timing, then invoke the returned callable with ABI inputs in
-order. A single output is returned directly; multiple outputs use a tuple.
-Python supplies build and binding glue; CUDA targets require kernel code.
-CUDA bundles build in the loader, validate ABI metadata, and launch on the
-input device's current stream. Every call recomputes its outputs.
+Raw init/decompose kernels use the `klineage_launch` ABI in `klineage.contract`.
+CUDA `code_gen` produces AKO4X artifacts: root `config.toml` plus `solution/`.
+The config contains `[solution]` (`name`, `definition`, `author`) and `[build]`:
+
+```toml
+[build]
+language = "cuda"
+entry_point = "kernel.cu::kernel"
+destination_passing_style = true
+```
+
+The CUDA wrapper exports `TVM_FFI_DLL_EXPORT_TYPED_FUNC` with `TensorView` inputs
+followed by preallocated outputs. Alternatively, `binding.py::kernel` with
+`destination_passing_style = false` receives inputs directly and returns outputs.
+For `language = "cuda"`, TVM-FFI compiles native sources before loading either
+entry. A Python binding can call registered Torch custom ops; namespaces must
+be unique across variants. For `language = "python"`, the binding builds its
+CUDA extension during import. There is no generated zero-argument loader.
+
+Config selects the artifact entry independently of the tensor I/O ABI. Existing
+`python-callable-v1` artifacts remain readable. Builds occur outside timing and
+the source bundle. Calls check ABI metadata and use the input device's current
+stream. CUTLASS/CuTe headers and operator-library delegation remain forbidden.
+Every call recomputes outputs. No benchmark/iteration workflow is generated.
 
 Correctness uses the problem reference. Timing uses FlashInfer's CUPTI activity
 timer; loading, compilation, and input creation occur outside the timed region.

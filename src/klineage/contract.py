@@ -1,22 +1,22 @@
-"""Serializable problem and evaluator contracts for kernel submissions.
-
-The evaluator boundary is deliberately small.  A submission exposes one
-Python module containing a loader function.  Calling that loader returns the
-callable that is timed and invoked with the ABI inputs in declaration order.
-"""
+"""Keep I/O ABI separate from artifact config; legacy loading remains default."""
 
 from __future__ import annotations
 
 import json
 import keyword
+import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Any
 
 from klineage._utils import mapping, nonempty
 
 PYTHON_CALLABLE_PROTOCOL = "python-callable-v1"
+CUDA_CONFIG = "config.toml"
+CUDA_SOLUTION = "solution"
+_ENTRY_SUFFIXES = {"cuda": (".cu", ".py"), "python": (".py",)}
 RAW_CUDA_ABI = (
     'extern "C" cudaError_t klineage_launch('
     "const void* const* inputs, void* const* outputs, cudaStream_t stream)"
@@ -235,6 +235,87 @@ class EvaluatorInterface:
         )
 
 
+class OutputStyle(StrEnum):
+    RETURN = "return"
+    DESTINATION = "destination"
+
+
+@dataclass(frozen=True, slots=True)
+class CudaBuild:
+    """Build entry and output convention, separate from the kernel I/O ABI."""
+
+    language: str
+    entry_point: str
+    output_style: OutputStyle = OutputStyle.RETURN
+
+    def __post_init__(self) -> None:
+        if self.language not in _ENTRY_SUFFIXES:
+            raise ValueError("build language must be cuda or python")
+        if not isinstance(self.output_style, OutputStyle):
+            raise TypeError("output_style must be an OutputStyle")
+        entry = nonempty(self.entry_point, "build entry_point")
+        parts = entry.split("::")
+        if entry != self.entry_point or len(parts) != 2:
+            raise ValueError("entry_point must be relative/source.cu::symbol or .py::symbol")
+        path, symbol = parts
+        relative_source_path(path, "build entry source")
+        if PurePosixPath(path).suffix not in _ENTRY_SUFFIXES[self.language]:
+            raise ValueError("entry source suffix is incompatible with build language")
+        if not symbol.isidentifier() or keyword.iskeyword(symbol):
+            raise ValueError("entry symbol must be an identifier")
+
+    @property
+    def source_path(self) -> str:
+        return f"{CUDA_SOLUTION}/{self.entry_point.split('::')[0]}"
+
+    @property
+    def symbol(self) -> str:
+        return self.entry_point.split("::")[1]
+
+    @classmethod
+    def from_sources(cls, sources: Mapping[str, str]) -> CudaBuild:
+        config = tomllib.loads(sources[CUDA_CONFIG])
+        for name in sources:
+            relative_source_path(name)
+            if name != CUDA_CONFIG and not name.startswith(f"{CUDA_SOLUTION}/"):
+                raise ValueError("CUDA bundles contain only config.toml and solution/ sources")
+        solution = mapping(config[CUDA_SOLUTION], "solution metadata")
+        for key in ("name", "definition", "author"):
+            nonempty(solution[key], f"solution {key}")
+        build = mapping(config["build"], "build metadata")
+        destination = build.get("destination_passing_style", False)
+        if type(destination) is not bool:
+            raise TypeError("destination_passing_style must be a boolean")
+        result = cls(
+            language=build["language"], entry_point=build["entry_point"],
+            output_style=OutputStyle.DESTINATION if destination else OutputStyle.RETURN,
+        )
+        if result.source_path not in sources:
+            raise ValueError(f"missing entry source: {result.source_path}")
+        nonempty(sources[result.source_path], "CUDA entry source")
+        return result
+
+
+def bundle_build(
+    sources: Mapping[str, str], interface: EvaluatorInterface,
+) -> CudaBuild | None:
+    """Distinguish AKO metadata from a legacy entry's auxiliary config."""
+
+    if CUDA_CONFIG not in sources:
+        return None
+    config = tomllib.loads(sources[CUDA_CONFIG])
+    if interface.module in sources and not ({CUDA_SOLUTION, "build"} & config.keys()):
+        return None
+    return CudaBuild.from_sources(sources)
+
+
+def source_entry(sources: Mapping[str, str], interface: EvaluatorInterface) -> str:
+    """Resolve the artifact entry without changing its I/O ABI."""
+
+    build = bundle_build(sources, interface)
+    return build.source_path if build is not None else interface.module
+
+
 @dataclass(frozen=True, slots=True)
 class KernelABI:
     """Versioned input/output declaration and evaluator loading convention.
@@ -308,8 +389,14 @@ class KernelABI:
 __all__ = [
     "PYTHON_CALLABLE_PROTOCOL",
     "RAW_CUDA_ABI",
+    "CUDA_CONFIG",
+    "CUDA_SOLUTION",
     "ABIValue",
+    "CudaBuild",
     "EvaluatorInterface",
     "KernelABI",
+    "OutputStyle",
     "ProblemSpec",
+    "bundle_build",
+    "source_entry",
 ]
