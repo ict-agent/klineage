@@ -1,0 +1,19 @@
+Verify the selection against current_kernel, skills, and exclude_skills in the
+generation record. Read files with klineage.memory.load_skill or reconstruct inline
+SkillCards. Do not modify any files.
+Counter profiles currently support CUDA only; HIP or Ascend event timings are
+insufficient evidence for profile-based ranking.
+
+Recompute eligible cards with klineage.memory.retrieve, then check their textual
+preconditions and body against actual current source: types, layout/contiguity and
+parallel ownership, storage placement, pipeline stages/ordering, hardware features,
+conflicts, and optimizations already present. Enforce scope and
+excluded IDs. No SKILL.md is valid only if no card applies; require a source-grounded
+explanation of rejections. Otherwise require SKILL.md to restore
+exactly one supplied eligible SkillCard, with all metadata and body unchanged.
+
+Check the NCU request against the current fingerprint and problem, and the ranking
+rationale against captured rows. Read current_kernel/evaluations/ncu-* (this workdir
+for inline input). Missing/stale measurements or unsupported claims mean false.
+
+{% include "message/verify.md" %}

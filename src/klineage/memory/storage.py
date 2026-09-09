@@ -1,32 +1,44 @@
-"""Plain JSON persistence for lineages and flat SkillCard memories."""
+"""Markdown SkillCards and flat JSON skill memories."""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Sequence
 from pathlib import Path
 
-from klineage.memory.lineage import Lineage
+import yaml
+
 from klineage.memory.skillcard import SkillCard
 
-
-def save_lineage(
-    lineage: Lineage,
-    path: str | os.PathLike[str],
-) -> Path:
-    """Atomically persist one full lineage."""
-
-    return _write(path, lineage.to_dict())
+SKILL_FILE = "SKILL.md"
+SKILL_MARKDOWN = re.compile(r"---\n(.*?)\n---\n\n(.*)", re.DOTALL)
 
 
-def load_lineage(path: str | os.PathLike[str]) -> Lineage:
-    """Load a lineage written by :func:`save_lineage`."""
+def save_skill(card: SkillCard, path: str | os.PathLike[str]) -> Path:
+    """Write one SkillCard as Markdown."""
 
-    value = _read(path)
-    if not isinstance(value, dict):
-        raise TypeError("lineage file must contain a JSON object")
-    return Lineage.from_dict(value)
+    header = yaml.safe_dump(card.to_metadata(), sort_keys=False, allow_unicode=True)
+    return _write(path, f"---\n{header}---\n\n{card.body}\n")
+
+
+def load_skill(path: str | os.PathLike[str]) -> SkillCard:
+    """Restore a SkillCard from YAML metadata and Markdown instructions."""
+
+    text = Path(path).expanduser().read_text(encoding="utf-8")
+    match = SKILL_MARKDOWN.fullmatch(text)
+    if match is None:
+        raise ValueError("SKILL.md requires YAML frontmatter and Markdown sections")
+    try:
+        header = yaml.safe_load(match[1])
+    except yaml.YAMLError as error:
+        raise ValueError("invalid SKILL.md YAML") from error
+    if not isinstance(header, dict):
+        raise TypeError("SKILL.md frontmatter must be a mapping")
+    if set(header) != {"skill_id", "intent", "preconditions", "scope"}:
+        raise ValueError("SKILL.md frontmatter requires four metadata fields")
+    return SkillCard.from_dict({**header, "body": match[2]})
 
 
 def save_memory(
@@ -35,14 +47,17 @@ def save_memory(
 ) -> Path:
     """Atomically persist a flat, de-duplicated SkillCard sequence."""
 
-    cards = _unique_cards(skills)
-    return _write(path, [card.to_dict() for card in cards])
+    cards = unique_cards(skills)
+    payload = json.dumps(
+        [card.to_dict() for card in cards], ensure_ascii=False, indent=2
+    )
+    return _write(path, payload + "\n")
 
 
 def load_memory(path: str | os.PathLike[str]) -> tuple[SkillCard, ...]:
     """Load a flat SkillCard memory written by :func:`save_memory`."""
 
-    values = _read(path)
+    values = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
     if not isinstance(values, list):
         raise TypeError("skill memory file must contain a JSON array")
     cards: list[SkillCard] = []
@@ -50,10 +65,10 @@ def load_memory(path: str | os.PathLike[str]) -> tuple[SkillCard, ...]:
         if not isinstance(value, dict):
             raise TypeError("skill-memory contains a non-object card")
         cards.append(SkillCard.from_dict(value))
-    return _unique_cards(cards)
+    return unique_cards(cards)
 
 
-def _unique_cards(skills: Sequence[SkillCard]) -> tuple[SkillCard, ...]:
+def unique_cards(skills: Sequence[SkillCard]) -> tuple[SkillCard, ...]:
     if isinstance(skills, (str, bytes)) or not isinstance(skills, Sequence):
         raise TypeError("skills must be a sequence of SkillCards")
     by_id: dict[str, SkillCard] = {}
@@ -67,22 +82,13 @@ def _unique_cards(skills: Sequence[SkillCard]) -> tuple[SkillCard, ...]:
     return tuple(by_id.values())
 
 
-def _write(path: str | os.PathLike[str], payload: object) -> Path:
+def _write(path: str | os.PathLike[str], text: str) -> Path:
     destination = Path(path).expanduser().absolute()
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(destination.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    temporary.write_text(text, encoding="utf-8")
     os.replace(temporary, destination)
     return destination
 
 
-def _read(path: str | os.PathLike[str]) -> object:
-    source = Path(path).expanduser()
-    value = json.loads(source.read_text(encoding="utf-8"))
-    return value
-
-
-__all__ = ["load_lineage", "load_memory", "save_lineage", "save_memory"]
+__all__ = ["load_memory", "load_skill", "save_memory", "save_skill"]

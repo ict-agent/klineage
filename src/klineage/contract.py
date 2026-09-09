@@ -1,32 +1,29 @@
-"""Keep I/O ABI separate from artifact config; legacy loading remains default."""
+"""Derive call signatures from Trace problems; keep artifact loading separate."""
 
 from __future__ import annotations
 
 import json
-import keyword
-import tomllib
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Any
 
 from klineage._utils import mapping, nonempty
 
-PYTHON_CALLABLE_PROTOCOL = "python-callable-v1"
-CUDA_CONFIG = "config.toml"
-CUDA_SOLUTION = "solution"
-_ENTRY_SUFFIXES = {"cuda": (".cu", ".py"), "python": (".py",)}
-RAW_CUDA_ABI = (
-    'extern "C" cudaError_t klineage_launch('
-    "const void* const* inputs, void* const* outputs, cudaStream_t stream)"
-)
+BUNDLE_CONFIG = "config.toml"
+BUNDLE_SOLUTION = "solution"
 
 
-def _json_value(value: Any, label: str) -> Any:
+class ValueRole(StrEnum):
+    INPUTS = "inputs"
+    OUTPUTS = "outputs"
+
+
+def json_value(value: Any, label: str) -> Any:
     """Return a detached JSON value and reject lossy/non-portable values."""
 
-    def check(item: Any, location: str) -> None:
+    def check(item: Any, location: str):
         if item is None or isinstance(item, (str, bool, int)):
             return
         if isinstance(item, float):
@@ -51,13 +48,13 @@ def _json_value(value: Any, label: str) -> Any:
     return json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False))
 
 
-def _json_mapping(value: Mapping[str, Any], label: str) -> dict[str, Any]:
-    normalized = _json_value(mapping(value, label), label)
+def json_mapping(value: Mapping[str, Any], label: str) -> dict[str, Any]:
+    normalized = json_value(mapping(value, label), label)
     assert isinstance(normalized, dict)
     return normalized
 
 
-def _description(value: str, label: str) -> str:
+def description(value: str, label: str) -> str:
     if not isinstance(value, str):
         raise TypeError(f"{label} must be a string")
     return value.strip()
@@ -91,30 +88,31 @@ def relative_source_path(value: str, label: str = "source path") -> str:
 
 @dataclass(frozen=True, slots=True)
 class ProblemSpec:
-    """The complete, evaluator-independent statement of one kernel problem."""
+    """A FlashInfer Trace definition and workload on one execution target."""
 
     name: str
-    statement: str
-    parameters: Mapping[str, Any] = field(default_factory=dict)
+    definition: Mapping[str, Any]
+    workload: Mapping[str, Any]
+    language: str
+    platform: str
 
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "name", nonempty(self.name, "problem name"))
-        object.__setattr__(
-            self,
-            "statement",
-            nonempty(self.statement, "problem statement"),
-        )
-        object.__setattr__(
-            self,
-            "parameters",
-            _json_mapping(self.parameters, "problem parameters"),
-        )
+    def __post_init__(self):
+        for name in ("name", "language", "platform"):
+            object.__setattr__(
+                self, name, nonempty(getattr(self, name), f"problem {name}")
+            )
+        for name in ("definition", "workload"):
+            object.__setattr__(
+                self, name, json_mapping(getattr(self, name), f"problem {name}")
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
-            "statement": self.statement,
-            "parameters": _json_mapping(self.parameters, "problem parameters"),
+            "definition": json_mapping(self.definition, "problem definition"),
+            "workload": json_mapping(self.workload, "problem workload"),
+            "language": self.language,
+            "platform": self.platform,
         }
 
     @classmethod
@@ -122,9 +120,60 @@ class ProblemSpec:
         value = mapping(value, "problem spec")
         return cls(
             name=value["name"],
-            statement=value["statement"],
-            parameters=mapping(value.get("parameters", {}), "problem parameters"),
+            definition=value["definition"],
+            workload=value["workload"],
+            language=value["language"],
+            platform=value["platform"],
         )
+
+    def values(self, role: ValueRole) -> tuple[ABIValue, ...]:
+        """Resolve the ordered Trace signature for this workload."""
+
+        if not isinstance(role, ValueRole):
+            raise TypeError("role must be an ValueRole")
+        specs = mapping(self.definition[role], f"definition {role}")
+        axes = mapping(self.definition["axes"], "definition axes")
+        bindings = mapping(self.workload["axes"], "workload axes")
+        values = []
+        for name, raw in specs.items():
+            spec = mapping(raw, f"definition {role}.{name}")
+            shape = spec["shape"]
+            if shape is not None and not isinstance(shape, list):
+                raise TypeError(
+                    f"definition {role}.{name}.shape must be an array or null"
+                )
+            values.append(
+                ABIValue(
+                    name=name,
+                    dtype=spec["dtype"],
+                    shape=tuple(
+                        axis_size(axis, axes, bindings) for axis in shape or ()
+                    ),
+                    description=spec.get("description") or "",
+                )
+            )
+        return tuple(values)
+
+
+def axis_size(axis: str, axes: Mapping[str, Any], bindings: Mapping[str, Any]) -> int:
+    axis = nonempty(axis, "tensor axis")
+    if axis not in axes:
+        raise ValueError(f"undefined tensor axis {axis!r}")
+    spec = mapping(axes[axis], f"axis {axis}")
+    kind = spec["type"]
+    if kind == "const":
+        size = spec["value"]
+    elif kind == "var":
+        if axis not in bindings:
+            raise ValueError(f"workload axis {axis!r} is missing")
+        size = bindings[axis]
+    else:
+        raise ValueError(f"axis {axis!r} must be const or var")
+    if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+        raise ValueError(f"axis {axis!r} must resolve to a nonnegative integer")
+    if kind == "const" and axis in bindings and bindings[axis] != size:
+        raise ValueError(f"workload overrides constant axis {axis!r}")
+    return size
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,9 +184,8 @@ class ABIValue:
     dtype: str | None = None
     shape: tuple[int | str, ...] = ()
     description: str = ""
-    constraints: Mapping[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self):
         object.__setattr__(self, "name", nonempty(self.name, "ABI value name"))
         if self.dtype is not None:
             object.__setattr__(self, "dtype", nonempty(self.dtype, "ABI value dtype"))
@@ -154,12 +202,7 @@ class ABIValue:
         object.__setattr__(
             self,
             "description",
-            _description(self.description, "ABI value description"),
-        )
-        object.__setattr__(
-            self,
-            "constraints",
-            _json_mapping(self.constraints, "ABI value constraints"),
+            description(self.description, "ABI value description"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -168,7 +211,6 @@ class ABIValue:
             "dtype": self.dtype,
             "shape": list(self.shape),
             "description": self.description,
-            "constraints": _json_mapping(self.constraints, "ABI value constraints"),
         }
 
     @classmethod
@@ -183,55 +225,6 @@ class ABIValue:
             dtype=dtype,
             shape=tuple(raw_shape),
             description=value.get("description", ""),
-            constraints=mapping(
-                value.get("constraints", {}),
-                "ABI value constraints",
-            ),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class EvaluatorInterface:
-    """A versioned loader entry point understood by external evaluators.
-
-    For ``python-callable-v1``, the evaluator imports ``module`` from the
-    submission root, calls the zero-argument function named by ``loader``, and
-    requires that result to be callable.  It then invokes that callable with
-    the ABI inputs, in order, and interprets its return value as the ABI
-    outputs, in order.
-    """
-
-    module: str = "submission.py"
-    loader: str = "load"
-
-    def __post_init__(self) -> None:
-        module = relative_source_path(self.module, "evaluator module")
-        if PurePosixPath(module).suffix != ".py":
-            raise ValueError("evaluator module must be a Python source file")
-        object.__setattr__(self, "module", module)
-        loader = nonempty(self.loader, "evaluator loader symbol")
-        if not loader.isidentifier() or keyword.iskeyword(loader):
-            raise ValueError("evaluator loader symbol must be a Python identifier")
-        object.__setattr__(self, "loader", loader)
-
-    def to_dict(self) -> dict[str, str]:
-        return {
-            "protocol": PYTHON_CALLABLE_PROTOCOL,
-            "module": self.module,
-            "loader": self.loader,
-        }
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> EvaluatorInterface:
-        value = mapping(value, "evaluator interface")
-        protocol = value["protocol"]
-        if protocol != PYTHON_CALLABLE_PROTOCOL:
-            raise ValueError(
-                f"evaluator interface protocol must be {PYTHON_CALLABLE_PROTOCOL!r}"
-            )
-        return cls(
-            module=value.get("module", "submission.py"),
-            loader=value.get("loader", "load"),
         )
 
 
@@ -240,163 +233,11 @@ class OutputStyle(StrEnum):
     DESTINATION = "destination"
 
 
-@dataclass(frozen=True, slots=True)
-class CudaBuild:
-    """Build entry and output convention, separate from the kernel I/O ABI."""
-
-    language: str
-    entry_point: str
-    output_style: OutputStyle = OutputStyle.RETURN
-
-    def __post_init__(self) -> None:
-        if self.language not in _ENTRY_SUFFIXES:
-            raise ValueError("build language must be cuda or python")
-        if not isinstance(self.output_style, OutputStyle):
-            raise TypeError("output_style must be an OutputStyle")
-        entry = nonempty(self.entry_point, "build entry_point")
-        parts = entry.split("::")
-        if entry != self.entry_point or len(parts) != 2:
-            raise ValueError("entry_point must be relative/source.cu::symbol or .py::symbol")
-        path, symbol = parts
-        relative_source_path(path, "build entry source")
-        if PurePosixPath(path).suffix not in _ENTRY_SUFFIXES[self.language]:
-            raise ValueError("entry source suffix is incompatible with build language")
-        if not symbol.isidentifier() or keyword.iskeyword(symbol):
-            raise ValueError("entry symbol must be an identifier")
-
-    @property
-    def source_path(self) -> str:
-        return f"{CUDA_SOLUTION}/{self.entry_point.split('::')[0]}"
-
-    @property
-    def symbol(self) -> str:
-        return self.entry_point.split("::")[1]
-
-    @classmethod
-    def from_sources(cls, sources: Mapping[str, str]) -> CudaBuild:
-        config = tomllib.loads(sources[CUDA_CONFIG])
-        for name in sources:
-            relative_source_path(name)
-            if name != CUDA_CONFIG and not name.startswith(f"{CUDA_SOLUTION}/"):
-                raise ValueError("CUDA bundles contain only config.toml and solution/ sources")
-        solution = mapping(config[CUDA_SOLUTION], "solution metadata")
-        for key in ("name", "definition", "author"):
-            nonempty(solution[key], f"solution {key}")
-        build = mapping(config["build"], "build metadata")
-        destination = build.get("destination_passing_style", False)
-        if type(destination) is not bool:
-            raise TypeError("destination_passing_style must be a boolean")
-        result = cls(
-            language=build["language"], entry_point=build["entry_point"],
-            output_style=OutputStyle.DESTINATION if destination else OutputStyle.RETURN,
-        )
-        if result.source_path not in sources:
-            raise ValueError(f"missing entry source: {result.source_path}")
-        nonempty(sources[result.source_path], "CUDA entry source")
-        return result
-
-
-def bundle_build(
-    sources: Mapping[str, str], interface: EvaluatorInterface,
-) -> CudaBuild | None:
-    """Distinguish AKO metadata from a legacy entry's auxiliary config."""
-
-    if CUDA_CONFIG not in sources:
-        return None
-    config = tomllib.loads(sources[CUDA_CONFIG])
-    if interface.module in sources and not ({CUDA_SOLUTION, "build"} & config.keys()):
-        return None
-    return CudaBuild.from_sources(sources)
-
-
-def source_entry(sources: Mapping[str, str], interface: EvaluatorInterface) -> str:
-    """Resolve the artifact entry without changing its I/O ABI."""
-
-    build = bundle_build(sources, interface)
-    return build.source_path if build is not None else interface.module
-
-
-@dataclass(frozen=True, slots=True)
-class KernelABI:
-    """Versioned input/output declaration and evaluator loading convention.
-
-    Inputs are positional in declaration order.  A single declared output is
-    returned directly; multiple outputs are returned as a tuple in declaration
-    order, and an ABI with no outputs returns ``None``.
-    """
-
-    inputs: tuple[ABIValue, ...] = ()
-    outputs: tuple[ABIValue, ...] = ()
-    interface: EvaluatorInterface = field(default_factory=EvaluatorInterface)
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "inputs", self._values(self.inputs, "input"))
-        object.__setattr__(self, "outputs", self._values(self.outputs, "output"))
-        if not isinstance(self.interface, EvaluatorInterface):
-            raise TypeError("kernel ABI interface must be an EvaluatorInterface")
-
-    @staticmethod
-    def _values(values: Sequence[ABIValue], role: str) -> tuple[ABIValue, ...]:
-        if isinstance(values, (str, bytes)):
-            raise TypeError(f"kernel ABI {role}s must be a sequence")
-        normalized = tuple(values)
-        if any(not isinstance(value, ABIValue) for value in normalized):
-            raise TypeError(f"kernel ABI {role}s must contain ABIValue objects")
-        names = [value.name for value in normalized]
-        if len(set(names)) != len(names):
-            raise ValueError(f"kernel ABI {role} names must be unique")
-        return normalized
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "version": 1,
-            "inputs": [value.to_dict() for value in self.inputs],
-            "outputs": [value.to_dict() for value in self.outputs],
-            "interface": self.interface.to_dict(),
-        }
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> KernelABI:
-        value = mapping(value, "kernel ABI")
-        raw_inputs = value.get("inputs", ())
-        raw_outputs = value.get("outputs", ())
-        if not isinstance(raw_inputs, Sequence) or isinstance(raw_inputs, (str, bytes)):
-            raise TypeError("kernel ABI inputs must be an array")
-        if not isinstance(raw_outputs, Sequence) or isinstance(
-            raw_outputs, (str, bytes)
-        ):
-            raise TypeError("kernel ABI outputs must be an array")
-        version = value["version"]
-        if isinstance(version, bool) or not isinstance(version, int):
-            raise TypeError("kernel ABI version must be an integer")
-        if version != 1:
-            raise ValueError("kernel ABI version must be 1")
-        return cls(
-            inputs=tuple(
-                ABIValue.from_dict(mapping(item, "kernel ABI input"))
-                for item in raw_inputs
-            ),
-            outputs=tuple(
-                ABIValue.from_dict(mapping(item, "kernel ABI output"))
-                for item in raw_outputs
-            ),
-            interface=EvaluatorInterface.from_dict(
-                mapping(value.get("interface", {}), "evaluator interface")
-            ),
-        )
-
-
 __all__ = [
-    "PYTHON_CALLABLE_PROTOCOL",
-    "RAW_CUDA_ABI",
-    "CUDA_CONFIG",
-    "CUDA_SOLUTION",
+    "BUNDLE_CONFIG",
+    "BUNDLE_SOLUTION",
     "ABIValue",
-    "CudaBuild",
-    "EvaluatorInterface",
-    "KernelABI",
     "OutputStyle",
     "ProblemSpec",
-    "bundle_build",
-    "source_entry",
+    "ValueRole",
 ]

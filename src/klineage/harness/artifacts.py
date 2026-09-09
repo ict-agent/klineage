@@ -1,54 +1,82 @@
-"""Safe paths and source checks for artifacts written by coding agents."""
+"""Source snapshots, workload artifacts, builds, and process resources."""
 
 from __future__ import annotations
 
-import re
-from collections.abc import Mapping
+import errno
+import fcntl
+import hashlib
+import importlib.util
+import json
+import os
+import signal
+import subprocess
+import sys
+import threading
+import uuid
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
+from enum import StrEnum
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from types import ModuleType
+from typing import TYPE_CHECKING, Any
 
-from klineage._utils import nonempty, signature
-from klineage.contract import EvaluatorInterface, relative_source_path, source_entry
-from klineage.errors import StructuredOutputError, ValidationGateError
+from klineage._utils import operation_id
+from klineage.backend import Backend, get_backend, platform_backend
+from klineage.contract import (
+    BUNDLE_CONFIG,
+    BUNDLE_SOLUTION,
+    ABIValue,
+    OutputStyle,
+    ProblemSpec,
+    ValueRole,
+    relative_source_path,
+)
+from klineage.errors import StructuredOutputError
 
-_COMMENT_RE = re.compile(r"//[^\n]*|/\*[\s\S]*?\*/")
-_INCLUDE_RE = re.compile(r'^\s*#\s*include\s+(.+)$', re.MULTILINE)
-_LIBRARY_RE = re.compile(r"\b(?:cutlass|cute)\s*(?:::|/)|\bcublas\w*", re.IGNORECASE)
-_CUDA_TOKEN_RE = re.compile(r"\b(?:__global__|__device__)\b")
-_NON_CUDA_MARKERS = ("@triton.jit", "import torch", "from torch", "def forward(")
+if TYPE_CHECKING:
+    import torch
+
+    from klineage.kernel import Kernel
+
+
+_KERNEL_FILE = "kernel.json"
 _MAX_SOURCE_BYTES = 16 * 1024 * 1024
 _MAX_SOURCE_FILES = 1024
+_GRACE_SECONDS = 5
+DEFINITIONS = "definitions"
+WORKLOADS = "workloads"
+STRIDES_METADATA = "klineage.strides"
+IMPORT_LOCK = threading.RLock()
+HASH_LENGTH = 20
+BUILD_SOURCES = "sources"
+BUILD_LOCK = ".klineage-build.lock"
+DTYPE_ALIASES = {
+    "bool": "bool",
+    "bfloat16": "bfloat16",
+    "bf16": "bfloat16",
+    "float16": "float16",
+    "half": "float16",
+    "float32": "float32",
+    "float": "float32",
+    "float64": "float64",
+    "double": "float64",
+    "int8": "int8",
+    "uint8": "uint8",
+    "int16": "int16",
+    "short": "int16",
+    "int32": "int32",
+    "int": "int32",
+    "int64": "int64",
+    "long": "int64",
+}
 
 
-def read_generated_source(
-    expected_path: Path,
-    label: str,
-    *,
-    allowed_root: Path,
-) -> str:
-    """Read an agent artifact without following replaced paths or symlinks."""
-
-    root = allowed_root.absolute()
-    path = expected_path.absolute()
-    if path.parent != root:
-        raise StructuredOutputError(f"{label} path is outside its action directory")
-    if root.is_symlink() or root.resolve(strict=True) != root:
-        raise StructuredOutputError(f"{label} action directory was replaced")
-    if path.is_symlink():
+def read_source_tree(directory: Path, label: str) -> dict[str, str]:
+    directory = directory.expanduser().absolute()
+    if directory.is_symlink():
         raise StructuredOutputError(f"{label} cannot be a symbolic link")
-
-    if not path.exists():
-        raise StructuredOutputError(f"agent did not write {label}")
-    if not path.is_file() or not path.resolve(strict=True).is_relative_to(root):
-        raise StructuredOutputError(f"{label} is not a regular action file")
-    if path.stat().st_size > _MAX_SOURCE_BYTES:
-        raise StructuredOutputError(f"{label} exceeds the 16 MiB limit")
-    source = path.read_text(encoding="utf-8")
-    if "\x00" in source:
-        raise StructuredOutputError(f"{label} contains a NUL byte")
-    return nonempty(source, label)
-
-
-def _read_source_tree(directory: Path, label: str) -> dict[str, str]:
+    directory = directory.resolve(strict=True)
     files: dict[str, str] = {}
     total_bytes = 0
     pending = [directory]
@@ -90,7 +118,7 @@ def _read_source_tree(directory: Path, label: str) -> dict[str, str]:
                 )
             try:
                 portable_path = relative_source_path(relative, f"{label} path")
-                source = path.read_text(encoding="utf-8")
+                source = path.read_bytes().decode("utf-8")
             except UnicodeDecodeError as error:
                 raise StructuredOutputError(
                     f"{label} file {relative!r} is not UTF-8 text"
@@ -108,111 +136,666 @@ def _read_source_tree(directory: Path, label: str) -> dict[str, str]:
     return dict(sorted(files.items()))
 
 
-def read_generated_source_bundle(
-    expected_directory: Path,
-    label: str,
-    *,
-    allowed_root: Path,
-    interface: EvaluatorInterface,
-) -> dict[str, str]:
-    """Read a complete, path-safe generated source tree."""
-
-    root = allowed_root.absolute()
-    directory = expected_directory.absolute()
-    if directory.parent != root:
-        raise StructuredOutputError(f"{label} path is outside its action directory")
-    if root.is_symlink() or root.resolve(strict=True) != root:
-        raise StructuredOutputError(f"{label} action directory was replaced")
-    if directory.is_symlink():
-        raise StructuredOutputError(f"{label} cannot be a symbolic link")
+def snapshot(work: Path, sources: Mapping[str, str]) -> str:
+    sources = {
+        relative_source_path(name, "snapshot source"): source
+        for name, source in sources.items()
+    }
+    digest = hashlib.sha256(
+        json.dumps(sources, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+    directory = work / f"source-{digest}"
     if not directory.exists():
-        raise StructuredOutputError(f"agent did not write {label}")
-    if not directory.is_dir() or directory.resolve(strict=True) != directory:
-        raise StructuredOutputError(f"{label} is not a regular action directory")
+        work.mkdir(parents=True, exist_ok=True)
+        # Publish complete sources atomically; concurrent builds reuse the winner.
+        with TemporaryDirectory(prefix=".source-", dir=work) as temporary:
+            staging = Path(temporary)
+            for name, source in sources.items():
+                path = staging / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(source.encode("utf-8"))
+            try:
+                staging.rename(directory)
+            except OSError as error:
+                if error.errno not in (errno.EEXIST, errno.ENOTEMPTY):
+                    raise
 
-    source_files = _read_source_tree(directory, label)
-    if not source_files:
-        raise StructuredOutputError(f"agent did not write {label}")
-
-    try:
-        entry = source_entry(source_files, interface)
-    except (KeyError, TypeError, ValueError) as error:
-        raise StructuredOutputError(f"invalid {label} configuration: {error}") from error
-    if entry not in source_files:
-        raise StructuredOutputError(
-            f"{label} does not contain ABI interface module {entry!r}"
-        )
-    try:
-        nonempty(source_files[entry], "ABI interface module")
-    except ValueError as error:
-        raise StructuredOutputError(str(error)) from error
-    return source_files
+    if read_source_tree(directory, "source snapshot") != sources:
+        raise StructuredOutputError(f"source snapshot was modified: {directory}")
+    return str(directory)
 
 
-def require_pure_cuda(source: str, *, repository: Path | None = None) -> None:
-    """Reject obvious framework delegation and non-CUDA output."""
-
-    code = _COMMENT_RE.sub("", source)
-    lowered = code.lower()
-    _require_standalone(code, repository)
-
-    if not _CUDA_TOKEN_RE.search(code):
-        raise ValidationGateError(
-            "generated source does not contain a CUDA __global__ or __device__ kernel"
-        )
-    marker = next((item for item in _NON_CUDA_MARKERS if item in lowered), None)
-    if marker is not None:
-        raise ValidationGateError(
-            f"generated source contains a non-CUDA fallback marker: {marker}"
-        )
-
-
-def require_cuda_source_bundle(
-    source_files: Mapping[str, str], *, repository: Path | None = None,
-) -> None:
-    """Require CUDA implementation code while allowing Python loader glue."""
-
-    sources = tuple(source_files.values())
-    for source in sources:
-        _require_standalone(_COMMENT_RE.sub("", source), repository)
-    if not any(_CUDA_TOKEN_RE.search(source) for source in sources):
-        raise ValidationGateError(
-            "generated source bundle does not contain a CUDA __global__ or "
-            "__device__ kernel"
-        )
-    if any("@triton.jit" in source.lower() for source in sources):
-        raise ValidationGateError(
-            "generated source bundle contains a non-CUDA fallback marker: @triton.jit"
-        )
-
-
-def _require_standalone(code: str, repository: Path | None) -> None:
-    if _LIBRARY_RE.search(code):
-        raise ValidationGateError("raw CUDA cannot delegate to an expert library")
-    roots = () if repository is None else (
-        repository, repository / "include", repository / "tools/util/include",
+def save_kernel(kernel: Kernel, workdir: Path):
+    path = workdir / _KERNEL_FILE
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(kernel.to_dict(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
     )
-    for include in _INCLUDE_RE.findall(code):
-        match = re.fullmatch(r'[<"]([^>"]+)[>"]\s*', include)
-        if match is None:
-            raise ValidationGateError("raw CUDA requires literal include paths")
-        name = Path(match[1])
+    temporary.replace(path)
+
+
+def load_kernel(workdir: Path) -> Kernel:
+    from klineage.kernel import Kernel
+
+    return Kernel.from_dict(
+        json.loads((workdir / _KERNEL_FILE).read_text(encoding="utf-8"))
+    )
+
+
+def fresh_path(workdir: Path, name: str) -> Path:
+    path = workdir / relative_source_path(name, "artifact path")
+    if not path.exists() and not path.is_symlink():
+        return path
+    return path.with_name(f"{path.stem}-{operation_id('retry')}{path.suffix}")
+
+
+def stop_process(process: subprocess.Popen):
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait()
+
+
+def run_process(
+    command: Sequence[str],
+    *,
+    payload: str,
+    timeout: float,
+    environment: Mapping[str, str],
+) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=environment,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(payload, timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        # Compilers and profilers may leave descendants after the worker exits.
+        stop_process(process)
+        stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(
+            command, timeout, output=stdout, stderr=stderr
+        ) from error
+    except BaseException:
+        stop_process(process)
+        process.communicate()
+        raise
+    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+
+
+class InputSource(StrEnum):
+    RANDOM = "random"
+    SAFETENSORS = "safetensors"
+    SCALAR = "scalar"
+
+
+def load_trace(path: Path) -> ModuleType:
+    root = next(
+        (parent.parent for parent in path.parents if parent.name == DEFINITIONS), None
+    )
+    if root is None:
+        raise ValueError("Trace definition must be under a definitions directory")
+    definition = json.loads(path.read_text())
+    relative = path.relative_to(root / DEFINITIONS).with_suffix(".jsonl")
+    records = [
+        json.loads(line)
+        for line in (root / WORKLOADS / relative).read_text().splitlines()
+        if line.strip()
+    ]
+    if len(records) != 1:
+        raise ValueError("A problem definition must have exactly one workload")
+    record = records[0]
+    if record["definition"] != definition["name"]:
+        raise ValueError("Workload references a different definition")
+    workload = record["workload"]
+    if set(workload["inputs"]) != set(definition["inputs"]):
+        raise ValueError("Workload inputs must match definition inputs")
+
+    # Artifact consumers run in other directories; retain absolute input paths.
+    for descriptor in workload["inputs"].values():
+        if descriptor["type"] == InputSource.SAFETENSORS:
+            descriptor["path"] = str((root / descriptor["path"]).resolve(strict=True))
+
+    return trace_module(definition, workload)
+
+
+def trace_module(
+    definition: Mapping[str, Any], workload: Mapping[str, Any]
+) -> ModuleType:
+    """Execute the reference embedded in a problem contract."""
+    module = ModuleType(definition["name"])
+    exec(  # noqa: S102 - Trace references are executable Python.
+        compile(definition["reference"], f"<{definition['name']}>", "exec"),
+        module.__dict__,
+    )
+    if not callable(getattr(module, "run", None)):
+        raise TypeError("Trace reference must define callable run()")
+    module.__dict__.update(
+        PROBLEM_NAME=definition["name"],
+        OPERATOR=definition["op_type"],
+        definition=definition,
+        workload=workload,
+        torch_ref=module.run,
+    )
+    return module
+
+
+def trace_inputs(
+    definition: Mapping[str, Any],
+    workload: Mapping[str, Any],
+    *,
+    device: str | torch.device = "cuda",
+    seed: int = 0,
+) -> dict[str, Any]:
+    import torch
+    from safetensors import safe_open
+
+    from klineage.contract import axis_size
+
+    # Stage NPU inputs on CPU; generator and safetensors device support vary by release.
+    target = str(device)
+    on_npu = target.split(":", 1)[0] == "npu"
+    if on_npu:
+        get_backend("ascendc").torch()
+    source_device = "cpu" if on_npu else target
+    generator = torch.Generator(device=source_device).manual_seed(seed)
+    inputs = {}
+    for name, spec in definition["inputs"].items():
+        if spec["shape"] is None:
+            raise ValueError("The evaluator requires tensor inputs")
+        shape = tuple(
+            axis_size(axis, definition["axes"], workload["axes"])
+            for axis in spec["shape"]
+        )
+        dtype = getattr(torch, spec["dtype"])
+        descriptor = workload["inputs"][name]
+        source = InputSource(descriptor["type"])
+        if source == InputSource.RANDOM:
+            if not dtype.is_floating_point:
+                raise ValueError(
+                    "Random integer inputs require an explicit safetensors source"
+                )
+            value = torch.randn(
+                shape, dtype=dtype, device=source_device, generator=generator
+            )
+            if on_npu:
+                value = value.to(device)
+        elif source == InputSource.SAFETENSORS:
+            with safe_open(
+                descriptor["path"], framework="pt", device=source_device
+            ) as tensors:
+                value = tensors.get_tensor(descriptor["tensor_key"])
+                if on_npu:
+                    value = value.to(device)
+                layouts = json.loads(
+                    (tensors.metadata() or {}).get(STRIDES_METADATA, "{}")
+                )
+                stride = layouts.get(descriptor["tensor_key"])
+                if stride is not None and tuple(stride) != value.stride():
+                    # Safetensors stores contiguous values; restore captured layout.
+                    restored = torch.empty_strided(
+                        value.shape, stride, dtype=value.dtype, device=value.device
+                    )
+                    restored.copy_(value)
+                    value = restored
+        else:
+            raise ValueError("The evaluator requires tensor inputs")
+        if tuple(value.shape) != shape or value.dtype != dtype:
+            raise ValueError(f"Workload input {name!r} does not match its shape/dtype")
+        inputs[name] = value
+    return inputs
+
+
+def trace_definition(
+    name: str,
+    operator: str,
+    source: str,
+    inputs: Mapping[str, Any],
+    outputs: Mapping[str, Any],
+) -> dict[str, Any]:
+    axes, tensors = {}, {}
+    for role, values in (("inputs", inputs), ("outputs", outputs)):
+        tensors[role] = {}
+        for tensor_name, value in values.items():
+            shape = []
+            for index, size in enumerate(value.shape):
+                axis = f"{role}_{tensor_name}_{index}"
+                axes[axis] = {"type": "const", "value": size}
+                shape.append(axis)
+            tensors[role][tensor_name] = {
+                "shape": shape,
+                "dtype": str(value.dtype).removeprefix("torch."),
+                "description": f"Tensor with element strides {list(value.stride())}.",
+            }
+
+    # Trace references expose run; existing problem modules expose torch_ref.
+    args = ", ".join(inputs)
+    reference = f"{source.rstrip()}\n\ndef run({args}):\n    return torch_ref({args})\n"
+    compile(reference, "<trace reference>", "exec")
+    return {
+        "name": name,
+        "op_type": operator,
+        "axes": axes,
+        **tensors,
+        "reference": reference,
+    }
+
+
+def trace_workload(inputs: Mapping[str, Any], path: Path) -> dict[str, Any]:
+    from safetensors.torch import save_file
+
+    # Preserve actual inputs; make_inputs may encode a nonrandom distribution.
+    path = path.resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save_file(
+        {
+            name: value.detach().cpu().contiguous().clone()
+            for name, value in inputs.items()
+        },
+        str(path),
+        metadata={
+            STRIDES_METADATA: json.dumps(
+                {name: list(value.stride()) for name, value in inputs.items()}
+            )
+        },
+    )
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return {
+        "uuid": str(uuid.uuid5(uuid.NAMESPACE_OID, digest)),
+        "axes": {},
+        "inputs": {
+            name: {"type": "safetensors", "path": str(path), "tensor_key": name}
+            for name in inputs
+        },
+    }
+
+
+@contextmanager
+def source_import_scope(root: Path, modules: dict[str, ModuleType]):
+    """Prevent ordinary local imports from leaking between two artifacts."""
+
+    with IMPORT_LOCK:
+        local_names = local_top_level_names(root)
+        displaced = {
+            name: module
+            for name, module in tuple(sys.modules.items())
+            if name in modules or name.split(".", 1)[0] in local_names
+        }
+        for name in displaced:
+            sys.modules.pop(name, None)
+        before = set(sys.modules)
+        previous = sys.dont_write_bytecode
+        sys.dont_write_bytecode = True
+        sys.modules.update(modules)
+        sys.path.insert(0, str(root))
+        try:
+            yield
+        finally:
+            sys.dont_write_bytecode = previous
+            try:
+                sys.path.remove(str(root))
+            except ValueError:
+                pass
+            for name in set(sys.modules) - before:
+                module = sys.modules.get(name)
+                if module_is_under(module, root):
+                    modules[name] = module
+                    sys.modules.pop(name, None)
+            sys.modules.update(displaced)
+
+
+def local_top_level_names(root: Path) -> set[str]:
+    names = {path.stem for path in root.glob("*.py") if path.name != "__init__.py"}
+    names.update(
+        path.name
+        for path in root.iterdir()
+        if path.is_dir() and (path / "__init__.py").is_file()
+    )
+    return names
+
+
+def module_is_under(module: ModuleType | None, root: Path) -> bool:
+    if module is None:
+        return False
+    filename = getattr(module, "__file__", None)
+    if not filename:
+        return False
+    try:
+        return Path(filename).resolve().is_relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+class BundleLoader:
+    def __init__(self, build_root: Path, *, include_paths: Sequence[Path] = ()):
+        self.build_root = Path(build_root).resolve()
+        self.include_paths = tuple(Path(path).resolve() for path in include_paths)
+        self.modules: dict[str, Any] = {}
+
+    def build(
+        self,
+        kernel: Kernel,
+        *,
+        strides: Mapping[tuple[str, str], tuple[int, ...]] | None = None,
+    ) -> Callable[..., Any]:
+        function = self.load(kernel)
         if (
-            name.is_absolute() or ".." in name.parts
-            or any((root / name).is_file() for root in roots)
+            kernel.language == "python"
+            and kernel.output_style is OutputStyle.RETURN
+            and strides is None
         ):
-            raise ValidationGateError("raw CUDA cannot include repository implementation files")
+            return function
+        return BundleCallable(kernel.problem, function, kernel.output_style, strides)
+
+    def load(self, kernel: Kernel) -> Callable[..., Any]:
+        if BUNDLE_CONFIG in kernel.source_files and kernel.language == "python":
+            backend = platform_backend(kernel.problem.platform)
+            if backend is not None:
+                backend.prepare()
+            root = Path(snapshot(self.build_root, kernel.source_files))
+            return self.load_python(root, kernel)
+
+        backend = get_backend(kernel.problem.language, kernel.problem.platform)
+        if BUNDLE_CONFIG not in kernel.source_files:
+            if set(kernel.source_files) != {backend.raw_source}:
+                raise ValueError(
+                    f"raw {backend.kind} adapters require a single {backend.raw_source} source"
+                )
+            sources = {
+                backend.raw_source: kernel.source_files[backend.raw_source],
+                "binding.cpp": backend.binding(),
+            }
+            native_root = Path(snapshot(self.build_root, sources))
+            module = self.load_native(native_root, sources, backend)
+            launch = getattr(module, "launch", None)
+            if not callable(launch):
+                raise TypeError("native extension did not expose launch")
+            input_count = len(kernel.problem.values(ValueRole.INPUTS))
+
+            def run(*tensors):
+                launch(list(tensors[:input_count]), list(tensors[input_count:]))
+
+            return run
+        root = Path(snapshot(self.build_root, kernel.source_files))
+        module = self.load_native(root, kernel.source_files, backend)
+        return self.entry(module, kernel.symbol)
+
+    def load_python(self, root: Path, kernel: Kernel) -> Callable[..., Any]:
+        name = f"_klineage_kernel_{kernel.fingerprint[:HASH_LENGTH]}"
+        spec = importlib.util.spec_from_file_location(name, root / kernel.source_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"cannot load Python entry {kernel.source_path!r}")
+        module = importlib.util.module_from_spec(spec)
+        modules = {name: module}
+        directory = root / BUNDLE_SOLUTION
+        with source_import_scope(directory, modules):
+            spec.loader.exec_module(module)
+            function = self.entry(module, kernel.symbol)
+
+        # Delayed imports need the same private modules as initial imports.
+        def run(*args):
+            with source_import_scope(directory, modules):
+                return function(*args)
+
+        return run
+
+    @staticmethod
+    def entry(module: Any, symbol: str) -> Callable[..., Any]:
+        function = getattr(module, symbol)
+        if not callable(function):
+            raise TypeError(f"bundle entry point {symbol!r} is not callable")
+        return function
+
+    def load_native(
+        self, root: Path, source_files: Mapping[str, str], backend: Backend
+    ):
+        native_files = {
+            path: source
+            for path, source in source_files.items()
+            if path != BUNDLE_CONFIG and Path(path).suffix != ".py"
+        }
+        sources = [
+            path
+            for path in sorted(native_files)
+            if Path(path).suffix in backend.native_suffixes
+        ]
+        if not sources:
+            raise ValueError(f"{backend.kind} build requires native source files")
+        include_paths = [str(root / BUNDLE_SOLUTION), *map(str, self.include_paths)]
+
+        with IMPORT_LOCK:
+            options = backend.build_options()
+            # Cache complete sources, flags, includes, and architecture together.
+            digest = hashlib.sha256(
+                json.dumps(
+                    [backend.kind, native_files, options, include_paths],
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()[:HASH_LENGTH]
+            name = f"klineage_{backend.kind}_{digest}"
+            if name in self.modules:
+                return self.modules[name]
+            directory = self.build_root / name
+            directory.mkdir(parents=True, exist_ok=True)
+            # Compilers may write beside inputs; frozen snapshots stay read-only.
+            with native_sources(directory, native_files) as compile_root:
+                sources = [str(compile_root / path) for path in sources]
+                include_paths[0] = str(compile_root / BUNDLE_SOLUTION)
+                module = backend.compile(
+                    name, sources, directory, include_paths, options
+                )
+            self.modules[name] = module
+            return module
 
 
-def is_cuda_language(language: str) -> bool:
-    normalized = signature(language)
-    return "cuda" in normalized or normalized in {"cu", "cuda c", "cuda c++"}
+@contextmanager
+def native_sources(directory: Path, sources: Mapping[str, str]):
+    # Lock staging as well as compilation across worker processes.
+    with (directory / BUILD_LOCK).open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        root = directory / BUILD_SOURCES
+        for name, source in sources.items():
+            target = root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.encode("utf-8"))
+        yield root
 
 
-__all__ = [
-    "is_cuda_language",
-    "read_generated_source",
-    "read_generated_source_bundle",
-    "require_cuda_source_bundle",
-    "require_pure_cuda",
-]
+class BundleCallable:
+    def __init__(
+        self,
+        problem: ProblemSpec,
+        function: Any,
+        style: OutputStyle,
+        strides: Mapping[tuple[str, str], tuple[int, ...]] | None = None,
+    ):
+        self.inputs = tensor_values(problem, ValueRole.INPUTS)
+        self.outputs = tensor_values(problem, ValueRole.OUTPUTS)
+        self.backend = get_backend(problem.language, problem.platform)
+        self.function, self.style = function, style
+        self.strides = strides or {}
+
+    def __call__(self, *inputs: torch.Tensor):
+        if len(inputs) != len(self.inputs):
+            raise ValueError("bundle input count does not match its ABI")
+        tensors = tuple(
+            check_tensor(
+                value,
+                spec,
+                "input",
+                self.strides.get(("input", spec.name)),
+                backend=self.backend,
+            )
+            for value, spec in zip(inputs, self.inputs, strict=True)
+        )
+        device = tensors[0].device if tensors else self.backend.device()
+        if any(value.device != device for value in tensors):
+            raise ValueError("bundle inputs must share a device")
+
+        # The evaluator supplies trailing destinations; return-style entries own allocation.
+        with self.backend.runtime().device(device):
+            if self.style is OutputStyle.DESTINATION:
+                outputs = tuple(
+                    allocate(spec, device, self.strides.get(("output", spec.name)))
+                    for spec in self.outputs
+                )
+                self.function(*tensors, *outputs)
+            else:
+                result = self.function(*tensors)
+                outputs = (result,) if len(self.outputs) == 1 else result
+                if not self.outputs and result is None:
+                    outputs = ()
+                if (
+                    not isinstance(outputs, Sequence)
+                    or isinstance(outputs, (str, bytes))
+                    or len(outputs) != len(self.outputs)
+                ):
+                    raise ValueError("bundle output count does not match its ABI")
+
+            for value, spec in zip(outputs, self.outputs, strict=True):
+                check_tensor(
+                    value,
+                    spec,
+                    "output",
+                    self.strides.get(("output", spec.name)),
+                    backend=self.backend,
+                )
+                if value.device != device:
+                    raise ValueError("bundle outputs must use the input device")
+        if not outputs:
+            return None
+        return outputs[0] if len(outputs) == 1 else tuple(outputs)
+
+
+def tensor_values(problem: ProblemSpec, role: ValueRole) -> tuple[ABIValue, ...]:
+    values = problem.values(role)
+    if any(problem.definition[role][value.name]["shape"] is None for value in values):
+        raise TypeError("tensor entries do not support scalar arguments or outputs")
+    return values
+
+
+def check_tensor(
+    value: Any,
+    spec: ABIValue,
+    role: str,
+    stride: tuple[int, ...] | None = None,
+    *,
+    backend: Backend,
+) -> torch.Tensor:
+    tensor = require_tensor(value, f"ABI {role} {spec.name!r}", backend)
+    if tensor.dtype != tensor_dtype(spec.dtype):
+        raise ValueError(f"ABI {role} {spec.name!r} has the wrong dtype")
+    if tuple(tensor.shape) != spec.shape:
+        raise ValueError(f"ABI {role} {spec.name!r} has the wrong shape")
+    if stride is not None and tuple(tensor.stride()) != tuple(stride):
+        raise ValueError(f"ABI {role} {spec.name!r} has the wrong stride")
+    return tensor
+
+
+def allocate(
+    spec: ABIValue,
+    device: torch.device,
+    stride: tuple[int, ...] | None = None,
+) -> torch.Tensor:
+    import torch
+
+    shape = fixed_shape(spec)
+    if stride is None:
+        return torch.empty(shape, dtype=tensor_dtype(spec.dtype), device=device)
+    return torch.empty_strided(
+        shape,
+        tuple(int(value) for value in stride),
+        dtype=tensor_dtype(spec.dtype),
+        device=device,
+    )
+
+
+def fixed_shape(spec: ABIValue) -> tuple[int, ...]:
+    if any(isinstance(value, str) for value in spec.shape):
+        raise ValueError(f"output {spec.name!r} must have a fixed shape")
+    return tuple(int(value) for value in spec.shape)
+
+
+def tensor_dtype(value: str | None) -> torch.dtype:
+    import torch
+
+    if value is None:
+        raise ValueError("ABI values require a dtype")
+    name = value.lower().removeprefix("torch.")
+    try:
+        return getattr(torch, DTYPE_ALIASES[name])
+    except KeyError as exc:
+        raise ValueError(f"unsupported tensor dtype {value!r}") from exc
+
+
+def require_tensor(value: Any, label: str, backend: Backend) -> torch.Tensor:
+    torch = backend.torch()
+    if not isinstance(value, torch.Tensor):
+        raise TypeError(f"{label} must be a torch.Tensor")
+    if value.device.type != backend.device_type:
+        raise ValueError(f"{label} must be on {backend.device_type}")
+    backend.validate_tensor(value)
+    return value
+
+
+def load_problem(value: str | Path) -> tuple[ModuleType, Path]:
+    path = Path(value).expanduser().absolute().resolve(strict=True)
+    if path.is_file() and path.suffix == ".json":
+        return load_trace(path), path
+    if not path.is_file() or path.suffix != ".py":
+        raise ValueError(
+            "problem_path must identify a Trace definition JSON or Python file"
+        )
+    name = f"_klineage_problem_{hashlib.sha256(str(path).encode()).hexdigest()[:20]}"
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load problem module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for symbol in ("make_inputs", "torch_ref"):
+        if not callable(getattr(module, symbol, None)):
+            raise TypeError(f"problem must define callable {symbol}()")
+    return module, path
+
+
+def resolve_path(path: Path) -> Path:
+    return Path(path).expanduser().resolve(strict=True)
+
+
+def make_log_dir(path: Path) -> Path:
+    directory = Path(path).expanduser().absolute()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return directory
+
+
+def write_json(path: Path, value: Any):
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def existing_dir(value: Any, label: str) -> Path:
+    if not isinstance(value, (str, Path)):
+        raise TypeError(f"{label} must be a path string")
+    path = resolve_path(value)
+    if not path.is_dir():
+        raise NotADirectoryError(f"{label} is not a directory: {path}")
+    return path

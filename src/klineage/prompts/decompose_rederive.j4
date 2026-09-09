@@ -1,6 +1,0 @@
-Re-derive the forward optimization on the simpler kernel at the given locus.
-Restore the declared mechanism, including required layout and thread mapping;
-do not substitute a different mechanism or add unrelated tuning. Do not reverse
-text mechanically. Write the complete forward kernel to
-output_path, then return exactly one small JSON object with forward_edit (the
-actionable edit). Do not claim compile, correctness, or performance results.

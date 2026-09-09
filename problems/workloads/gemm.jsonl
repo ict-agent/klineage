@@ -1,0 +1,1 @@
+{"definition": "gemm", "workload": {"uuid": "f34b6bfe-654b-5454-91a4-7d883643e763", "axes": {"M": 4096, "N": 4096, "K": 4096}, "inputs": {"x": {"type": "random"}, "weight": {"type": "random"}}}, "solution": null, "evaluation": null}

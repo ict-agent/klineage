@@ -1,0 +1,27 @@
+{% if target_language is defined and target_language in ("cuda", "hip", "ascendc") %}
+Use .agents/skills/{{ target_language }}/SKILL.md for the native bundle, binding,
+and caller-stream contract. Preserve problem.language and problem.platform.
+{% elif target_language is defined and target_language == "python" %}
+Preserve config.toml with [solution] name, definition, author and [build] language="python".
+Retain the configured callable, entry_point, and destination_passing_style. Keep
+implementation files under solution/, the ordered problem inputs and outputs,
+and the problem's device backend.
+{% else %}
+Resolve the target from ProblemSpec.language and platform with
+klineage.backend.get_backend. Read only the matching native bundle skill:
+
+- CUDA / NVIDIA: .agents/skills/cuda/SKILL.md.
+- HIP / Hygon: .agents/skills/hip/SKILL.md.
+- AscendC / Ascend: .agents/skills/ascendc/SKILL.md.
+- Python: retain config.toml, solution/, the configured callable, and device backend.
+
+For Init, inspect the supplied problem and expert build settings; when target metadata
+is absent, klineage.backend.detect_backend() identifies the installed accelerator.
+KLINEAGE_BACKEND selects cuda, hygon, or ascend explicitly when configured.
+Persist the resolved language/platform. HIP tensors also use torch's cuda device;
+that spelling does not identify NVIDIA hardware.
+{% endif %}
+For native bundles, keep computation in the target's language and preserve its memory hierarchy,
+execution units, synchronization, and numerical contract. Do not translate an
+existing kernel to another backend. Use klineage.harness.evaluate for measurements;
+it selects the backend's runtime and timer.

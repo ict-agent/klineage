@@ -1,39 +1,49 @@
-# Paper workload Torch references
+# Paper workloads
 
-This directory contains dependency-light PyTorch correctness references for
-the five main-tier workloads in the paper.  Each problem exposes the same two
-entry points:
+Five problems in [FlashInfer Trace](https://bench.flashinfer.ai/docs/flashinfer-trace/definition)
+format, using AKO4X's dataset layout:
 
-- `make_inputs(...)` creates deterministic inputs in the kernel's actual ABI.
-- `torch_ref(...)` computes the reference result from those inputs.
-
-Example:
-
-```python
-from problems.gemm import make_inputs, torch_ref
-
-inputs = make_inputs(device="cuda", seed=17)
-expected = torch_ref(**inputs)
+```text
+problems/
+  definitions/{name}.json   # Contract and executable reference.run
+  workloads/{name}.jsonl    # One Trace record with axes and input sources
+  inputs/{fmha,gdn}.safetensors   # Structured input samples
 ```
 
-The default shapes are the paper shapes:
-
-| Problem | Input contract | Default shape and dtype |
+| Name | Inputs | Default workload |
 | --- | --- | --- |
-| GEMM | `x[M,K]`, `weight[N,K]`; computes `x @ weight.T` | `4096^3`, BF16 |
-| Conv2d | NHWC input, flattened HWCF filter | N8 C64 H56 W56 F128 K3, FP16 |
-| FMHA | packed NHD Q/K/V plus cumulative sequence lengths | B8 H64 S2048 D128, FP16 |
-| GDN | BTHD Q/K/V, log-space gate, beta, initial state | Hq16 Hv48 S4096 D128 C64, BF16 |
-| Top-K | row-major `[batch, sequence]` values | B64 S4096 K512, FP32 |
+| gemm | `x[M,K]`, `weight[N,K]`; `x @ weight.T` | M=N=K=4096, BF16 |
+| conv2d | NHWC activation, flattened HWCF filter | N8 C64 H56 W56 F128, FP16; K3, stride1, padding1 |
+| fmha | Packed NHD Q/K/V, int32 sequence offsets | B8 H64 S2048 D128, FP16; noncausal |
+| gdn | BTHD Q/K/V, log gates, beta, initial state | B1 T4096 Hq16 Hv48 D128; chunk64 |
+| topk | Row-major values; unsorted largest K | B64 S4096 K512, FP32; int64 output indices |
 
-GEMM, Conv2d, FMHA, and Top-K follow the `torch_ref` and correctness paths in
-`ict-agent/fgw_workspace/experiments/_archive/trajectory_transfer`. GDN's
-recurrent and chunk-naive definitions are adapted directly from FLA's official
-[`naive.py`](https://github.com/fla-org/flash-linear-attention/blob/main/fla/ops/gated_delta_rule/naive.py),
-with a thin GVA adapter for the paper's 16 Q/K heads and 48 value heads. The
-code keeps the submitted paper's Top-K sequence length of 4096 (the archived
-benchmark has since changed that workload to 8192).
+GDN's Q/K/V are BF16; gates, beta, initial state and both outputs are FP32.
+The reference repeats Q/K heads to match value heads and retains FLA's chunk
+oracle and MIT attribution.
 
-The references allocate outputs and are intended as correctness oracles.  A
-performance evaluator should benchmark the candidate kernel separately and
-may use a preallocated `out` tensor where a reference explicitly supports it.
+Workloads use `random` for Gaussian inputs. FMHA offsets and GDN's normalized
+Q/K, log gates and beta retain the original CUDA seed-0 samples in safetensors
+(about 35 MB total). Changing the evaluator seed changes only random inputs;
+it does not regenerate these fixed samples. Paths are relative to `problems/`.
+The JSONL line is a Trace record; `ProblemSpec.workload` uses its inner `workload`.
+
+```python
+from pathlib import Path
+from klineage.harness import inspect_problem
+
+problem = inspect_problem(
+    Path("problems/definitions/gemm.json"),
+    Path("agent-workspace/inspect-gemm"),
+)
+```
+
+Pass the same definition path as `problem` to `Init` or `workflow`.
+The harness requires exactly one workload per definition.
+
+GEMM, Conv2d, FMHA and Top-K preserve the paper references from
+`ict-agent/fgw_workspace/experiments/_archive/trajectory_transfer`.
+GDN preserves the mathematical references adapted from
+[FLA](https://github.com/fla-org/flash-linear-attention/blob/main/fla/ops/gated_delta_rule/naive.py)
+under its [MIT license](FLA_LICENSE).
+Top-K retains the paper's sequence length 4096.

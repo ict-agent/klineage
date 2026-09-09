@@ -1,17 +1,117 @@
-Lift these {{ transition_count }} validated concrete forward transition(s) into
-one portable candidate SkillCard hypothesis. Return exactly one JSON object
-with intent, anchor, carrier, preconditions (array), effects (array), risks
-(array), requires/provides/conflicts (arrays of {locus, name}), and "scope" as
-{cases, languages, platforms, prior_actions}. Copy applicable case, language,
-and platform identifiers from the input context; do not invent hardware names.
-Use stable semantic loci and mechanism names shared with the transitions.
-requires lists needed code features; provides lists introduced features;
-conflicts lists incompatible or already-present features at the same locus.
-The carrier must remain actionable and code-bearing, while intent is abstract.
-Keep tuning choices in the carrier; one card describes one semantic transformation.
-Preserve the transition's strategy-level feature contract. Supporting instructions
-and compiler choices belong in the carrier, not additional skills or features.
-Include failure evidence in risks. Do not claim held-out verification or gains
-without measurements. The example illustrates granularity, not a required skill.
+## SKILL.md format
 
-{% include "decompose_example.j4" %}
+Write four metadata fields as top-level YAML, followed by the four
+Markdown sections below. Replace placeholders with the optimization removed:
+
+````markdown
+---
+skill_id: <stable-skill-id>
+intent: <one brief sentence describing the optimization technique removed>
+preconditions:
+  - "Data types: <required types and numerical constraints; why needed>"
+  - "Layout: <required contiguity, alignment, and data-to-parallel-unit mapping; why needed>"
+  - "Storage: <required placement and visibility before optimization; why needed>"
+  - "Pipeline: <required ordering, participation, and buffer-reuse constraints; why needed>"
+  - "Hardware: <required features and capacity relationships; why needed>"
+scope:
+  cases: [<problem.definition.op_type>]
+  languages: [<problem.language>]
+  platforms: [<problem.platform>]
+---
+
+# Overview
+
+<optimization description and replay instructions>
+
+## Example configuration
+
+<source-specific dimensions, stage/thread counts, and retained mechanisms;
+preserve these for this replay without treating them as technique prerequisites>
+
+# Precondition
+
+- Data types: <expand the matching metadata entry; explain any dependency>
+- Layout: <expand the matching metadata entry; explain any dependency>
+- Storage: <expand the matching metadata entry; explain any dependency>
+- Pipeline: <expand the matching metadata entry; explain any dependency>
+- Hardware: <expand the matching metadata entry; explain any dependency>
+
+# Scope
+
+- Cases: <problem.definition.op_type>
+- Languages: <problem.language>
+- Platforms: <problem.platform>
+
+# Code Change Snippet
+
+## Before
+
+```<problem.language>
+<code before applying the optimization>
+```
+
+## After
+
+```<problem.language>
+<code after applying the optimization>
+```
+````
+
+Intent is one brief sentence naming the optimization technique removed.
+Put implementation details and Before/After code only in body.
+
+- Overview explains what the optimization does and how to apply it.
+  Include code locations, ownership, layouts, launch changes, synchronization,
+  bounds handling, and numerical requirements. Use level-two subsections and
+  focused code snippets when useful.
+- Precondition expands the metadata prerequisites.
+
+  - Inspect all five categories above and other relevant dependencies.
+  - Data types states representation or arithmetic constraints the technique needs.
+    A value's current dtype is not automatically a prerequisite for moving its bits.
+  - Layout covers physical arrangement, contiguity, alignment, and ownership by
+    the target's threads, warps/wavefronts, blocks, or AI cores required by the transformation.
+  - Storage identifies required memory levels and visibility of input/intermediate data.
+  - Pipeline states required copy/compute ordering, participation, and buffer reuse.
+    Check producer completion, reader visibility, and completion before buffer reuse,
+    even when the optimization preserves synchronization. Distinguish these ordering
+    dependencies from incidental stage counts; do not restate the whole pipeline.
+  - Hardware names features used by this technique and required capacity relationships.
+    Features used only by retained computation belong in Example configuration.
+
+- Apply these rules to both YAML preconditions and the entire # Precondition section:
+
+  - State minimum prerequisites. For each, identify the operation or hardware rule
+    in this transformation that fails without it; explain that dependency briefly.
+  - A condition being true, or needing preservation in this example, is insufficient.
+    If changing it only requires adapting the snippet, put it in Example configuration.
+  - Keep all five categories explicit in YAML and prose: Data types, Layout, Storage,
+    Pipeline, and Hardware. If a category has no additional requirement, say so and
+    briefly explain why. Do not invent a dependency or substitute example settings.
+  - Preserve fixed dimensions, byte strides, stage/thread counts, register budgets,
+    buffer totals, and unrelated instructions in Overview / Example configuration.
+    They must not reappear as requirements in # Precondition.
+  - Keep intrinsic constants when justified: instruction group sizes, alignment,
+    swizzle spans, and capacity formulas can be necessary dependencies.
+  - Express layouts and capacity symbolically where supported. For example, a global
+    row stride derives from the row extent and element size, not a fixed workload.
+  - For a shared-memory permutation, trace its writer/reader layout requirements.
+    WGMMA, operand dtypes, and input stage counts are not dependencies just because
+    they produce the values being permuted. Identify any actual fragment constraint.
+  - Expand the same dependency set in prose. Do not add instance requirements while
+    expanding YAML. Keep exact replay settings and preserved mechanisms in Overview.
+  - Keep storage moves, new mappings, and pipeline changes introduced by the
+    optimization in Overview and After. Preconditions describe the preceding state.
+
+- Scope renders cases, languages, and platforms as comma-separated lists.
+  Derive them from the actual problem; each dimension must be nonempty.
+- Code Change Snippet belongs only to body. Use Before and After code
+  blocks to show the forward optimization, from deoptimized code to optimized code.
+  Keep snippets focused on that change and explain any required shared context.
+
+Construct SkillCard with these four metadata fields and body containing all four
+Markdown sections. Call klineage.memory.save_skill(card, Path("SKILL.md")); it writes
+metadata and body separately. Read with klineage.memory.load_skill. SkillCard.to_dict()
+includes body for inline handoffs and JSON memories. Keep progress and measurements
+outside the skill. The recipe must work from the deoptimized kernel alone, without
+upstream paths or a copy of the complete optimized kernel.

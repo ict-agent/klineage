@@ -1,0 +1,112 @@
+{
+  "name": "gdn",
+  "op_type": "gdn",
+  "description": "Gated delta rule with grouped value heads. Repeat each Q/K head HV/HQ times; scale Q by 1/sqrt(D). FP32 recurrence and final state.",
+  "axes": {
+    "B": {
+      "type": "var"
+    },
+    "T": {
+      "type": "var"
+    },
+    "HQ": {
+      "type": "var"
+    },
+    "HV": {
+      "type": "var"
+    },
+    "D": {
+      "type": "var"
+    },
+    "CHUNK_SIZE": {
+      "type": "const",
+      "value": 64
+    }
+  },
+  "inputs": {
+    "q": {
+      "shape": [
+        "B",
+        "T",
+        "HQ",
+        "D"
+      ],
+      "dtype": "bfloat16",
+      "description": "Contiguous Q; Gaussian samples L2-normalized in BF16 with epsilon 1e-6."
+    },
+    "k": {
+      "shape": [
+        "B",
+        "T",
+        "HQ",
+        "D"
+      ],
+      "dtype": "bfloat16",
+      "description": "Contiguous K; Gaussian samples L2-normalized in BF16 with epsilon 1e-6."
+    },
+    "v": {
+      "shape": [
+        "B",
+        "T",
+        "HV",
+        "D"
+      ],
+      "dtype": "bfloat16",
+      "description": "Contiguous value vectors."
+    },
+    "g": {
+      "shape": [
+        "B",
+        "T",
+        "HV"
+      ],
+      "dtype": "float32",
+      "description": "Contiguous log gates: logsigmoid(N(0,1))/16 on ceil(0.75*HV) randomly selected heads; zero on the others."
+    },
+    "beta": {
+      "shape": [
+        "B",
+        "T",
+        "HV"
+      ],
+      "dtype": "float32",
+      "description": "Contiguous update strength sigmoid(N(0,1))."
+    },
+    "initial_state": {
+      "shape": [
+        "B",
+        "HV",
+        "D",
+        "D"
+      ],
+      "dtype": "float32",
+      "description": "Contiguous Gaussian initial state; final axes are key and value dimensions."
+    }
+  },
+  "outputs": {
+    "output": {
+      "shape": [
+        "B",
+        "T",
+        "HV",
+        "D"
+      ],
+      "dtype": "float32",
+      "description": "Sequence output; chunk oracle returns a BHTD allocation viewed as BTHD."
+    },
+    "final_state": {
+      "shape": [
+        "B",
+        "HV",
+        "D",
+        "D"
+      ],
+      "dtype": "float32",
+      "description": "Contiguous state after the final token."
+    }
+  },
+  "constraints": [
+    "HV % HQ == 0"
+  ],
+  "reference": "# Copyright (c) 2023-2026, Songlin Yang, Yu Zhang, Zhiyuan Li\n#\n# The naive GDN definitions below are adapted from\n# https://github.com/fla-org/flash-linear-attention under the MIT license.\n\n\"\"\"FLA naive GDN definitions and the paper-workload adapter.\n\nThis single module contains FLA's recurrent and chunk-naive mathematical\nreferences and the workload's Grouped Value\nAttention (GVA) head mapping.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport torch\nimport torch.nn.functional as F\n\nCHUNK_SIZE = 64\n\n\ndef naive_recurrent_gated_delta_rule(\n    q: torch.Tensor,\n    k: torch.Tensor,\n    v: torch.Tensor,\n    beta: torch.Tensor,\n    g: torch.Tensor,\n    scale: float | None = None,\n    initial_state: torch.Tensor | None = None,\n    output_final_state: bool = False,\n) -> tuple[torch.Tensor, torch.Tensor | None]:\n    \"\"\"Reference PyTorch implementation of recurrent gated delta rule.\n\n    Args:\n        q: ``[B, T, H, K]`` queries.\n        k: ``[B, T, H, K]`` keys.\n        v: ``[B, T, H, V]`` values.\n        beta: ``[B, T, H]`` update strengths.\n        g: ``[B, T, H]`` log-space forget gates.\n        scale: Optional query scale; defaults to ``1 / sqrt(K)``.\n        initial_state: Optional ``[B, H, K, V]`` state.\n        output_final_state: Whether to return the final state.\n    \"\"\"\n\n    q, k, v, beta, g = (\n        tensor.transpose(1, 2).contiguous().to(torch.float32)\n        for tensor in (q, k, v, beta, g)\n    )\n    batch, heads, sequence_length, key_dim = k.shape\n    value_dim = v.shape[-1]\n    output = torch.zeros(batch, heads, sequence_length, value_dim).to(v)\n    state = torch.zeros(batch, heads, key_dim, value_dim).to(v)\n    if initial_state is not None:\n        state = initial_state.to(torch.float32)\n    if scale is None:\n        scale = 1 / (q.shape[-1] ** 0.5)\n    q = q * scale\n\n    for token in range(sequence_length):\n        q_token = q[:, :, token]\n        k_token = k[:, :, token]\n        v_token = v[:, :, token].clone()\n        state = state.clone() * g[:, :, token].exp()[..., None, None]\n        beta_token = beta[:, :, token]\n        v_token = v_token - (state.clone() * k_token[..., None]).sum(-2)\n        v_token = v_token * beta_token[..., None]\n        state = state.clone() + k_token.unsqueeze(-1) * v_token.unsqueeze(-2)\n        output[:, :, token] = torch.einsum(\"bhd,bhdm->bhm\", q_token, state)\n\n    if not output_final_state:\n        state = None\n    output = output.transpose(1, 2).contiguous()\n    return output, state\n\n\ndef naive_chunk_gated_delta_rule(\n    q: torch.Tensor,\n    k: torch.Tensor,\n    v: torch.Tensor,\n    g: torch.Tensor,\n    beta: torch.Tensor,\n    chunk_size: int = 64,\n    scale: float | None = None,\n    initial_state: torch.Tensor | None = None,\n    output_final_state: bool = False,\n) -> tuple[torch.Tensor, torch.Tensor | None]:\n    \"\"\"Reference PyTorch implementation of chunk gated delta rule.\n\n    Its tensor contract matches :func:`naive_recurrent_gated_delta_rule`.\n    ``g`` precedes ``beta`` here to match FLA's public chunk operator.\n    \"\"\"\n\n    block_tokens = chunk_size\n    if scale is None:\n        scale = 1 / (q.shape[-1] ** 0.5)\n\n    q, k, v, beta, g = (\n        tensor.transpose(1, 2).contiguous().to(torch.float32)\n        for tensor in (q, k, v, beta, g)\n    )\n    original_length = q.shape[-2]\n    pad_length = (block_tokens - (original_length % block_tokens)) % block_tokens\n    if pad_length > 0:\n        q = F.pad(q, (0, 0, 0, pad_length))\n        k = F.pad(k, (0, 0, 0, pad_length))\n        v = F.pad(v, (0, 0, 0, pad_length))\n        beta = F.pad(beta, (0, pad_length))\n        g = F.pad(g, (0, pad_length))\n\n    q, k, v, beta, g = (tensor.to(torch.float32) for tensor in (q, k, v, beta, g))\n    decay = g\n    batch, heads, padded_length, key_dim = q.shape\n    value_dim = v.shape[-1]\n    q = q * scale\n    v = v * beta[..., None]\n    k_beta = k * beta[..., None]\n    if padded_length % block_tokens != 0:\n        raise ValueError(\"padded sequence length must be divisible by chunk_size\")\n\n    diagonal_mask = torch.triu(\n        torch.ones(\n            block_tokens,\n            block_tokens,\n            dtype=torch.bool,\n            device=q.device,\n        ),\n        diagonal=0,\n    )\n    q, k, v, k_beta, decay_with_dim = (\n        split_chunks(tensor, block_tokens)\n        for tensor in (q, k, v, k_beta, decay.unsqueeze(-1))\n    )\n    decay = decay_with_dim.squeeze(-1).cumsum(-1)\n    decay_exp = decay.exp()[..., None]\n    lower_decay = (\n        (decay.unsqueeze(-1) - decay.unsqueeze(-2)).tril().exp().float()\n    ).tril()\n    attention = -((k_beta @ k.transpose(-1, -2)) * lower_decay).masked_fill(\n        diagonal_mask, 0\n    )\n    for row in range(1, block_tokens):\n        attention[..., row, :row] = attention[..., row, :row].clone() + (\n            attention[..., row, :row, None].clone() * attention[..., :row, :row].clone()\n        ).sum(-2)\n    attention = attention + torch.eye(block_tokens, dtype=torch.float, device=q.device)\n    k_cumsum = attention @ v\n    k_cumdecay = attention @ (k_beta * decay_exp)\n    v = k_cumsum\n\n    state = k.new_zeros(batch, heads, key_dim, value_dim)\n    if initial_state is not None:\n        state = initial_state.to(torch.float32)\n\n    output = torch.zeros_like(v)\n    upper_mask = torch.triu(\n        torch.ones(\n            block_tokens,\n            block_tokens,\n            dtype=torch.bool,\n            device=q.device,\n        ),\n        diagonal=1,\n    )\n    for chunk in range(padded_length // block_tokens):\n        q_chunk, k_chunk, v_chunk = (\n            q[:, :, chunk],\n            k[:, :, chunk],\n            v[:, :, chunk],\n        )\n        attention = (\n            (q_chunk @ k_chunk.transpose(-1, -2)) * lower_decay[:, :, chunk]\n        ).masked_fill_(upper_mask, 0)\n        v_prime = k_cumdecay[:, :, chunk] @ state\n        v_new = v_chunk - v_prime\n        output_from_state = (q_chunk * decay[:, :, chunk, :, None].exp()) @ state\n        output[:, :, chunk] = output_from_state + attention @ v_new\n        final_decay = decay[:, :, chunk, -1]\n        state = (\n            state * final_decay[..., None, None].exp()\n            + (\n                k_chunk * (final_decay[..., None] - decay[:, :, chunk]).exp()[..., None]\n            ).transpose(-1, -2)\n            @ v_new\n        )\n\n    if not output_final_state:\n        state = None\n    output = output.flatten(2, 3)[:, :, :original_length]\n    output = output.transpose(1, 2)\n    return output, state\n\n\ndef split_chunks(tensor: torch.Tensor, chunk_size: int) -> torch.Tensor:\n    \"\"\"Equivalent to FLA's ``rearrange('b h (n c) d -> b h n c d')``.\"\"\"\n\n    batch, heads, sequence_length, dimension = tensor.shape\n    return tensor.reshape(\n        batch,\n        heads,\n        sequence_length // chunk_size,\n        chunk_size,\n        dimension,\n    )\n\n\ndef run(\n    q: torch.Tensor,\n    k: torch.Tensor,\n    v: torch.Tensor,\n    g: torch.Tensor,\n    beta: torch.Tensor,\n    initial_state: torch.Tensor | None = None,\n    *,\n    chunk_size: int = CHUNK_SIZE,\n    scale: float | None = None,\n    output_final_state: bool = True,\n) -> tuple[torch.Tensor, torch.Tensor | None]:\n    \"\"\"Apply paper-specific GVA mapping, then call FLA's chunk-naive oracle.\"\"\"\n\n    validate_inputs(q, k, v, g, beta, initial_state, chunk_size)\n    repeats = v.shape[2] // q.shape[2]\n    q = q.repeat_interleave(repeats, dim=2)\n    k = k.repeat_interleave(repeats, dim=2)\n    return naive_chunk_gated_delta_rule(\n        q,\n        k,\n        v,\n        g,\n        beta,\n        chunk_size=chunk_size,\n        scale=scale,\n        initial_state=initial_state,\n        output_final_state=output_final_state,\n    )\n\n\ndef validate_inputs(\n    q: torch.Tensor,\n    k: torch.Tensor,\n    v: torch.Tensor,\n    g: torch.Tensor,\n    beta: torch.Tensor,\n    initial_state: torch.Tensor | None,\n    chunk_size: int,\n):\n    if chunk_size <= 0:\n        raise ValueError(\"chunk_size must be positive\")\n    if q.ndim != 4 or k.ndim != 4 or v.ndim != 4:\n        raise ValueError(\"q, k, and v must have [B, T, H, D] shape\")\n    if q.shape != k.shape:\n        raise ValueError(\"q and k must have identical shapes\")\n    if q.shape[:2] != v.shape[:2]:\n        raise ValueError(\"q, k, and v must share batch and sequence dimensions\")\n    if v.shape[2] % q.shape[2] != 0:\n        raise ValueError(\"value-head count must be divisible by Q/K-head count\")\n    expected_gate_shape = v.shape[:3]\n    if g.shape != expected_gate_shape or beta.shape != expected_gate_shape:\n        raise ValueError(f\"g and beta must have shape {expected_gate_shape}\")\n    tensors = (q, k, v, g, beta)\n    if len({tensor.device for tensor in tensors}) != 1:\n        raise ValueError(\"all GDN inputs must be on the same device\")\n    if initial_state is not None:\n        expected_state_shape = (\n            q.shape[0],\n            v.shape[2],\n            q.shape[-1],\n            v.shape[-1],\n        )\n        if initial_state.shape != expected_state_shape:\n            raise ValueError(f\"initial_state must have shape {expected_state_shape}\")\n        if initial_state.device != q.device:\n            raise ValueError(\"initial_state must be on the same device as q\")\n"
+}

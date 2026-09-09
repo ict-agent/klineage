@@ -1,0 +1,73 @@
+{
+  "name": "conv2d",
+  "op_type": "conv2d",
+  "description": "NHWC Conv2d with flattened HWCF weights; 3x3 filter, stride 1, padding 1, no bias.",
+  "axes": {
+    "N": {
+      "type": "var"
+    },
+    "H": {
+      "type": "var"
+    },
+    "W": {
+      "type": "var"
+    },
+    "C": {
+      "type": "var"
+    },
+    "F": {
+      "type": "var"
+    },
+    "FILTER_ROWS": {
+      "type": "var"
+    },
+    "KERNEL_SIZE": {
+      "type": "const",
+      "value": 3
+    },
+    "STRIDE": {
+      "type": "const",
+      "value": 1
+    },
+    "PADDING": {
+      "type": "const",
+      "value": 1
+    }
+  },
+  "inputs": {
+    "data_nhwc": {
+      "shape": [
+        "N",
+        "H",
+        "W",
+        "C"
+      ],
+      "dtype": "float16",
+      "description": "Contiguous NHWC activation."
+    },
+    "weight_hwcf": {
+      "shape": [
+        "FILTER_ROWS",
+        "F"
+      ],
+      "dtype": "float16",
+      "description": "Contiguous [Kh*Kw*C,F] filter, flattened in HWC order."
+    }
+  },
+  "outputs": {
+    "output": {
+      "shape": [
+        "N",
+        "H",
+        "W",
+        "F"
+      ],
+      "dtype": "float16",
+      "description": "Contiguous NHWC result."
+    }
+  },
+  "constraints": [
+    "FILTER_ROWS == KERNEL_SIZE * KERNEL_SIZE * C"
+  ],
+  "reference": "\"\"\"PyTorch reference for the paper's channels-last Conv2d ABI.\n\nThe kernel-facing input is NHWC.  The filter is a flattened HWCF matrix with\nshape ``[kernel_h * kernel_w * in_channels, out_channels]``.  ``run``\nconverts those views to NCHW/OIHW for ``torch.nn.functional.conv2d`` and\nreturns an NHWC tensor.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport torch\nimport torch.nn.functional as F\n\nKERNEL_SIZE = 3\nSTRIDE = 1\nPADDING = 1\n\n\ndef run(\n    data_nhwc: torch.Tensor,\n    weight_hwcf: torch.Tensor,\n    *,\n    kernel_size: int = KERNEL_SIZE,\n    stride: int = STRIDE,\n    padding: int = PADDING,\n) -> torch.Tensor:\n    \"\"\"Compute Conv2d and return ``[N, output_h, output_w, F]``.\"\"\"\n\n    if data_nhwc.ndim != 4:\n        raise ValueError(\"data_nhwc must have shape [N, H, W, C]\")\n    if weight_hwcf.ndim != 2:\n        raise ValueError(\"weight_hwcf must have shape [kernel_h * kernel_w * C, F]\")\n    if kernel_size <= 0 or stride <= 0 or padding < 0:\n        raise ValueError(\"kernel_size/stride must be positive and padding non-negative\")\n    if data_nhwc.device != weight_hwcf.device:\n        raise ValueError(\"activation and filter must be on the same device\")\n    if data_nhwc.dtype != weight_hwcf.dtype:\n        raise ValueError(\"activation and filter must have the same dtype\")\n\n    in_channels = data_nhwc.shape[-1]\n    expected_rows = kernel_size * kernel_size * in_channels\n    if weight_hwcf.shape[0] != expected_rows:\n        raise ValueError(\n            f\"filter has {weight_hwcf.shape[0]} rows; expected {expected_rows}\"\n        )\n    out_channels = weight_hwcf.shape[1]\n\n    data_nchw = data_nhwc.permute(0, 3, 1, 2)\n    weight_oihw = (\n        weight_hwcf.transpose(0, 1)\n        .reshape(out_channels, kernel_size, kernel_size, in_channels)\n        .permute(0, 3, 1, 2)\n        .contiguous()\n    )\n    output_nchw = F.conv2d(\n        data_nchw,\n        weight_oihw,\n        bias=None,\n        stride=stride,\n        padding=padding,\n    )\n    return output_nchw.permute(0, 2, 3, 1).contiguous()\n"
+}

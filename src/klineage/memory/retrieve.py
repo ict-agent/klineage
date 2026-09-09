@@ -2,47 +2,45 @@
 
 from collections.abc import Sequence
 
-from klineage.kernel import TargetContext
-from klineage.memory.skillcard import SkillAdmission, SkillCard
+from klineage.contract import ProblemSpec
+from klineage.kernel import Kernel
+from klineage.memory.skillcard import SkillCard
 
-_WILDCARD = "*"
+WILDCARD = "*"
 
 
 def retrieve(
     skills: Sequence[SkillCard],
-    target: TargetContext,
+    target: Kernel | ProblemSpec,
     *,
-    skill_admission: SkillAdmission = SkillAdmission.OFF,
+    exclude_skills: Sequence[str] = (),
 ) -> tuple[SkillCard, ...]:
-    """Filter scope and prerequisites without changing application order."""
+    """Filter by scope; the retrieval agent checks source prerequisites."""
 
-    if not isinstance(target, TargetContext):
-        raise TypeError("target must be a TargetContext")
-    if not isinstance(skill_admission, SkillAdmission):
-        raise TypeError("skill_admission must be a SkillAdmission")
+    if not isinstance(target, (Kernel, ProblemSpec)):
+        raise TypeError("target must be a Kernel or ProblemSpec")
     if isinstance(skills, (str, bytes)) or not isinstance(skills, Sequence):
         raise TypeError("skills must be a sequence of SkillCards")
 
+    excluded = set(exclude_skills)
     selected: dict[str, SkillCard] = {}
-    actions = set(target.prior_actions)
+    problem = target.problem if isinstance(target, Kernel) else target
     for card in skills:
         if not isinstance(card, SkillCard):
             raise TypeError("skills contains a non-SkillCard value")
-        if skill_admission is SkillAdmission.ON and not card.admitted:
+        if card.skill_id in excluded:
             continue
 
         scope = card.scope
         dimensions = (
-            (target.case, scope.cases),
-            (target.language, scope.languages),
-            (target.platform, scope.platforms),
+            (problem.definition["op_type"], scope.cases),
+            (problem.language, scope.languages),
+            (problem.platform, scope.platforms),
         )
         if any(
-            value not in allowed and _WILDCARD not in allowed
+            value not in allowed and WILDCARD not in allowed
             for value, allowed in dimensions
         ):
-            continue
-        if not set(scope.prior_actions).issubset(actions):
             continue
 
         # Stable IDs remove repeated memory entries without reordering skills.

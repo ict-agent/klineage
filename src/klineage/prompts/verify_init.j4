@@ -1,0 +1,34 @@
+Verify Init against the problem, repository, and expert_kernel in the generation
+record. Read kernel.json and submission/; require their exact files to equal
+source_files. Do not edit candidate implementation or problem.
+
+Compare the full ProblemSpec with the supplied problem and inspection records:
+definition, workload, tensor order, dtype, shape, strides, and input descriptors.
+{% include "backend.j4" %}
+Audit the candidate against that backend's bundle contract.
+Use .agents/skills/bench/SKILL.md for expert adapters and measurements.
+
+Resolve the requested expert and fixed executable instance from the response and
+staged repository. Inspect its actual instantiated definitions. Build an adapter
+under expert/ that calls this original instance on the supplied stream.
+Resolve backend with klineage.backend.get_backend(candidate.problem.language,
+candidate.problem.platform). Construct expert with the same problem and
+source_files={backend.raw_source: adapter_text}, exporting backend.raw_abi.
+Pass existing repository include directories explicitly with include_paths to
+klineage.harness.evaluate; the candidate remains independent of the library.
+
+First expert_validation = evaluate(expert, workdir, include_paths=includes) against
+the problem oracle; require expert_validation.accepted.
+Then validation = evaluate(candidate, workdir, reference=expert, include_paths=includes).
+Require validation.accepted. A supplied reference enables the harness's paired
+backend timing gate: at least 0.99 baseline performance overall and in every trial.
+Repeat the candidate/expert comparison independently on the frozen final sources;
+require the repeated result to be accepted too.
+
+Judge compute, tiling, pipeline synchronization, layouts, and scheduling against the
+actual expert. Cite both implementations; unresolved definitions or changed
+mechanisms fail. Keep source comparisons and measurement records in evaluations/.
+Attach only the measured ValidationResult to kernel.json with save_kernel; preserve
+all other fields. Missing measurements, unavailable tools, or failed checks mean false.
+
+{% include "message/verify.md" %}

@@ -1,0 +1,21 @@
+Verify kernel.json against current_kernel and skill in the generation record. Load the input Kernel from its directory or inline dictionary, and the single
+SkillCard with klineage.memory.load_skill or SkillCard.from_dict. Do not modify upstream
+files, candidate sources, or the recipe.
+
+Require the complete problem and ABI to match the input and submission/ to match
+source_files.
+{% include "backend.j4" %}
+Audit the selected backend's bundle; for Python, check the configured callable and
+output convention. Inspect actual code for the card's scope,
+preconditions, intent, body and preserved mechanisms. Check types, layout/contiguity
+and parallel ownership, storage placement, pipeline stages/ordering, and hardware
+features on the input. Reject additional unrelated
+optimizations.
+
+Use .agents/skills/bench/SKILL.md and klineage.harness.evaluate(candidate, workdir,
+reference=current_kernel). Require ValidationResult.accepted, including the paired
+performance gate. Record measurements and source citations under evaluations/ and
+attach only measured validation to kernel.json. Missing evidence or unavailable tools
+mean false; do not fabricate speedups or passed checks.
+
+{% include "message/verify.md" %}

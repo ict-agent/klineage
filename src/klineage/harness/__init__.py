@@ -1,19 +1,21 @@
-"""Harnesses for running external coding agents."""
+"""Codex execution, kernel evaluation, and GPU timing interfaces."""
 
-from .callable_eval import (
-    CallableKernelEvaluator,
-    CallInputs,
-    KernelLoader,
-    ProblemRuntime,
-    PythonEntrypointLoader,
-)
 from .codex_runner import (
     CodexRunner,
     CodexRunnerError,
     CodexRunResult,
     ReasoningEffort,
 )
-from .eval import EffectVerifier, KernelEvaluator, ValidationResult
+from .eval import (
+    CallableKernelEvaluator,
+    CallInputs,
+    KernelEvaluator,
+    ProblemRuntime,
+    ValidationResult,
+    capture,
+    evaluate,
+    inspect_problem,
+)
 from .timing import (
     FlashInferCuptiTimer,
     KernelTimer,
@@ -27,15 +29,15 @@ __all__ = [
     "CodexRunResult",
     "CodexRunner",
     "CodexRunnerError",
-    "EffectVerifier",
     "FlashInferCuptiTimer",
     "KernelEvaluator",
-    "KernelLoader",
     "KernelTimer",
     "ProblemRuntime",
-    "PythonEntrypointLoader",
     "ReasoningEffort",
     "TimingPolicy",
     "TimingResult",
     "ValidationResult",
+    "capture",
+    "evaluate",
+    "inspect_problem",
 ]

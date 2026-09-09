@@ -1,0 +1,46 @@
+{
+  "name": "gemm",
+  "op_type": "gemm",
+  "description": "Y = X @ weight.T, with contiguous row-major inputs and output.",
+  "axes": {
+    "M": {
+      "type": "var"
+    },
+    "N": {
+      "type": "var"
+    },
+    "K": {
+      "type": "var"
+    }
+  },
+  "inputs": {
+    "x": {
+      "shape": [
+        "M",
+        "K"
+      ],
+      "dtype": "bfloat16",
+      "description": "Row-major activation."
+    },
+    "weight": {
+      "shape": [
+        "N",
+        "K"
+      ],
+      "dtype": "bfloat16",
+      "description": "Row-major weight; transposed in the product."
+    }
+  },
+  "outputs": {
+    "output": {
+      "shape": [
+        "M",
+        "N"
+      ],
+      "dtype": "bfloat16",
+      "description": "Contiguous product X @ weight.T."
+    }
+  },
+  "constraints": [],
+  "reference": "\"\"\"PyTorch reference for ``Y = X @ W.T``.\n\nThe transposed weight contract is intentional: the expert kernels consume a\ncontiguous row-major ``weight[N, K]`` tensor rather than ``weight[K, N]``.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport torch\n\n\ndef run(\n    x: torch.Tensor,\n    weight: torch.Tensor,\n    *,\n    out: torch.Tensor | None = None,\n) -> torch.Tensor:\n    \"\"\"Return ``x @ weight.T`` using PyTorch's matmul implementation.\"\"\"\n\n    if x.ndim != 2 or weight.ndim != 2:\n        raise ValueError(\"x and weight must both be rank-2 tensors\")\n    if x.shape[1] != weight.shape[1]:\n        raise ValueError(\n            \"x and weight must have the same K dimension; \"\n            f\"got {x.shape[1]} and {weight.shape[1]}\"\n        )\n    if x.device != weight.device:\n        raise ValueError(\"x and weight must be on the same device\")\n    if x.dtype != weight.dtype:\n        raise ValueError(\"x and weight must have the same dtype\")\n    return torch.matmul(x, weight.transpose(0, 1), out=out)\n"
+}

@@ -1,0 +1,75 @@
+{
+  "name": "fmha",
+  "op_type": "fmha",
+  "description": "Packed-NHD self-attention; noncausal, no dropout, scale 1/sqrt(HEAD_DIM). Default: eight sequences of 2048 tokens.",
+  "axes": {
+    "TOKENS": {
+      "type": "var"
+    },
+    "HEADS": {
+      "type": "var"
+    },
+    "HEAD_DIM": {
+      "type": "var"
+    },
+    "OFFSETS": {
+      "type": "var"
+    }
+  },
+  "inputs": {
+    "q": {
+      "shape": [
+        "TOKENS",
+        "HEADS",
+        "HEAD_DIM"
+      ],
+      "dtype": "float16",
+      "description": "Contiguous packed-NHD queries."
+    },
+    "k": {
+      "shape": [
+        "TOKENS",
+        "HEADS",
+        "HEAD_DIM"
+      ],
+      "dtype": "float16",
+      "description": "Contiguous packed-NHD keys."
+    },
+    "v": {
+      "shape": [
+        "TOKENS",
+        "HEADS",
+        "HEAD_DIM"
+      ],
+      "dtype": "float16",
+      "description": "Contiguous packed-NHD values."
+    },
+    "cu_seqlens_q": {
+      "shape": [
+        "OFFSETS"
+      ],
+      "dtype": "int32",
+      "description": "Contiguous cumulative Q lengths, beginning at 0 and ending at TOKENS."
+    },
+    "cu_seqlens_k": {
+      "shape": [
+        "OFFSETS"
+      ],
+      "dtype": "int32",
+      "description": "Contiguous cumulative KV lengths, beginning at 0 and ending at TOKENS."
+    }
+  },
+  "outputs": {
+    "output": {
+      "shape": [
+        "TOKENS",
+        "HEADS",
+        "HEAD_DIM"
+      ],
+      "dtype": "float16",
+      "description": "Contiguous packed-NHD attention output."
+    }
+  },
+  "constraints": [],
+  "reference": "\"\"\"PyTorch SDPA reference for packed-NHD FMHA.\n\nQ, K, and V use the same packed layout as the expert kernel:\n``[total_tokens, heads, head_dim]``.  Cumulative sequence-length tensors make\nthe sequence boundaries explicit and also let the reference cover ragged\ninputs without padding them into the kernel ABI.\n\"\"\"\n\nfrom __future__ import annotations\n\nfrom itertools import pairwise\n\nimport torch\nimport torch.nn.functional as F\n\n\ndef run(\n    q: torch.Tensor,\n    k: torch.Tensor,\n    v: torch.Tensor,\n    cu_seqlens_q: torch.Tensor,\n    cu_seqlens_k: torch.Tensor,\n    *,\n    causal: bool = False,\n    scale: float | None = None,\n) -> torch.Tensor:\n    \"\"\"Run SDPA per sequence and return packed ``[total_q, H, Dv]`` output.\"\"\"\n\n    validate_inputs(q, k, v, cu_seqlens_q, cu_seqlens_k)\n    q_offsets = cu_seqlens_q.detach().cpu().tolist()\n    k_offsets = cu_seqlens_k.detach().cpu().tolist()\n\n    outputs: list[torch.Tensor] = []\n    for q_start, q_end, k_start, k_end in zip(\n        q_offsets[:-1],\n        q_offsets[1:],\n        k_offsets[:-1],\n        k_offsets[1:],\n        strict=True,\n    ):\n        q_batch = q[q_start:q_end].transpose(0, 1).unsqueeze(0)\n        k_batch = k[k_start:k_end].transpose(0, 1).unsqueeze(0)\n        v_batch = v[k_start:k_end].transpose(0, 1).unsqueeze(0)\n        output = F.scaled_dot_product_attention(\n            q_batch,\n            k_batch,\n            v_batch,\n            dropout_p=0.0,\n            is_causal=causal,\n            scale=scale,\n        )\n        outputs.append(output.squeeze(0).transpose(0, 1))\n    return torch.cat(outputs, dim=0)\n\n\ndef validate_inputs(\n    q: torch.Tensor,\n    k: torch.Tensor,\n    v: torch.Tensor,\n    cu_seqlens_q: torch.Tensor,\n    cu_seqlens_k: torch.Tensor,\n):\n    if q.ndim != 3 or k.ndim != 3 or v.ndim != 3:\n        raise ValueError(\"q, k, and v must have packed [tokens, heads, dim] shape\")\n    if k.shape[:-1] != v.shape[:-1]:\n        raise ValueError(\"k and v must have the same token and head dimensions\")\n    if q.shape[1] != k.shape[1] or q.shape[2] != k.shape[2]:\n        raise ValueError(\n            \"this FMHA workload requires matching Q/K heads and dimensions\"\n        )\n    if len({q.device, k.device, v.device}) != 1:\n        raise ValueError(\"q, k, and v must be on the same device\")\n    if len({q.dtype, k.dtype, v.dtype}) != 1:\n        raise ValueError(\"q, k, and v must have the same dtype\")\n    if cu_seqlens_q.ndim != 1 or cu_seqlens_k.ndim != 1:\n        raise ValueError(\"cumulative sequence lengths must be rank-1\")\n    if cu_seqlens_q.numel() != cu_seqlens_k.numel():\n        raise ValueError(\"Q and KV must contain the same number of sequences\")\n    q_offsets = cu_seqlens_q.detach().cpu().tolist()\n    k_offsets = cu_seqlens_k.detach().cpu().tolist()\n    if len(q_offsets) < 2 or q_offsets[0] != 0 or k_offsets[0] != 0:\n        raise ValueError(\"cumulative sequence lengths must begin at zero\")\n    if q_offsets[-1] != q.shape[0] or k_offsets[-1] != k.shape[0]:\n        raise ValueError(\"final cumulative length must equal the packed token count\")\n    if any(a >= b for a, b in pairwise(q_offsets)):\n        raise ValueError(\"all Q sequences must be non-empty\")\n    if any(a >= b for a, b in pairwise(k_offsets)):\n        raise ValueError(\"all KV sequences must be non-empty\")\n"
+}

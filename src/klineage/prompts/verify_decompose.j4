@@ -1,0 +1,65 @@
+Verify one deoptimization against input_kernel in the generation record.
+Read the producer's prompt, response, source, and SKILL.md when present. Preserve
+upstream artifacts, proposed source, and optimization instructions.
+{% include "backend.j4" %}
+Use the selected native skill for bundle checks and the bench skill for measurements.
+
+There are two valid outputs:
+
+- A removal: kernel.json and submission/ describe the same complete simplified
+  kernel; SKILL.md contains exactly one SkillCard via klineage.memory.load_skill.
+- An already naive input: kernel.json preserves the input's name, problem, and exact
+  source_files; no SKILL.md or submission/ is present, including stale proposals.
+
+Missing SKILL.md is valid only after independently establishing that unchanged
+naive state. A changed kernel without its card is a failed output, not completion.
+Check the full problem and ABI. Never relax numerical tolerances or workload size.
+For a removal, check exactly one optimization is absent and retained mechanisms
+remain. Include required layout/ownership adapters in that one removal, but reject
+parameter tuning split into repeated skills or unrelated optimizations combined.
+
+Audit the reported progress from source: removed mechanism and locus,
+remaining optimizations and dependencies, and a possible next removal. Counts are
+estimates; do not accept a fixed sequence or an exhausted budget as naive evidence.
+A naive CUDA/HIP GEMM uses scalar global-memory computation for one output per thread,
+without removable shared reuse, register tiling, MMA, async pipelines, swizzles,
+or persistent scheduling. Preserve ABI/bounds handling and numerically necessary
+reduction grouping/rounding. AscendC requires the simplest legal implementation for
+its execution units; required local transfers and Cube/vector instructions remain.
+Other operators need an equivalent source-grounded audit.
+
+Evaluate the input with klineage.harness.evaluate(input, Path.cwd()) and require
+an accepted result. For the unchanged naive case, attach that measured validation
+to kernel.json and finish without creating a card or reconstructing code.
+
+For a removal, evaluate the predecessor without reference and require acceptance.
+It may be slower. Inspect the card's scope, preconditions, intent, and body
+against both implementations. Intent must briefly describe the removed technique;
+implementation details and Before/After code belong in body. Check preconditions
+on the predecessor: types, layout/contiguity and parallel ownership, storage
+placement, pipeline stages/ordering, and hardware features. Distinguish these
+from changes the recipe introduces. Reject a recipe that copies the complete input or
+requires reading its source path. The source-case recipe must suffice by itself.
+Require minimum prerequisites with explicit dependencies; example dimensions,
+stage counts, and unrelated retained features belong in Overview unless necessary.
+Audit YAML preconditions and the entire # Precondition section separately. Each
+condition must identify an operation or hardware rule in the removed technique
+that needs it. Reject instance settings added only in prose and dependencies based
+solely on preserved computation. Check semantics as well as serialization.
+Keep all five categories explicit in both: Data types, Layout, Storage, Pipeline,
+and Hardware. State and explain when a category has no additional requirement.
+Check Pipeline for producer/consumer ordering, visibility, and safe buffer reuse,
+including preserved synchronization; a fixed stage count needs its own dependency.
+
+In a fresh directory under evaluations/, run a separate CodexRunner given only
+the predecessor, SKILL.md contents, problem, output directory, and bundle contract.
+Its prompt must prohibit reading the target source, upstream artifacts, or repository.
+Evaluate the independent reconstruction with reference=input. Require its accepted
+paired performance gate and independently inspect restoration of the removed mechanism.
+Do not repair the proposed source or recipe to pass. Record measurements and source
+citations under evaluations/; unavailable checks or failed evidence mean false.
+
+Attach the measured predecessor validation to kernel.json. Preserve SKILL.md unchanged;
+keep reconstruction measurements and mechanism checks under evaluations/.
+
+{% include "message/verify.md" %}

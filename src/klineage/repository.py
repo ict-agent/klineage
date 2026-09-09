@@ -1,4 +1,4 @@
-"""Stage source repositories as trusted action inputs."""
+"""Prepare source repositories for an action."""
 
 from __future__ import annotations
 
@@ -27,12 +27,12 @@ def stage_repository(
             source,
             destination,
             symlinks=True,
-            ignore=_repository_ignore(destination),
+            ignore=repository_ignore(destination),
             ignore_dangling_symlinks=True,
         )
         return destination.resolve(strict=True)
 
-    if not _looks_like_git_url(raw):
+    if not looks_like_git_url(raw):
         raise FileNotFoundError(f"repository does not exist: {raw}")
     git = shutil.which("git")
     if git is None:
@@ -53,7 +53,8 @@ def stage_repository(
     return destination.resolve(strict=True)
 
 
-def _repository_ignore(destination: Path):
+def repository_ignore(destination: Path):
+    destination = destination.expanduser().resolve()
     ignored_names = {".git", ".hg", ".svn", ".venv", "__pycache__", ".klineage"}
 
     def ignore(directory: str, names: list[str]) -> set[str]:
@@ -72,11 +73,9 @@ def _repository_ignore(destination: Path):
     return ignore
 
 
-def _looks_like_git_url(value: str) -> bool:
+def looks_like_git_url(value: str) -> bool:
     parsed = urlparse(value)
-    return parsed.scheme in {"http", "https", "ssh", "git"} or value.startswith(
-        "git@"
-    )
+    return parsed.scheme in {"http", "https", "ssh", "git"} or value.startswith("git@")
 
 
 __all__ = ["stage_repository"]

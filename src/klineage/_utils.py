@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 import secrets
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+_WORKSPACE = "agent-workspace"
 
 
 def nonempty(value: str, label: str) -> str:
@@ -41,14 +42,6 @@ def boolean(value: Any, label: str) -> bool:
     return value
 
 
-def optional_float(value: Any) -> float | None:
-    return None if value is None else float(value)
-
-
-def signature(value: str) -> str:
-    return " ".join(re.findall(r"[a-z0-9]+", value.lower()))
-
-
 def safe_name(value: str, *, default: str) -> str:
     normalized = _SAFE_NAME_RE.sub("-", value).strip(".-_")
     return (normalized or default)[:80]
@@ -59,19 +52,16 @@ def operation_id(purpose: str) -> str:
     return f"{safe_name(purpose, default='action')}-{timestamp}-{secrets.token_hex(3)}"
 
 
-def stable_id(prefix: str, *values: str) -> str:
-    digest = hashlib.sha256("\0".join(values).encode()).hexdigest()[:16]
-    return f"{safe_name(prefix, default='item')}-{digest}"
+def new_workdir(name: str) -> Path:
+    return Path.cwd() / _WORKSPACE / operation_id(name)
 
 
 __all__ = [
     "boolean",
     "mapping",
+    "new_workdir",
     "nonempty",
     "operation_id",
-    "optional_float",
     "safe_name",
-    "signature",
-    "stable_id",
     "string_tuple",
 ]

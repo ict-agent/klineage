@@ -1,263 +1,201 @@
-"""Kernel states and their target execution context."""
+"""Kernel source bundles and their problem contracts."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, replace
-from pathlib import Path
+import keyword
+import tomllib
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path, PurePosixPath
 from typing import Any
 
-from klineage._utils import mapping, nonempty, string_tuple
-from klineage.contract import KernelABI, ProblemSpec, relative_source_path, source_entry
+from klineage._utils import mapping, nonempty
+from klineage.backend import get_backend
+from klineage.contract import (
+    BUNDLE_CONFIG,
+    BUNDLE_SOLUTION,
+    OutputStyle,
+    ProblemSpec,
+    relative_source_path,
+)
 from klineage.harness.eval import ValidationResult
-from klineage.profiling import KernelProfile
 
-
-@dataclass(frozen=True, slots=True, order=True)
-class Feature:
-    """A mechanism at a stable semantic locus, e.g. ``gemm.main / mma``."""
-
-    locus: str
-    name: str
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "locus", nonempty(self.locus, "feature locus"))
-        object.__setattr__(self, "name", nonempty(self.name, "feature name"))
-
-    def to_dict(self) -> dict[str, str]:
-        return {"locus": self.locus, "name": self.name}
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> Feature:
-        return cls(locus=value["locus"], name=value["name"])
-
-
-@dataclass(frozen=True, slots=True)
-class TargetContext:
-    """The paper's target tuple ``T = (case, language, platform, actions)``."""
-
-    case: str
-    language: str
-    platform: str
-    prior_actions: tuple[str, ...] = ()
-    capabilities: tuple[str, ...] = ()
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "case", nonempty(self.case, "case"))
-        object.__setattr__(self, "language", nonempty(self.language, "language"))
-        object.__setattr__(self, "platform", nonempty(self.platform, "platform"))
-        object.__setattr__(
-            self,
-            "prior_actions",
-            string_tuple(self.prior_actions, "prior action"),
-        )
-        object.__setattr__(
-            self, "capabilities", string_tuple(self.capabilities, "capability"),
-        )
-
-    def with_actions(self, actions: Iterable[str]) -> TargetContext:
-        return replace(
-            self,
-            prior_actions=string_tuple(
-                (*self.prior_actions, *actions),
-                "prior action",
-            ),
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "case": self.case,
-            "language": self.language,
-            "platform": self.platform,
-            "prior_actions": list(self.prior_actions),
-            "capabilities": list(self.capabilities),
-        }
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> TargetContext:
-        return cls(
-            case=str(value["case"]),
-            language=str(value["language"]),
-            platform=str(value["platform"]),
-            prior_actions=tuple(str(item) for item in value.get("prior_actions", ())),
-            capabilities=tuple(str(item) for item in value.get("capabilities", ())),
-        )
+BUILD_DIRECTORY = Path("build")
 
 
 @dataclass(frozen=True, slots=True)
 class Kernel:
-    """A source-bearing kernel state in a lineage."""
-
     name: str
-    source: str
-    context: TargetContext
-    artifact_path: Path | None = None
+    problem: ProblemSpec
+    source_files: Mapping[str, str]
     validation: ValidationResult | None = None
-    problem: ProblemSpec | None = None
-    abi: KernelABI | None = None
-    source_files: Mapping[str, str] | None = None
-    features: tuple[Feature, ...] = ()
-    profile: KernelProfile | None = None
+    language: str = field(init=False)
+    entry_point: str = field(init=False)
+    output_style: OutputStyle = field(init=False)
+    function: Callable[..., Any] | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
-    def __post_init__(self) -> None:
+    def __post_init__(self):
         object.__setattr__(self, "name", nonempty(self.name, "kernel name"))
-        features = tuple(self.features)
-        if any(not isinstance(item, Feature) for item in features):
-            raise TypeError("kernel features must contain Feature objects")
-        object.__setattr__(self, "features", tuple(dict.fromkeys(features)))
-        if not isinstance(self.source, str) or not self.source.strip():
-            raise ValueError("kernel source must be non-empty")
-        if self.artifact_path is not None:
-            object.__setattr__(
-                self,
-                "artifact_path",
-                Path(self.artifact_path).expanduser().absolute(),
-            )
-        if self.problem is not None and not isinstance(self.problem, ProblemSpec):
+        if not isinstance(self.problem, ProblemSpec):
             raise TypeError("kernel problem must be a ProblemSpec")
-        if self.abi is not None and not isinstance(self.abi, KernelABI):
-            raise TypeError("kernel ABI must be a KernelABI")
-        if self.source_files is not None:
-            if not isinstance(self.source_files, Mapping):
-                raise TypeError("kernel source_files must be a mapping")
-            source_files: dict[str, str] = {}
-            for raw_path, contents in self.source_files.items():
-                if not isinstance(raw_path, str):
-                    raise TypeError("kernel source file paths must be strings")
-                path = relative_source_path(raw_path, "kernel source file path")
-                if not isinstance(contents, str):
-                    raise TypeError("kernel source file contents must be strings")
-                if "\x00" in contents:
-                    raise ValueError("kernel source files must not contain NUL bytes")
-                source_files[path] = contents
-            entry = source_entry(source_files, self.abi.interface) if self.abi else None
-            if entry is not None and entry not in source_files:
-                raise ValueError(
-                    "kernel source_files do not contain the ABI interface module "
-                    f"{entry!r}"
-                )
-            if entry is not None and source_files[entry] != self.source:
-                raise ValueError("kernel source must match its ABI interface module")
-            object.__setattr__(self, "source_files", source_files)
+        if self.validation is not None and not isinstance(
+            self.validation, ValidationResult
+        ):
+            raise TypeError("kernel validation must be a ValidationResult")
 
-        if self.profile is not None:
-            if not isinstance(self.profile, KernelProfile):
-                raise TypeError("kernel profile must be a KernelProfile")
-            # Source, contract, or target edits invalidate captured evidence.
-            if not self.profile.matches(self):
-                object.__setattr__(self, "profile", None)
+        sources = {}
+        for name, text in mapping(self.source_files, "kernel source_files").items():
+            path = relative_source_path(name, "kernel source path")
+            if not isinstance(text, str):
+                raise TypeError("kernel source contents must be strings")
+            if "\x00" in text:
+                raise ValueError("kernel sources must not contain NUL bytes")
+            sources[path] = text
+        if not sources or not any(text.strip() for text in sources.values()):
+            raise ValueError("kernel source_files must contain source text")
+        object.__setattr__(self, "source_files", sources)
+        self.read_build()
+
+    def read_build(self):
+        if BUNDLE_CONFIG not in self.source_files:
+            backend = get_backend(self.problem.language, self.problem.platform)
+            object.__setattr__(self, "language", self.problem.language)
+            object.__setattr__(
+                self, "entry_point", f"{backend.raw_source}::klineage_launch"
+            )
+            object.__setattr__(self, "output_style", OutputStyle.DESTINATION)
+            return
+
+        config = tomllib.loads(self.source_files[BUNDLE_CONFIG])
+        for name in self.source_files:
+            if name != BUNDLE_CONFIG and not name.startswith(f"{BUNDLE_SOLUTION}/"):
+                raise ValueError(
+                    "bundles contain only config.toml and solution/ sources"
+                )
+        solution = mapping(config[BUNDLE_SOLUTION], "solution metadata")
+        for key in ("name", "definition", "author"):
+            nonempty(solution[key], f"solution {key}")
+        build = mapping(config["build"], "build metadata")
+        language = build["language"]
+        suffixes = (".py",)
+        if language != "python":
+            backend = get_backend(self.problem.language, self.problem.platform)
+            if language != backend.language:
+                raise ValueError(
+                    f"build language must be {backend.language} or python for {backend.kind}"
+                )
+            suffixes = backend.entry_suffixes
+        entry = nonempty(build["entry_point"], "build entry_point")
+        parts = entry.split("::")
+        if entry != build["entry_point"] or len(parts) != 2:
+            raise ValueError("entry_point must be relative/source::symbol")
+        path, symbol = parts
+        relative_source_path(path, "build entry source")
+        if PurePosixPath(path).suffix not in suffixes:
+            raise ValueError("entry source suffix is incompatible with build language")
+        if not symbol.isidentifier() or keyword.iskeyword(symbol):
+            raise ValueError("entry symbol must be an identifier")
+        destination = build.get("destination_passing_style", False)
+        if type(destination) is not bool:
+            raise TypeError("destination_passing_style must be a boolean")
+        object.__setattr__(self, "language", language)
+        object.__setattr__(self, "entry_point", entry)
+        object.__setattr__(
+            self,
+            "output_style",
+            OutputStyle.DESTINATION if destination else OutputStyle.RETURN,
+        )
+        if self.source_path not in self.source_files:
+            raise ValueError(f"missing entry source: {self.source_path}")
+        nonempty(self.source_files[self.source_path], "bundle entry source")
+
+    @property
+    def source_path(self) -> str:
+        path = self.entry_point.split("::")[0]
+        return (
+            f"{BUNDLE_SOLUTION}/{path}" if BUNDLE_CONFIG in self.source_files else path
+        )
+
+    @property
+    def symbol(self) -> str:
+        return self.entry_point.split("::")[1]
+
+    @classmethod
+    def from_sources(
+        cls,
+        source_files: Mapping[str, str],
+        problem: ProblemSpec,
+        *,
+        name: str | None = None,
+        build_root: Path = BUILD_DIRECTORY,
+        include_paths: Sequence[Path] = (),
+    ) -> Kernel:
+        """Construct and build a callable kernel from its complete sources."""
+        kernel = cls(name or problem.name, problem, source_files)
+        kernel.build(build_root, include_paths=include_paths)
+        return kernel
+
+    def build(
+        self,
+        build_root: Path = BUILD_DIRECTORY,
+        *,
+        include_paths: Sequence[Path] = (),
+        strides: Mapping[tuple[str, str], tuple[int, ...]] | None = None,
+    ):
+        """Build in this process; serialized kernels contain no runtime handles."""
+        object.__setattr__(self, "function", None)
+        from klineage.harness.artifacts import BundleLoader
+
+        function = BundleLoader(build_root, include_paths=include_paths).build(
+            self, strides=strides
+        )
+        object.__setattr__(self, "function", function)
+
+    def __call__(self, *inputs: Any) -> Any:
+        if self.function is None:
+            raise RuntimeError("Kernel is not built; use from_sources() or build()")
+        return self.function(*inputs)
 
     @property
     def fingerprint(self) -> str:
-        digest = hashlib.sha256()
-        digest.update(self.source.encode())
-        if (
-            self.problem is not None
-            or self.abi is not None
-            or self.source_files is not None
-        ):
-            contract = {
-                "problem": self.problem.to_dict() if self.problem else None,
-                "abi": self.abi.to_dict() if self.abi else None,
-                "source_files": (
-                    dict(sorted(self.source_files.items()))
-                    if self.source_files is not None
-                    else None
-                ),
-            }
-            digest.update(b"\0")
-            digest.update(
-                json.dumps(
-                    contract,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode()
-            )
-        return digest.hexdigest()
-
-    def with_validation(self, validation: ValidationResult) -> Kernel:
-        return replace(self, validation=validation)
-
-    def _prompt_input(self) -> dict[str, Any]:
-        """Send the contract and source once, without host bookkeeping."""
-
-        value: dict[str, Any] = {
-            "context": self.context.to_dict(),
-            "problem": self.problem.to_dict() if self.problem else None,
-            "abi": self.abi.to_dict() if self.abi else None,
+        value = {
+            "problem": self.problem.to_dict(),
+            "definition_io": [
+                list(self.problem.definition[role]) for role in ("inputs", "outputs")
+            ],
+            "source_files": dict(sorted(self.source_files.items())),
         }
-        if self.source_files is None:
-            value["source"] = self.source
-        else:
-            value["source_files"] = dict(sorted(self.source_files.items()))
-        if self.features:
-            value["features"] = [item.to_dict() for item in self.features]
-        if self.profile is not None:
-            value["profile"] = self.profile.to_dict()
-        return value
+        return hashlib.sha256(
+            json.dumps(
+                value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
-            "context": self.context.to_dict(),
-            "artifact_path": str(self.artifact_path) if self.artifact_path else None,
+            "problem": self.problem.to_dict(),
+            "source_files": dict(sorted(self.source_files.items())),
             "validation": self.validation.to_dict() if self.validation else None,
-            "profile": self.profile.to_dict() if self.profile else None,
-            "problem": self.problem.to_dict() if self.problem else None,
-            "abi": self.abi.to_dict() if self.abi else None,
-            "source": self.source,
-            "features": [item.to_dict() for item in self.features],
-            "source_files": (
-                dict(sorted(self.source_files.items()))
-                if self.source_files is not None
-                else None
-            ),
         }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Kernel:
         validation = value.get("validation")
-        artifact_path = value.get("artifact_path")
-        problem = value.get("problem")
-        abi = value.get("abi")
-        source_files = value.get("source_files")
-        profile = value.get("profile")
         return cls(
-            name=str(value["name"]),
-            source=str(value["source"]),
-            context=TargetContext.from_dict(
-                mapping(value["context"], "kernel context")
-            ),
-            artifact_path=Path(str(artifact_path)) if artifact_path else None,
-            validation=(
-                ValidationResult.from_dict(mapping(validation, "kernel validation"))
-                if validation is not None
-                else None
-            ),
-            problem=(
-                ProblemSpec.from_dict(mapping(problem, "kernel problem"))
-                if problem is not None
-                else None
-            ),
-            abi=(
-                KernelABI.from_dict(mapping(abi, "kernel ABI"))
-                if abi is not None
-                else None
-            ),
-            source_files=(
-                dict(mapping(source_files, "kernel source_files"))
-                if source_files is not None
-                else None
-            ),
-            features=tuple(
-                Feature.from_dict(mapping(item, "kernel feature"))
-                for item in value.get("features", ())
-            ),
-            profile=KernelProfile.from_dict(profile) if profile is not None else None,
+            name=value["name"],
+            problem=ProblemSpec.from_dict(mapping(value["problem"], "kernel problem")),
+            source_files=mapping(value["source_files"], "kernel source_files"),
+            validation=ValidationResult.from_dict(
+                mapping(validation, "kernel validation")
+            )
+            if validation is not None
+            else None,
         )
 
 
-__all__ = ["Feature", "Kernel", "TargetContext"]
+__all__ = ["Kernel"]

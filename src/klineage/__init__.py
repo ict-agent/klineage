@@ -1,1 +1,1 @@
-"""Verified optimization skills from GPU-kernel lineages."""
+"""Verified optimization skills from expert GPU kernels."""

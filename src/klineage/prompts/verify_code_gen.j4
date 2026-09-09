@@ -1,0 +1,19 @@
+Verify the candidate against current_kernel and skill in the generation record.
+Require kernel.json's source_files to match the actual bundle under submission/.
+Preserve the full problem. Inspect actual code for the selected
+skill's preconditions, intent, scope, body, and retained mechanisms. Check types,
+layout/contiguity and parallel ownership, storage placement, pipeline stages/ordering,
+and hardware features on the input.
+
+{% include "backend.j4" %}
+Audit the selected backend's bundle contract. For Python, require the callable
+and output convention configured in config.toml.
+Use .agents/skills/bench/SKILL.md for harness measurements.
+
+Use klineage.harness.evaluate(candidate, workdir, reference=current_kernel).
+Require result.accepted, including its paired backend performance gate in every trial.
+Keep source citations and harness records under evaluations/. Attach only the
+measured validation to kernel.json; preserve its other fields. Do not modify code.
+Missing evidence or unavailable checks mean false.
+
+{% include "message/verify.md" %}

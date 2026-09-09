@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import json
-import shutil
+import os
 import tempfile
 import time
 import unittest
-from dataclasses import fields
 from pathlib import Path
+from unittest.mock import Mock, patch
 
-from klineage.harness import CodexRunner, CodexRunnerError, CodexRunResult
+from klineage.harness import CodexRunner, CodexRunnerError
+from klineage.harness.codex_runner import PACKAGE_ROOT, SKILL_ROOT
 
 FAKE_CODEX = '''#!/usr/bin/python3
 import json
@@ -28,7 +29,12 @@ print(
         {
             "args": args,
             "path": os.environ["PATH"],
-            "tmpdir": os.environ["TMPDIR"],
+            "tmpdir": os.environ.get("TMPDIR"),
+            "pythonpath": os.environ.get("PYTHONPATH"),
+            "skills": {
+                name: (pathlib.Path(".agents/skills") / name / "SKILL.md").read_text()
+                for name in ("bench", "cuda")
+            },
         }
     ),
     flush=True,
@@ -59,39 +65,34 @@ time.sleep(60)
     time.sleep(60)
 if prompt == "TIMEOUT":
     time.sleep(60)
+if prompt == "RUNTIME":
+    subprocess.run([sys.executable, "-c", "import klineage"], check=True)
+    assert pathlib.Path(".klineage/message/init.md").is_file()
+if prompt == "NO_FINAL":
+    output_path.unlink()
+    raise SystemExit(0)
 if prompt == "FAIL":
     print("simulated failure", file=sys.stderr)
     raise SystemExit(7)
-if prompt.startswith("SYMLINK:"):
-    output_path.unlink()
-    output_path.symlink_to(prompt.removeprefix("SYMLINK:"))
-    raise SystemExit(0)
 
 output_path.write_text("answer: " + prompt, encoding="utf-8")
 '''
 
-FAKE_BWRAP = """#!/bin/sh
-if [ "$1" = "--help" ]; then
-    echo "--as-pid-1 --argv0 --perms --ro-bind-fd"
-fi
-exit 0
-"""
 
 PROCESS_WAIT_SECONDS = 2.0
 
 
 class CodexRunnerTests(unittest.TestCase):
-    def setUp(self) -> None:
+    def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
-        self.sandbox = self.root / "sandbox"
-        self.fake_codex = self._executable("fake-codex", FAKE_CODEX)
-        self.fake_bwrap = self._executable("fake-bwrap", FAKE_BWRAP)
+        self.work = self.root / "work"
+        self.fake_codex = self.executable("fake-codex", FAKE_CODEX)
 
-    def tearDown(self) -> None:
+    def tearDown(self):
         self.temp.cleanup()
 
-    def _executable(self, name: str, source: str) -> Path:
+    def executable(self, name: str, source: str) -> Path:
         path = self.root / name
         path.write_text(source, encoding="utf-8")
         path.chmod(0o755)
@@ -99,24 +100,19 @@ class CodexRunnerTests(unittest.TestCase):
 
     def runner(self, **kwargs: object) -> CodexRunner:
         return CodexRunner(
-            self.sandbox,
+            self.work,
             codex_bin=self.fake_codex,
-            bwrap_bin=self.fake_bwrap,
             **kwargs,
         )
 
-    def test_success_persists_minimal_trace_bundle(self) -> None:
+    def test_success_persists_minimal_trace_bundle(self):
         result = self.runner()("build the thing", run_id="successful-run")
 
-        self.assertEqual(
-            [field.name for field in fields(CodexRunResult)],
-            ["final_message", "trace_path"],
-        )
         self.assertEqual(result.final_message, "answer: build the thing")
         self.assertEqual(result.trace_path.parent.name, "successful-run")
         self.assertEqual(
             result.trace_path.parent.parent,
-            (self.sandbox / ".klineage" / "codex-runs").resolve(),
+            (self.work / ".klineage" / "codex-runs").resolve(),
         )
         self.assertEqual(
             (result.trace_path.parent / "prompt.txt").read_text(),
@@ -126,7 +122,7 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertTrue((result.trace_path.parent / "stderr.log").is_file())
         self.assertFalse((result.trace_path.parent / "metadata.json").exists())
 
-    def test_nonzero_exit_raises_with_trace_and_stderr(self) -> None:
+    def test_nonzero_exit_raises_with_trace_and_stderr(self):
         with self.assertRaises(CodexRunnerError) as caught:
             self.runner()("FAIL", run_id="failed-run")
 
@@ -137,14 +133,7 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertIn("exit code 7", str(error))
         self.assertIn("simulated failure", str(error))
 
-    def test_rejects_a_replaced_final_message_file(self) -> None:
-        outside = self.root / "outside.txt"
-        outside.write_text("outside", encoding="utf-8")
-
-        with self.assertRaisesRegex(CodexRunnerError, "replaced"):
-            self.runner()(f"SYMLINK:{outside}", run_id="replaced-output")
-
-    def test_constructor_timeout_raises_with_trace(self) -> None:
+    def test_constructor_timeout_raises_with_trace(self):
         with self.assertRaises(CodexRunnerError) as caught:
             self.runner(timeout=0.05)("TIMEOUT", run_id="timed-out-run")
 
@@ -152,7 +141,7 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertIsNotNone(error.trace_path)
         self.assertIn("timed out", str(error))
 
-    def test_rejects_empty_prompt_and_unsafe_run_id(self) -> None:
+    def test_rejects_empty_prompt_and_unsafe_run_id(self):
         runner = self.runner()
 
         with self.assertRaises(ValueError):
@@ -160,138 +149,20 @@ class CodexRunnerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             runner("prompt", run_id="../escape")
 
-    def test_state_dir_stays_inside_sandbox(self) -> None:
-        result = self.runner(state_dir="runner-state")(
-            "inspect",
-            run_id="custom-state",
-        )
-
-        self.assertEqual(
-            result.trace_path.parent.parent,
-            (self.sandbox / "runner-state" / "codex-runs").resolve(),
-        )
-        with self.assertRaises(ValueError):
-            self.runner(state_dir=self.root / "outside")
-
-    def test_command_is_strict_offline_and_sets_reasoning(self) -> None:
-        low = self.runner(reasoning_effort="low")(
-            "inspect",
-            run_id="low-reasoning",
-        )
-        inherited = self.runner(reasoning_effort=None)(
-            "inspect",
-            run_id="inherited-reasoning",
-        )
-        low_args = self._trace_args(low.trace_path)
-        inherited_args = self._trace_args(inherited.trace_path)
-
-        self.assertIn("never", low_args)
-        self.assertIn("--strict-config", low_args)
-        self.assertIn("--ignore-user-config", low_args)
-        self.assertIn("--ignore-rules", low_args)
-        self.assertIn("--ephemeral", low_args)
-        self.assertIn('model_reasoning_effort="low"', low_args)
-        self.assertFalse(
-            any(value.startswith("model_reasoning_effort=") for value in inherited_args)
-        )
-        self.assertTrue(
-            any("network = { enabled = false }" in value for value in low_args)
-        )
-        self.assertNotIn("--yolo", low_args)
-
-    def test_command_grants_only_declared_read_roots(self) -> None:
-        source = self.root / "input"
-        source.mkdir()
-        result = self.runner(read_roots=(source,))(
-            "inspect",
-            run_id="read-roots",
-        )
-        args = self._trace_args(result.trace_path)
-        profile = next(value for value in args if str(source.resolve()) in value)
-
-        self.assertIn(f'"{source.resolve()}" = "read"', profile)
-
-        with self.assertRaises(ValueError):
-            self.runner(read_roots=(self.root,))
-
-    def test_rejects_invalid_reasoning_effort(self) -> None:
+    def test_rejects_invalid_reasoning_effort(self):
         with self.assertRaises(ValueError):
             self.runner(reasoning_effort="extreme")
 
-    def test_launcher_contains_only_required_tools(self) -> None:
-        runner = self.runner()
-        launcher = runner._launcher_dir
-        result = runner("inspect", run_id="launcher-path")
-        event = self._trace_event(result.trace_path)
-
-        self.assertFalse(launcher.is_relative_to(self.sandbox))
-        self.assertEqual(
-            {path.name for path in launcher.iterdir()},
-            {"apply_patch", "applypatch", "bwrap"},
-        )
-        self.assertEqual((launcher / "bwrap").resolve(), self.fake_bwrap.resolve())
-        self.assertEqual(
-            (launcher / "apply_patch").resolve(),
-            self.fake_codex.resolve(),
-        )
-        self.assertEqual(event["path"].split(":")[0], str(launcher))
-        self.assertEqual(
-            Path(event["tmpdir"]),
-            (self.sandbox / ".klineage" / "tmp").resolve(),
-        )
-
-    def test_resolves_native_executable_from_npm_launcher(self) -> None:
-        package = self.root / "npm"
-        launcher = package / "bin" / "codex.js"
-        native = (
-            package
-            / "node_modules"
-            / "@openai"
-            / "codex-linux-x64"
-            / "vendor"
-            / "x86_64-unknown-linux-musl"
-            / "bin"
-            / "codex"
-        )
-        launcher.parent.mkdir(parents=True)
-        native.parent.mkdir(parents=True)
-        launcher.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        launcher.chmod(0o755)
-        shutil.copyfile("/bin/true", native)
-        native.chmod(0o755)
-
-        runner = CodexRunner(
-            self.sandbox,
-            codex_bin=launcher,
-            bwrap_bin=self.fake_bwrap,
-        )
-
-        self.assertEqual(runner._codex_program, native.resolve())
-
-    def test_bwrap_must_expose_required_features(self) -> None:
-        incompatible = self._executable(
-            "old-bwrap",
-            "#!/bin/sh\necho --as-pid-1\n",
-        )
-
-        with self.assertRaises(CodexRunnerError):
-            CodexRunner(
-                self.sandbox,
-                codex_bin=self.fake_codex,
-                bwrap_bin=incompatible,
-            )
-
-    def test_codex_must_be_executable(self) -> None:
+    def test_codex_must_be_executable(self):
         self.fake_codex.chmod(0o644)
 
         with self.assertRaises(CodexRunnerError):
             CodexRunner(
-                self.sandbox,
+                self.work,
                 codex_bin=self.fake_codex,
-                bwrap_bin=self.fake_bwrap,
             )
 
-    def test_timeout_kills_descendant_processes(self) -> None:
+    def test_timeout_kills_descendant_processes(self):
         pid_path = self.root / "process-tree.pid"
         prompt = f"PROCESS_TREE:{pid_path}"
 
@@ -301,33 +172,111 @@ class CodexRunnerTests(unittest.TestCase):
         child_pid, grandchild_pid = map(int, pid_path.read_text().split())
         deadline = time.monotonic() + PROCESS_WAIT_SECONDS
         while time.monotonic() < deadline:
-            if not self._alive(child_pid) and not self._alive(grandchild_pid):
+            if not self.alive(child_pid) and not self.alive(grandchild_pid):
                 break
             time.sleep(0.02)
 
-        self.assertFalse(self._alive(child_pid))
-        self.assertFalse(self._alive(grandchild_pid))
+        self.assertFalse(self.alive(child_pid))
+        self.assertFalse(self.alive(grandchild_pid))
 
-    def test_close_removes_launcher(self) -> None:
+    def test_missing_reply_has_trace(self):
+        with self.assertRaises(CodexRunnerError) as caught:
+            self.runner()("NO_FINAL", run_id="missing-reply")
+        self.assertTrue(caught.exception.trace_path.is_file())
+
+    def test_interrupt_stops_process(self):
         runner = self.runner()
-        launcher = runner._launcher_dir
+        for error in (KeyboardInterrupt(), SystemExit()):
+            process = Mock()
+            process.communicate.side_effect = (error, None)
+            with (
+                self.subTest(error=type(error).__name__),
+                patch(
+                    "klineage.harness.codex_runner.subprocess.Popen",
+                    return_value=process,
+                ),
+                patch("klineage.harness.codex_runner.stop_process") as stop,
+                self.assertRaises(type(error)),
+            ):
+                runner("interrupt")
+            stop.assert_called_once_with(process)
 
-        with runner:
-            self.assertTrue(launcher.exists())
+    def test_local_command(self):
+        result = self.runner(reasoning_effort="low")("inspect", run_id="local")
+        args = self.trace_args(result.trace_path)
+        self.assertEqual(args[args.index("-s") + 1], "danger-full-access")
+        self.assertIn('model_reasoning_effort="low"', args)
+        self.assertIn("--ignore-user-config", args)
+        self.assertFalse(any("permissions." in arg for arg in args))
 
-        self.assertFalse(launcher.exists())
-        runner.close()
+    def test_external_trace_directory(self):
+        directory = self.root / "traces"
+        result = self.runner(state_dir=directory)("inspect", run_id="external")
+        self.assertEqual(result.trace_path.parent.parent, directory / "codex-runs")
+
+    def test_process_skill_access(self):
+        result = self.runner()("inspect", run_id="skills")
+        event = self.trace_event(result.trace_path)
+        for name in ("bench", "cuda"):
+            self.assertEqual(
+                event["skills"][name], (SKILL_ROOT / name / "SKILL.md").read_text()
+            )
+        source = self.work / ".agents/skills/cuda/assets/add_one/solution/kernel.cu"
+        self.assertTrue(source.is_file())
+
+    def test_native_skill_discovery(self):
+        self.runner()
+        for name in ("cuda", "hip", "ascendc"):
+            with self.subTest(name=name):
+                resource = self.work / ".agents/skills" / name
+                self.assertTrue(resource.is_symlink())
+                self.assertTrue((resource / "SKILL.md").is_file())
+                self.assertEqual(resource.resolve(), SKILL_ROOT / name)
+
+    def test_reuses_skills_across_runs(self):
+        self.runner()("first", run_id="first")
+        result = self.runner()("retry", run_id="retry")
+        self.assertEqual(result.final_message, "answer: retry")
+        self.assertTrue((self.work / ".agents/skills/bench").is_symlink())
+
+    def test_process_runtime_access(self):
+        with patch.dict(os.environ, {"PYTHONPATH": str(self.root / "existing")}):
+            result = self.runner()("RUNTIME", run_id="runtime")
+            self.assertEqual(os.environ["PYTHONPATH"], str(self.root / "existing"))
+        paths = self.trace_event(result.trace_path)["pythonpath"].split(os.pathsep)
+        self.assertEqual(paths, [str(PACKAGE_ROOT.parent), str(self.root / "existing")])
+
+    def test_message_conflict_preserved(self):
+        message = self.work / ".klineage/message"
+        message.mkdir(parents=True)
+        (message / "keep.md").write_text("User contract")
+        with self.assertRaisesRegex(
+            CodexRunnerError, "workspace resource already exists"
+        ):
+            self.runner()
+        self.assertEqual((message / "keep.md").read_text(), "User contract")
+
+    def test_skill_conflict_preserved(self):
+        skill = self.work / ".agents/skills/cuda"
+        skill.mkdir(parents=True)
+        contents = "User skill"
+        (skill / "SKILL.md").write_text(contents)
+        with self.assertRaisesRegex(
+            CodexRunnerError, "workspace resource already exists"
+        ):
+            self.runner()
+        self.assertEqual((skill / "SKILL.md").read_text(), contents)
 
     @staticmethod
-    def _trace_args(trace_path: Path) -> list[str]:
-        return CodexRunnerTests._trace_event(trace_path)["args"]
+    def trace_args(trace_path: Path) -> list[str]:
+        return CodexRunnerTests.trace_event(trace_path)["args"]
 
     @staticmethod
-    def _trace_event(trace_path: Path) -> dict[str, object]:
+    def trace_event(trace_path: Path) -> dict[str, object]:
         return json.loads(trace_path.read_text().splitlines()[0])
 
     @staticmethod
-    def _alive(pid: int) -> bool:
+    def alive(pid: int) -> bool:
         stat_path = Path("/proc") / str(pid) / "stat"
         try:
             state = stat_path.read_text().split()[2]

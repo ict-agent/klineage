@@ -1,0 +1,49 @@
+{
+  "name": "topk",
+  "op_type": "topk",
+  "description": "Row-wise largest K selection, unsorted. Returns selected values and int64 indices; order and tied indices are unspecified.",
+  "axes": {
+    "B": {
+      "type": "var"
+    },
+    "S": {
+      "type": "var"
+    },
+    "K": {
+      "type": "const",
+      "value": 512
+    }
+  },
+  "inputs": {
+    "values": {
+      "shape": [
+        "B",
+        "S"
+      ],
+      "dtype": "float32",
+      "description": "Contiguous row-major values."
+    }
+  },
+  "outputs": {
+    "top_values": {
+      "shape": [
+        "B",
+        "K"
+      ],
+      "dtype": "float32",
+      "description": "Contiguous selected values, in unspecified order."
+    },
+    "indices": {
+      "shape": [
+        "B",
+        "K"
+      ],
+      "dtype": "int64",
+      "description": "Contiguous indices into the final input axis."
+    }
+  },
+  "constraints": [
+    "K <= S"
+  ],
+  "reference": "\"\"\"PyTorch reference for row-wise Top-K selection.\"\"\"\n\nfrom __future__ import annotations\n\nimport torch\n\nK = 512\n\n\ndef run(\n    values: torch.Tensor,\n    *,\n    k: int = K,\n    largest: bool = True,\n    sorted: bool = False,\n) -> torch.return_types.topk:\n    \"\"\"Return PyTorch's ``(values, indices)`` Top-K result.\n\n    The expert kernel emits int32 indices only.  Correctness checks should cast\n    those indices to int64, gather the selected values, and compare the sorted\n    selected-value sets; order is intentionally unspecified.\n    \"\"\"\n\n    if values.ndim != 2:\n        raise ValueError(\"values must have shape [batch, sequence_length]\")\n    if k <= 0 or k > values.shape[-1]:\n        raise ValueError(f\"k must be in [1, {values.shape[-1]}]\")\n    return torch.topk(values, k, dim=-1, largest=largest, sorted=sorted)\n"
+}
