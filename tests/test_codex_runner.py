@@ -31,6 +31,7 @@ print(
             "path": os.environ["PATH"],
             "tmpdir": os.environ.get("TMPDIR"),
             "pythonpath": os.environ.get("PYTHONPATH"),
+            "agents": pathlib.Path("AGENTS.md").read_text(),
             "skills": {
                 name: (pathlib.Path(".agents/skills") / name / "SKILL.md").read_text()
                 for name in ("bench", "cuda")
@@ -223,6 +224,20 @@ class CodexRunnerTests(unittest.TestCase):
             )
         source = self.work / ".agents/skills/cuda/assets/add_one/solution/kernel.cu"
         self.assertTrue(source.is_file())
+
+    def test_process_function_docs(self):
+        runner = self.runner()
+        path = self.work / "AGENTS.md"
+        path.write_text("# Local instructions\nKeep user guidance.\n")
+        first = runner("inspect", run_id="first")
+        docs = self.trace_event(first.trace_path)["agents"]
+        self.assertIn("Keep user guidance.", docs)
+        for name in ("profile", "retrieve"):
+            self.assertIn(f"from klineage.agent_tools import {name}", docs)
+            self.assertIn(f"Signature: `{name}(kernel:", docs)
+
+        second = runner("inspect", run_id="second")
+        self.assertEqual(self.trace_event(second.trace_path)["agents"], docs)
 
     def test_native_skill_discovery(self):
         self.runner()

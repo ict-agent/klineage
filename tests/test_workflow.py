@@ -83,19 +83,12 @@ class WorkflowTests(unittest.TestCase):
                     save_skill(self.cards[index - 1], runner.work_dir / "SKILL.md")
                 current = self.states[index - 1]
             save_kernel(current, runner.work_dir)
-        elif run_id == "Profile":
-            current = load_kernel(Path(data["kernel"]))
-            raw = runner.work_dir / "metrics.csv"
-            report = runner.work_dir / "capture.ncu-rep"
-            raw.write_text("captured metrics")
-            report.write_text("captured report")
-            save_kernel(current, runner.work_dir)
-        elif run_id == "Retrieve":
+        elif run_id == "Apply":
             current = load_kernel(Path(data["current_kernel"]))
-            self.assertTrue((Path(data["current_kernel"]) / "metrics.csv").is_file())
+            self.assertIsNone(data["skill"])
             index = int(runner.work_dir.name)
             choices = []
-            for path in data["skills"]:
+            for path in data["memory"]:
                 card = load_skill(path)
                 if card.skill_id in data.get("exclude_skills", ()):
                     continue
@@ -112,19 +105,17 @@ class WorkflowTests(unittest.TestCase):
                     continue
                 choices.append(card)
             if choices and index != self.empty_at:
-                save_skill(choices[0], runner.work_dir / "SKILL.md")
-        elif run_id == "Apply":
-            current = load_kernel(Path(data["current_kernel"]))
-            card = load_skill(data["skill"])
-            candidate = replace(
-                current,
-                source_files={
-                    "kernel.cu": current.source_files["kernel.cu"]
-                    + f" // {card.skill_id}"
-                },
-                validation=None,
-            )
-            save_kernel(candidate, runner.work_dir)
+                card = choices[0]
+                save_skill(card, runner.work_dir / "SKILL.md")
+                current = replace(
+                    current,
+                    source_files={
+                        "kernel.cu": current.source_files["kernel.cu"]
+                        + f" // {card.skill_id}"
+                    },
+                    validation=None,
+                )
+            save_kernel(current, runner.work_dir)
         else:
             self.fail(f"unexpected stage: {stage}")
         return SimpleNamespace(final_message="generated")
@@ -324,35 +315,27 @@ class WorkflowTests(unittest.TestCase):
                 "init",
                 "decompose/0",
                 "decompose/1",
-                "profile/0",
-                "retrieve/0",
                 "apply/0",
-                "profile/1",
-                "retrieve/1",
                 "apply/1",
-                "profile/2",
             ],
         )
         self.assertTrue(result.source_files["kernel.cu"].endswith(" // tile // mma"))
-        self.assertEqual(result, load_kernel(self.work / "profile/2"))
-        self.assertTrue((self.work / "profile/2/metrics.csv").is_file())
+        self.assertEqual(result, load_kernel(self.work / "apply/1"))
+        self.assertFalse((self.work / "profile").exists())
+        self.assertFalse((self.work / "retrieve").exists())
         self.assertTrue(all(event[3] == 42 for event in self.events))
         data = {stage: value for stage, _, value, _ in self.events}
         self.assertEqual(data["decompose/0"]["input_kernel"], str(self.work / "init"))
         self.assertEqual(
             data["decompose/1"]["input_kernel"], str(self.work / "decompose/0")
         )
-        self.assertEqual(data["profile/0"]["kernel"], str(self.work / "decompose/1"))
         self.assertEqual(
-            data["retrieve/1"]["current_kernel"], str(self.work / "profile/1")
+            data["apply/0"]["current_kernel"], str(self.work / "decompose/1")
         )
+        self.assertEqual(data["apply/1"]["current_kernel"], str(self.work / "apply/0"))
+        self.assertEqual(data["apply/1"]["exclude_skills"], ["tile"])
         self.assertEqual(
-            data["apply/1"]["current_kernel"], str(self.work / "profile/1")
-        )
-        self.assertEqual(data["profile/2"]["kernel"], str(self.work / "apply/1"))
-        self.assertEqual(data["retrieve/1"]["exclude_skills"], ["tile"])
-        self.assertEqual(
-            data["retrieve/1"]["skills"],
+            data["apply/1"]["memory"],
             [
                 str(self.work / "decompose/0/SKILL.md"),
                 str(self.work / "decompose/1/SKILL.md"),
@@ -363,23 +346,21 @@ class WorkflowTests(unittest.TestCase):
             self.assertEqual(card, self.cards[1 - step])
 
     def test_complete_stops_decompose(self):
-        self.run_workflow(max_decompose_step=5, max_apply_step=0)
+        result = self.run_workflow(max_decompose_step=5, max_apply_step=0)
         self.assertEqual(
             [event[0] for event in self.events],
-            ["init", "decompose/0", "decompose/1", "decompose/2", "profile/0"],
+            ["init", "decompose/0", "decompose/1", "decompose/2"],
         )
         self.assertEqual(
-            load_kernel(self.work / "profile/0").source_files["kernel.cu"],
+            result.source_files["kernel.cu"],
             self.states[0].source_files["kernel.cu"],
         )
 
     def test_decompose_budget(self):
-        self.run_workflow(max_decompose_step=1, max_apply_step=0)
+        result = self.run_workflow(max_decompose_step=1, max_apply_step=0)
+        self.assertEqual([event[0] for event in self.events], ["init", "decompose/0"])
         self.assertEqual(
-            [event[0] for event in self.events], ["init", "decompose/0", "profile/0"]
-        )
-        self.assertEqual(
-            load_kernel(self.work / "profile/0").source_files["kernel.cu"],
+            result.source_files["kernel.cu"],
             self.states[1].source_files["kernel.cu"],
         )
 
@@ -387,31 +368,28 @@ class WorkflowTests(unittest.TestCase):
         self.omit_skill = True
         with self.assertRaises(StructuredOutputError):
             self.run_workflow(max_apply_step=0)
-        self.assertFalse((self.work / "profile").exists())
+        self.assertFalse((self.work / "apply").exists())
 
     def test_naive_input_stops(self):
         self.states = self.states[:1]
         result = self.run_workflow(max_decompose_step=5, max_apply_step=0)
         self.assertEqual(result, self.states[0])
-        self.assertEqual(
-            [event[0] for event in self.events], ["init", "decompose/0", "profile/0"]
-        )
+        self.assertEqual([event[0] for event in self.events], ["init", "decompose/0"])
         self.assertFalse((self.work / "decompose/0/SKILL.md").exists())
 
     def test_apply_budget(self):
         result = self.run_workflow(max_apply_step=1)
         self.assertTrue(result.source_files["kernel.cu"].endswith(" // tile"))
-        self.assertEqual(self.events[-1][0], "profile/1")
-        self.assertFalse((self.work / "retrieve/1").exists())
+        self.assertEqual(self.events[-1][0], "apply/0")
+        self.assertFalse((self.work / "apply/1").exists())
 
     def test_verification_handoff(self):
         self.run_workflow(max_apply_step=2, enable_verifier=True)
-        self.assertEqual(len(self.events), 20)
+        self.assertEqual(len(self.events), 10)
         for generation, verification in zip(self.events[::2], self.events[1::2]):
             self.assertEqual(generation[0], verification[0])
             self.assertEqual(verification[1], "Verify")
         self.assertTrue(load_kernel(self.work / "decompose/1").validation.accepted)
-        self.assertTrue(load_kernel(self.work / "profile/0").validation.accepted)
 
     def test_failure_stops_workflow(self):
         self.failed_stage = "decompose/1"
@@ -432,22 +410,70 @@ class WorkflowTests(unittest.TestCase):
     def test_empty_selection(self):
         self.empty_at = 0
         result = self.run_workflow(max_apply_step=3)
-        self.assertEqual(result, load_kernel(self.work / "profile/0"))
-        self.assertEqual(self.events[-1][0], "retrieve/0")
-        self.assertFalse((self.work / "apply").exists())
+        self.assertEqual(result, load_kernel(self.work / "apply/0"))
+        self.assertEqual(result, load_kernel(self.work / "decompose/1"))
+        self.assertEqual(self.events[-1][0], "apply/0")
+        self.assertFalse((self.work / "apply/0/SKILL.md").exists())
+        self.assertFalse((self.work / "apply/1").exists())
 
     def test_stops_after_last_skill(self):
         result = self.run_workflow(max_apply_step=5)
         self.assertTrue(result.source_files["kernel.cu"].endswith(" // tile // mma"))
-        self.assertEqual(self.events[-1][0], "retrieve/2")
+        self.assertEqual(self.events[-1][0], "apply/2")
         self.assertEqual(self.events[-1][2]["exclude_skills"], ["tile", "mma"])
-        self.assertFalse((self.work / "apply/2").exists())
+        self.assertFalse((self.work / "apply/2/SKILL.md").exists())
 
     def test_missing_output_fails(self):
         self.missing_stage = "apply/0"
         with self.assertRaises(FileNotFoundError):
             self.run_workflow(max_apply_step=2)
-        self.assertFalse((self.work / "retrieve/1").exists())
+        self.assertFalse((self.work / "apply/1").exists())
+
+    def test_apply_checks_artifacts(self):
+        mutations = ("problem", "missing_card", "unchanged", "modified_card", "name")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                self.work = self.root / mutation
+                self.empty_at = 0 if mutation == "name" else None
+
+                def generate(runner, prompt, *, run_id, mutation=mutation):
+                    result = self.run_codex(runner, prompt, run_id=run_id)
+                    if not run_id.startswith("Apply-"):
+                        return result
+                    path = runner.work_dir / "SKILL.md"
+                    candidate = load_kernel(runner.work_dir)
+                    if mutation == "problem":
+                        candidate = replace(
+                            candidate,
+                            problem=replace(candidate.problem, name="different"),
+                        )
+                    elif mutation == "missing_card":
+                        path.unlink()
+                    elif mutation == "unchanged":
+                        candidate = load_kernel(
+                            Path(prompt_inputs(prompt)["current_kernel"])
+                        )
+                    elif mutation == "modified_card":
+                        save_skill(replace(load_skill(path), intent="modified"), path)
+                    else:
+                        candidate = replace(candidate, name="renamed")
+                    save_kernel(candidate, runner.work_dir)
+                    return result
+
+                self.calls.side_effect = generate
+                with self.assertRaises(StructuredOutputError):
+                    self.run_workflow(max_apply_step=1)
+
+    def test_apply_excludes_used_skill(self):
+        def generate(runner, prompt, *, run_id):
+            result = self.run_codex(runner, prompt, run_id=run_id)
+            if run_id.startswith("Apply-") and runner.work_dir.name == "1":
+                save_skill(self.cards[0], runner.work_dir / "SKILL.md")
+            return result
+
+        self.calls.side_effect = generate
+        with self.assertRaisesRegex(StructuredOutputError, "excluded"):
+            self.run_workflow(max_apply_step=2)
 
     def test_existing_dir_is_kept(self):
         self.work.mkdir()

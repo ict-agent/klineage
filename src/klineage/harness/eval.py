@@ -19,6 +19,7 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any, Protocol
 
 from klineage._utils import boolean, operation_id
+from klineage.agent_api import agent_function
 from klineage.backend import Backend, BackendKind, detect_backend, get_backend
 from klineage.contract import ProblemSpec, ValueRole
 from klineage.errors import ActionError
@@ -544,7 +545,14 @@ def now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+@agent_function
 def inspect_problem(problem: Path, work: Path) -> ProblemSpec:
+    """Inspect a Trace definition or Python reference on the available backend.
+
+    Return its ProblemSpec with ordered tensor signatures, oracle, and workload.
+    Write inspection evidence and captured inputs under work/evaluations.
+    Preserve workload input files referenced by the returned contract.
+    """
     description = EvaluationRuntime().inspect(problem, log_dir=work / "evaluations")
     return ProblemSpec(
         name=description["problem_name"],
@@ -555,6 +563,7 @@ def inspect_problem(problem: Path, work: Path) -> ProblemSpec:
     )
 
 
+@agent_function
 def evaluate(
     kernel: Kernel,
     work: Path,
@@ -562,6 +571,14 @@ def evaluate(
     reference: Kernel | None = None,
     include_paths: Sequence[Path] = (),
 ) -> ValidationResult:
+    """Build frozen Kernel sources, check correctness, and measure device latency.
+
+    Write build artifacts and evidence under work/build and work/evaluations.
+    The problem oracle checks correctness; optional reference supplies only the
+    performance baseline and must share the problem contract. include_paths
+    supplies build headers. Return ValidationResult; accepted requires every gate.
+    Rebuild Kernel.source_files after edits. Omit reference for standalone checks.
+    """
     return EvaluationRuntime().evaluate(
         kernel,
         reference=reference,

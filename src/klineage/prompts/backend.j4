@@ -1,3 +1,5 @@
+Read AGENTS.md for the registered Python function catalog: import paths, signatures,
+arguments, results, and limitations. Call these functions directly.
 {% if target_language is defined and target_language in ("cuda", "hip", "ascendc") %}
 Use .agents/skills/{{ target_language }}/SKILL.md for the native bundle, binding,
 and caller-stream contract. Preserve problem.language and problem.platform.

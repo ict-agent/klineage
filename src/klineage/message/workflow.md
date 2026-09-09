@@ -1,7 +1,8 @@
 # Workflow
 
-The Profile/Retrieve loop requires CUDA counter capture. `init_memory` runs only
-Init and Decompose and supports CUDA, Hygon HIP, and AscendC.
+The workflow runs Init, Decompose, then repeated Apply. Memory selection with
+eligible candidates requires CUDA counter capture. `init_memory` runs only Init
+and Decompose and supports CUDA, Hygon HIP, and AscendC.
 
 [Shared message contract](README.md). Workflow orchestrates actions; it is not an
 Action subclass and does not emit a separate LLM message.
@@ -25,16 +26,10 @@ action self-checks and deterministic Decompose handoff checks still apply.
     kernel.json                # One step's predecessor
     SKILL.md                   # One independently reusable optimization
     submission/                # Present when this step changes code
-  profile/0/
-    kernel.json                # Profile of the final decomposition state
-    evaluations/ncu-<id>/
-  retrieve/<j>/
-    SKILL.md                   # One selected card, absent for an empty selection
   apply/<j>/
     kernel.json                # Result of that one selected skill
+    SKILL.md                   # Selected unchanged card, absent for empty selection
     submission/
-  profile/<j+1>/
-    kernel.json                # Fresh profile after Apply
     evaluations/ncu-<id>/
 ```
 
@@ -47,11 +42,9 @@ contract. Loop indices start at zero; only executed stages exist.
 | --- | --- | --- |
 | Init | Decompose 0 | `init/` |
 | Decompose i | Decompose i+1 | `decompose/i/`; read `kernel.json` |
-| Final Decompose | Profile 0 | Final decomposition directory |
-| All Decompose steps | Each Retrieve | Array of emitted SKILL.md file paths |
-| Profile j | Retrieve j | `profile/j/`; read kernel and referenced NCU evidence |
-| Retrieve j + Profile j | Apply j | Selected SKILL.md path plus current kernel directory |
-| Apply j | Profile j+1 | `apply/j/` |
+| Final Decompose | Apply 0 | Final decomposition directory |
+| All Decompose steps | Each Apply | Memory containing emitted SKILL.md paths |
+| Apply j | Apply j+1 | Current kernel directory, same memory, prior selected IDs excluded |
 
 Decompose stops when an accepted invocation preserves the naive input and emits
 no SKILL.md, or at its run limit. Count successful removals by emitted cards, not
@@ -65,16 +58,24 @@ unchanged problem. A changed kernel requires SKILL.md; an unchanged kernel must
 have no card and preserve its name. These checks also run with verification
 disabled. They establish artifact consistency, not naive status or correctness.
 
-Retrieval excludes all previously applied skill IDs. An accepted selection without SKILL.md stops the apply loop;
-otherwise one Apply and one Profile run before the next retrieval. The apply limit
-counts applied skills, not verification attempts. A stage failure stops the workflow.
+Apply calls `klineage.agent_tools.retrieve` to filter declared scope and excluded
+IDs. If candidates exist, it calls `profile` for fresh counters, checks textual
+prerequisites and existing mechanisms, then selects and applies top-1. Function
+documentation is available in AGENTS.md; these calls do not spawn actions.
+
+An unchanged kernel without SKILL.md ends the apply loop. A changed kernel requires
+a selected card from memory whose ID was not excluded. The workflow checks those
+artifacts and the unchanged problem even when verification is disabled. A missing
+or unsupported profile is an error, not an empty selection. The apply limit counts
+successful applications; retries and terminal checks add none. Stage failures stop
+the workflow.
 
 ## Result
 
-The final artifact is the latest `profile/<n>/kernel.json`, with its complete source_files; NCU evidence
-resides beside it under evaluations/. `workflow()` loads and returns that Kernel. With zero
-applies it returns `profile/0/kernel.json`. It does not write a root-level kernel,
-merge skill histories, or choose a historical best candidate.
+`workflow()` returns the latest Kernel, including an unchanged terminal Apply
+result when present. With zero applies, it returns the final Decompose kernel.
+Profiling and measurement evidence stays in the Apply workdir's evaluations/.
+No root-level kernel or historical-best selection is produced.
 
 ## Memory initialization
 

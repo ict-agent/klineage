@@ -8,14 +8,20 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
+from klineage.agent_api import agent_function
 from klineage.errors import ActionError
 
 
+@agent_function
 def stage_repository(
     repo: str | os.PathLike[str],
     destination: Path,
 ) -> Path:
-    """Copy a local repository or shallow-clone a remote repository."""
+    """Copy a local repository or shallow-clone a Git URL into a fresh destination.
+
+    Returns its resolved path. The destination must not exist; inspect and reuse
+    an intact staged repository on retries instead of calling this again.
+    """
 
     raw = os.fspath(repo)
     local = Path(raw).expanduser()

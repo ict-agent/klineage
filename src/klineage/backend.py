@@ -15,6 +15,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from klineage._utils import safe_name
+from klineage.agent_api import agent_function
 
 CFLAGS = ("-O3", "-std=c++17")
 CUDA_FLAGS = (*CFLAGS, "--expt-relaxed-constexpr", "--expt-extended-lambda")
@@ -367,7 +368,14 @@ def platform_backend(platform: str) -> Backend | None:
     return None
 
 
+@agent_function
 def get_backend(language: str, platform: str = "") -> Backend:
+    """Resolve CUDA, Hygon HIP, or AscendC metadata without loading GPU libraries.
+
+    Python requires an explicit accelerator platform. The returned Backend provides
+    raw_source, raw_abi, and skill_name for native adapters and bundle instructions.
+    Conflicting language/platform values raise ValueError.
+    """
     target = platform_backend(platform)
     if language == "python":
         if target is None:
@@ -384,7 +392,13 @@ def get_backend(language: str, platform: str = "") -> Backend:
     raise ValueError(f"unsupported kernel language {language!r}")
 
 
+@agent_function
 def detect_backend() -> Backend:
+    """Detect an available accelerator, honoring KLINEAGE_BACKEND when set.
+
+    Loads the selected vendor runtime. Raises when no supported device is available.
+    Use get_backend for an existing ProblemSpec rather than detecting another target.
+    """
     requested = os.environ.get(BACKEND_ENV)
     if requested:
         backend = get_backend("python", requested)

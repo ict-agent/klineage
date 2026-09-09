@@ -9,8 +9,6 @@ from klineage.action.action import MAX_RETRIES, TIMEOUT
 from klineage.action.apply import Apply
 from klineage.action.decompose import Decompose
 from klineage.action.init import Init
-from klineage.action.profile import Profile
-from klineage.action.retrieve import Retrieve
 from klineage.errors import StructuredOutputError
 from klineage.harness.artifacts import load_kernel
 from klineage.kernel import Kernel
@@ -43,6 +41,7 @@ def workflow(
     workdir.mkdir(parents=True, exist_ok=False)
 
     skill_paths = []
+    cards = []
     for current_dir, card in _decompose(
         problem,
         repo,
@@ -55,58 +54,51 @@ def workflow(
     ):
         if card is not None:
             skill_paths.append(current_dir / SKILL_FILE)
+            cards.append(card)
 
-    # Start retrieval with measurements of the final predecessor.
-    profile_dir = workdir / "profile" / "0"
-    Profile(
-        current_dir,
-        workdir=profile_dir,
-        enable_verifier=enable_verifier,
-        timeout=timeout,
-        max_retries=max_retries,
-    ).run()
-    current_dir = profile_dir
+    current = load_kernel(current_dir)
     applied_skills = []
 
     for step in range(max_apply_step):
-        retrieve_dir = workdir / "retrieve" / str(step)
-        Retrieve(
-            current_dir,
-            skill_paths,
-            exclude_skills=applied_skills,
-            workdir=retrieve_dir,
-            enable_verifier=enable_verifier,
-            timeout=timeout,
-            max_retries=max_retries,
-        ).run()
-        selected_path = retrieve_dir / SKILL_FILE
-        if not selected_path.is_file():
-            break
-        selected = load_skill(selected_path)
-
         apply_dir = workdir / "apply" / str(step)
         Apply(
             current_dir,
-            selected_path,
+            memory=skill_paths,
+            exclude_skills=applied_skills,
             workdir=apply_dir,
             enable_verifier=enable_verifier,
             timeout=timeout,
             max_retries=max_retries,
         ).run()
 
-        # Recompute bottlenecks before selecting another skill.
-        profile_dir = workdir / "profile" / str(step + 1)
-        Profile(
-            apply_dir,
-            workdir=profile_dir,
-            enable_verifier=enable_verifier,
-            timeout=timeout,
-            max_retries=max_retries,
-        ).run()
-        current_dir = profile_dir
+        candidate = load_kernel(apply_dir)
+        if candidate.problem != current.problem:
+            raise StructuredOutputError("Apply changed the problem")
+
+        selected_path = apply_dir / SKILL_FILE
+        if not selected_path.is_file():
+            if (
+                candidate.fingerprint != current.fingerprint
+                or candidate.name != current.name
+            ):
+                raise StructuredOutputError("Apply changed a kernel without SKILL.md")
+            return candidate
+
+        selected = load_skill(selected_path)
+        if selected not in cards or selected.skill_id in applied_skills:
+            raise StructuredOutputError(
+                "Apply selected a modified, unknown, or excluded skill"
+            )
+        if candidate.fingerprint == current.fingerprint:
+            raise StructuredOutputError(
+                "Apply emitted SKILL.md for an unchanged kernel"
+            )
+
+        current = candidate
+        current_dir = apply_dir
         applied_skills.append(selected.skill_id)
 
-    return load_kernel(current_dir)
+    return current
 
 
 def init_memory(

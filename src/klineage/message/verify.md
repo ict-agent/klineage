@@ -32,9 +32,8 @@ Other text raises `StructuredOutputError`. Missing evidence or failed checks mea
 | Producer | Permitted artifact updates |
 | --- | --- |
 | Init | Original adapter under `expert/`; measurements in `evaluations/`; validation in `kernel.json` |
-| CodeGen / Apply | Evidence under `evaluations/`; validation in `kernel.json` |
+| Apply | Inspect selection/profile evidence; write evaluation evidence and changed-kernel validation |
 | Decompose | Reconstruction/evidence under `evaluations/`; predecessor validation in `kernel.json` |
-| Profile / Retrieve | Read-only inspection |
 
 Measurement checks also create build caches under `build/`. Preserve candidate
 source_files, problem, SKILL.md and upstream files.

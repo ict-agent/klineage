@@ -1,8 +1,26 @@
-Verify kernel.json against current_kernel and skill in the generation record. Load the input Kernel from its directory or inline dictionary, and the single
-SkillCard with klineage.memory.load_skill or SkillCard.from_dict. Do not modify upstream
-files, candidate sources, or the recipe.
+Verify kernel.json against current_kernel, skill, memory, and exclude_skills in the
+generation record. Load the input Kernel from its directory or inline dictionary.
+Convert directory/card path strings to Path and reconstruct inline SkillCards
+before calling Python functions.
+Do not modify upstream files, candidate sources, or cards.
 
-Require the complete problem and ABI to match the input and submission/ to match
+When skill is supplied, load that exact card with the registered load_skill or
+SkillCard.from_dict and verify its application. No memory selection is required.
+
+When skill is null, recompute candidates using klineage.agent_tools.retrieve with
+the original memory and exclusions. This only filters scope and excluded IDs;
+check textual prerequisites and already-present mechanisms against the input source.
+If candidates existed, inspect the generation's actual profile request, result,
+metrics, and report. Require matching kernel fingerprint/problem and source-grounded
+ranking. Missing, stale, or unsupported measurements mean false.
+
+- With SKILL.md, require exactly one unchanged card from those candidates. Reject
+  excluded or inapplicable cards, invented recipes, and unsupported ranking claims.
+- Without SKILL.md, require the input kernel to be preserved exactly and no
+  submission/. Accept only if no candidate applies, with reasons for every rejection.
+  Finish without fabricating a new measured validation for unchanged artifacts.
+
+For an application, require the complete problem and ABI to match the input and submission/ to match
 source_files.
 {% include "backend.j4" %}
 Audit the selected backend's bundle; for Python, check the configured callable and

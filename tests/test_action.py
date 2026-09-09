@@ -9,11 +9,8 @@ from unittest.mock import Mock, patch
 from klineage.action import (
     Action,
     Apply,
-    CodeGen,
     Decompose,
     Init,
-    Profile,
-    Retrieve,
     Verify,
     verify,
 )
@@ -74,11 +71,8 @@ class ActionBaseTests(unittest.TestCase):
         Action.__init__(initial, "init", self.workdir)
         actions = (
             initial,
-            CodeGen(current, cards[0], workdir=self.workdir),
             Decompose(current, workdir=self.workdir),
             Apply(current, cards[0], workdir=self.workdir),
-            Profile(current, workdir=self.workdir),
-            Retrieve(current, (), workdir=self.workdir),
         )
         self.assertEqual(
             len({action.verify_prompt for action in actions}), len(actions)
@@ -238,9 +232,12 @@ class NoGpuImports:
             raise AssertionError('unexpected GPU dependency: ' + fullname)
 sys.meta_path.insert(0, NoGpuImports())
 from klineage.action import Action, Verify, init_memory, workflow
+from klineage.agent_api import function_docs
+from klineage.agent_tools import profile, retrieve
 from klineage.harness import evaluate
 from klineage.harness.artifacts import BundleLoader
 from klineage.kernel import Kernel
+assert 'klineage.agent_tools.profile' in function_docs()
 """,
             ],
             check=True,

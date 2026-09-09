@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from klineage._utils import mapping, nonempty, string_tuple
+from klineage.agent_api import agent_function
 
 
 def _strings(value: Any, label: str) -> tuple[str, ...]:
@@ -81,7 +82,12 @@ class SkillCard:
         if not self.preconditions:
             raise ValueError("a SkillCard needs at least one precondition")
 
+    @agent_function
     def to_dict(self) -> dict[str, Any]:
+        """Return the four metadata fields and Markdown body for inline handoffs.
+
+        Use save_skill to persist YAML frontmatter and body as SKILL.md.
+        """
         return {**self.to_metadata(), "body": self.body}
 
     def to_metadata(self) -> dict[str, Any]:
@@ -95,7 +101,14 @@ class SkillCard:
         }
 
     @classmethod
+    @agent_function
     def from_dict(cls, value: Mapping[str, Any]) -> SkillCard:
+        """Restore skill_id, intent, preconditions, scope, and body from a dictionary.
+
+        Intent is a brief single line; body holds the independent Markdown recipe.
+        Preconditions and scope's cases/languages/platforms are nonempty string
+        arrays. Use load_skill for SKILL.md files.
+        """
         if set(value) != {"skill_id", "intent", "preconditions", "scope", "body"}:
             raise ValueError("payload differs from the SkillCard schema")
         return cls(

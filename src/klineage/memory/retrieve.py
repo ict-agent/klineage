@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 
+from klineage._utils import string_tuple
 from klineage.contract import ProblemSpec
 from klineage.kernel import Kernel
 from klineage.memory.skillcard import SkillCard
@@ -21,8 +22,12 @@ def retrieve(
         raise TypeError("target must be a Kernel or ProblemSpec")
     if isinstance(skills, (str, bytes)) or not isinstance(skills, Sequence):
         raise TypeError("skills must be a sequence of SkillCards")
+    if isinstance(exclude_skills, (str, bytes)) or not isinstance(
+        exclude_skills, Sequence
+    ):
+        raise TypeError("exclude_skills must be a sequence of strings")
 
-    excluded = set(exclude_skills)
+    excluded = set(string_tuple(exclude_skills, "exclude_skills"))
     selected: dict[str, SkillCard] = {}
     problem = target.problem if isinstance(target, Kernel) else target
     for card in skills:

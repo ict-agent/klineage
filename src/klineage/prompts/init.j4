@@ -40,15 +40,15 @@ expert/                     # Adapter calling the original expert instance
 # Procedure
 
 1. Read the bench skill and the kernel.json contracts listed above.
-   Load the supplied problem with klineage.harness.inspect_problem(
-   Path(problem), Path.cwd()); call the returned ProblemSpec problem_spec.
+   Use inspect_problem from the function catalog on the supplied problem in this
+   workdir; call the returned ProblemSpec problem_spec.
    Read the native skill matching problem_spec.language/platform. Derive the ABI
    from its ordered definition inputs/outputs and workload axis
    bindings: argument order, dtypes, shapes, layouts, and output semantics.
    Preserve the full problem_spec and files referenced by its workload.
 
-2. Stage the supplied repository with klineage.repository.stage_repository(
-   repository, Path.cwd() / "repository"). Reuse an intact copy on retries;
+2. Use stage_repository to stage the supplied repository into repository/.
+   Reuse an intact copy on retries;
    recover incomplete staging before continuing. Locate expert_kernel there,
    or inspect the supplied external source. Use examples, tests, build settings,
    template specializations, and dispatch paths to identify one executable
@@ -72,12 +72,9 @@ expert/                     # Adapter calling the original expert instance
    mechanisms and relevant license notices. Keep expert-library calls and
    implementations out of the candidate; only the adapter in expert/ may use them.
 
-5. Read the complete submission/ bundle into source_files with
-   klineage.harness.artifacts.read_source_tree(Path.cwd() / "submission", "init").
-   Build candidate with
-   Kernel.from_sources(source_files, problem_spec, build_root=Path.cwd() / "build"),
-   then save kernel.json with klineage.harness.artifacts.save_kernel(candidate,
-   Path.cwd()). Keep validation unset for the external verifier. Perform the
+5. Read the complete submission/ bundle with read_source_tree. Build candidate
+   using Kernel.from_sources with those source_files, problem_spec, and build/.
+   Save it to kernel.json with save_kernel. Keep validation unset for the external verifier. Perform the
    Self-Verification below using this candidate and expert adapter, keeping
    measurements and source comparisons in evaluations/. After source changes,
    rebuild and resave the candidate before repeating the checks.

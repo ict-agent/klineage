@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import re
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Literal
 
 from klineage._utils import operation_id
+from klineage.agent_api import write_agent_docs
 from klineage.backend import BACKENDS
 from klineage.harness.artifacts import stop_process
 
@@ -103,6 +105,10 @@ class CodexRunner:
                 "run_id must start with an alphanumeric character and contain "
                 "only letters, digits, '.', '_' or '-' (maximum 128 characters)"
             )
+
+        # Importing the tool module registers its decorated functions.
+        importlib.import_module("klineage.agent_tools")
+        write_agent_docs(self.work_dir)
 
         run_dir = self.trace_root / resolved_run_id
         run_dir.mkdir(mode=0o700, exist_ok=False)

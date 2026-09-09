@@ -55,4 +55,4 @@ Both self-checks and the external gate use this instance as their reference.
 
 ## Handoff
 
-Pass `workdir` to Decompose or Profile; each reads `workdir/kernel.json`.
+Pass `workdir` to Decompose or Apply; each reads `workdir/kernel.json`.

@@ -85,7 +85,8 @@ Self-checks remain required when the action disables external verification;
 leave changed Kernel.validation unset. External verification runs only when enabled.
 
 `inspect_problem(problem_path, work)` resolves an input ProblemSpec.
-`capture(kernel, work, ProfileOptions(...))` collects NCU diagnostics on CUDA.
+`klineage.agent_tools.profile(kernel, work, options=ProfileOptions(...))` collects
+NCU diagnostics on CUDA.
 Hardware-counter profiling is unsupported on Hygon and Ascend; report that
 capability error without substituting event timings for bottleneck metrics.
 Neither replaces `evaluate` for correctness or latency.

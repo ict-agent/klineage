@@ -1,7 +1,6 @@
-import json
 import tempfile
 import unittest
-from dataclasses import asdict, replace
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -9,13 +8,12 @@ from unittest.mock import Mock, patch
 from problem_fixtures import problem_spec
 from prompt_fixtures import prompt_inputs
 
-from klineage.action import Apply, CodeGen, Decompose, Init, Profile, Retrieve
+from klineage.action import Apply, Decompose, Init
 from klineage.kernel import Kernel
 from klineage.memory import (
     Scope,
     SkillCard,
 )
-from klineage.profiling import ProfileOptions
 
 
 class ActionPromptTests(unittest.TestCase):
@@ -102,21 +100,14 @@ class ActionPromptTests(unittest.TestCase):
                 prompt_inputs(call.args[0]), {"input_kernel": self.expert.to_dict()}
             )
 
-    def test_codegen_inputs(self):
-        action = CodeGen(self.current, self.card, workdir=self.work)
-        data = self.payload(action)
-        self.assertEqual(data["current_kernel"], self.current.to_dict())
-        self.assertEqual(data["skill"], self.card.to_dict())
-        self.runner.assert_not_called()
-
-    def test_codegen_language(self):
+    def test_apply_language(self):
         for language in ("triton", "notcuda"):
             with self.subTest(language=language), self.assertRaises(ValueError):
                 current = replace(
                     self.current,
                     problem=replace(self.current.problem, language=language),
                 )
-                CodeGen(current, self.card, workdir=self.work)
+                Apply(current, self.card, workdir=self.work)
 
     def test_python_keeps_entrypoint(self):
         from klineage.prompts import render_prompt
@@ -126,7 +117,7 @@ class ActionPromptTests(unittest.TestCase):
         )
         prompts = (
             render_prompt("backend", target_language="python"),
-            CodeGen(current, self.card, workdir=self.work).prompt,
+            Apply(current, self.card, workdir=self.work).prompt,
         )
         for prompt in prompts:
             with self.subTest(prompt=prompt[:40]):
@@ -134,7 +125,7 @@ class ActionPromptTests(unittest.TestCase):
                 self.assertNotIn('entry_point="kernel.py::run"', prompt)
                 self.assertNotIn("destination_passing_style=false", prompt)
 
-    def test_codegen_native_backends(self):
+    def test_apply_native_backends(self):
         from klineage.backend import BACKENDS
 
         for backend in BACKENDS:
@@ -148,7 +139,7 @@ class ActionPromptTests(unittest.TestCase):
                 source_files={backend.raw_source: "native source"},
             )
             with self.subTest(backend=backend.kind):
-                action = CodeGen(current, self.card, workdir=self.work)
+                action = Apply(current, self.card, workdir=self.work)
                 self.assertEqual(
                     self.payload(action)["current_kernel"], current.to_dict()
                 )
@@ -170,27 +161,34 @@ class ActionPromptTests(unittest.TestCase):
         self.assertIn("submission/", action.prompt)
         self.assertFalse((self.work / "submission").exists())
 
-    def test_profile_inputs(self):
-        options = ProfileOptions(set="full", sections=("WarpStateStats",))
-        action = Profile(self.current, options=options, workdir=self.work)
-        data = self.payload(action)
-        self.assertEqual(data["kernel"], self.current.to_dict())
-        self.assertEqual(data["options"], json.loads(json.dumps(asdict(options))))
-        self.runner.assert_not_called()
-
-    def test_retrieve_inputs(self):
-        for skills in ((), (self.card,)):
-            with self.subTest(skills=skills):
-                action = Retrieve(
+    def test_apply_memory_inputs(self):
+        for memory in ((), (self.card,), self.work / "memory"):
+            with self.subTest(memory=memory):
+                action = Apply(
                     self.current,
-                    skills,
+                    memory=memory,
                     workdir=self.work,
                     exclude_skills=("tile",),
                 )
                 data = self.payload(action)
                 self.assertEqual(data["current_kernel"], self.current.to_dict())
-                self.assertEqual(data["skills"], [item.to_dict() for item in skills])
+                self.assertIsNone(data["skill"])
+                expected = (
+                    str(memory)
+                    if isinstance(memory, Path)
+                    else [item.to_dict() for item in memory]
+                )
+                self.assertEqual(data["memory"], expected)
                 self.assertEqual(data["exclude_skills"], ["tile"])
+        self.runner.assert_not_called()
+
+    def test_apply_bad_exclusions(self):
+        for excluded in ("warp.store", b"warp.store", (None,), (1,)):
+            with (
+                self.subTest(excluded=excluded),
+                self.assertRaises((TypeError, ValueError)),
+            ):
+                Apply(self.current, memory=(self.card,), exclude_skills=excluded)
         self.runner.assert_not_called()
 
 

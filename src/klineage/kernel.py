@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from klineage._utils import mapping, nonempty
+from klineage.agent_api import agent_function
 from klineage.backend import get_backend
 from klineage.contract import (
     BUNDLE_CONFIG,
@@ -125,6 +126,7 @@ class Kernel:
         return self.entry_point.split("::")[1]
 
     @classmethod
+    @agent_function
     def from_sources(
         cls,
         source_files: Mapping[str, str],
@@ -139,6 +141,7 @@ class Kernel:
         kernel.build(build_root, include_paths=include_paths)
         return kernel
 
+    @agent_function
     def build(
         self,
         build_root: Path = BUILD_DIRECTORY,
@@ -175,7 +178,9 @@ class Kernel:
             ).encode()
         ).hexdigest()
 
+    @agent_function
     def to_dict(self) -> dict[str, Any]:
+        """Serialize sources, problem, and validation; omit compiled runtime handles."""
         return {
             "name": self.name,
             "problem": self.problem.to_dict(),
@@ -184,7 +189,9 @@ class Kernel:
         }
 
     @classmethod
+    @agent_function
     def from_dict(cls, value: Mapping[str, Any]) -> Kernel:
+        """Restore serialized Kernel metadata without building or executing sources."""
         validation = value.get("validation")
         return cls(
             name=value["name"],

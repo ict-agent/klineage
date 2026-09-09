@@ -22,6 +22,7 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
 from klineage._utils import operation_id
+from klineage.agent_api import agent_function
 from klineage.backend import Backend, get_backend, platform_backend
 from klineage.contract import (
     BUNDLE_CONFIG,
@@ -72,7 +73,13 @@ DTYPE_ALIASES = {
 }
 
 
+@agent_function
 def read_source_tree(directory: Path, label: str) -> dict[str, str]:
+    """Read a complete source directory into relative-path → exact-text entries.
+
+    Reject symlinks, binary files, and escaping paths. Use label to identify the
+    bundle in errors. Pass the returned map to Kernel.from_sources.
+    """
     directory = directory.expanduser().absolute()
     if directory.is_symlink():
         raise StructuredOutputError(f"{label} cannot be a symbolic link")
@@ -165,7 +172,13 @@ def snapshot(work: Path, sources: Mapping[str, str]) -> str:
     return str(directory)
 
 
-def save_kernel(kernel: Kernel, workdir: Path):
+@agent_function
+def save_kernel(kernel: Kernel, workdir: Path) -> None:
+    """Write kernel.json in an existing workdir, replacing its prior metadata.
+
+    Serializes the Kernel's sources, problem, and validation; it does not reread
+    edited disk sources or compile. Reconstruct the Kernel after source edits.
+    """
     path = workdir / _KERNEL_FILE
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(
@@ -175,7 +188,13 @@ def save_kernel(kernel: Kernel, workdir: Path):
     temporary.replace(path)
 
 
+@agent_function
 def load_kernel(workdir: Path) -> Kernel:
+    """Restore kernel.json from a directory without compiling or running it.
+
+    Returns a Kernel with embedded sources and problem. Evaluation builds it in
+    a worker; call Kernel.build before direct execution in this process.
+    """
     from klineage.kernel import Kernel
 
     return Kernel.from_dict(

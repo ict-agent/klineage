@@ -10,21 +10,32 @@ from pathlib import Path
 
 import yaml
 
+from klineage.agent_api import agent_function
 from klineage.memory.skillcard import SkillCard
 
 SKILL_FILE = "SKILL.md"
 SKILL_MARKDOWN = re.compile(r"---\n(.*?)\n---\n\n(.*)", re.DOTALL)
 
 
+@agent_function
 def save_skill(card: SkillCard, path: str | os.PathLike[str]) -> Path:
-    """Write one SkillCard as Markdown."""
+    """Write four-field YAML frontmatter and the card's independent Markdown body.
+
+    Create parent directories, atomically replace path, and return its absolute
+    path. Keep SKILL.md outside submission/ and Kernel.source_files.
+    """
 
     header = yaml.safe_dump(card.to_metadata(), sort_keys=False, allow_unicode=True)
     return _write(path, f"---\n{header}---\n\n{card.body}\n")
 
 
+@agent_function
 def load_skill(path: str | os.PathLike[str]) -> SkillCard:
-    """Restore a SkillCard from YAML metadata and Markdown instructions."""
+    """Read a SKILL.md file with four metadata fields and an independent Markdown body.
+
+    Require skill_id, intent, preconditions, and scope in YAML frontmatter.
+    Return a SkillCard; malformed metadata or an empty body raises.
+    """
 
     text = Path(path).expanduser().read_text(encoding="utf-8")
     match = SKILL_MARKDOWN.fullmatch(text)

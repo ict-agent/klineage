@@ -40,9 +40,9 @@ Budget exhaustion does not prove that a kernel is naive.
 
 ## SkillCard format
 
-Write `SKILL.md` with `klineage.memory.save_skill(card, path)` and read it with
-`load_skill(path)`. YAML frontmatter contains exactly skill_id, intent,
-preconditions, and scope, matching SkillCard.to_metadata(). The independent body
+Use the registered `save_skill` and `load_skill` for SKILL.md; see AGENTS.md for
+their APIs. YAML frontmatter contains exactly skill_id, intent, preconditions,
+and scope. The independent body
 contains `# Overview`, `# Precondition`, `# Scope`, and `# Code Change Snippet`, with
 `## Before` and `## After` code blocks showing the forward optimization.
 SkillCard.to_dict() carries the four metadata fields plus body for inline handoffs
@@ -84,6 +84,6 @@ SKILL.md stays unchanged; measurements and source citations stay in evaluations/
 
 ## Handoff
 
-Pass this directory to the next Decompose or Profile. Retain each emitted SKILL.md
-path for Retrieve. Consume artifacts after the action succeeds and, when enabled,
+Pass this directory to the next Decompose or Apply. Retain each emitted SKILL.md
+path as Apply memory. Consume artifacts after the action succeeds and, when enabled,
 its verifier succeeds. Disabled verification does not disable required self-checks.

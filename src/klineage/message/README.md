@@ -11,12 +11,9 @@ With verification enabled, success also requires `Verify` to return `true`.
 | [Action](action.md) | Prompt and workdir | Action-specific files |
 | [Init](init.md) | Problem definition and expert repository | `kernel.json` |
 | [Decompose](decompose.md) | Kernel directory | `kernel.json`, `SKILL.md` for a removal |
-| [Profile](profile.md) | Kernel directory | `kernel.json` and NCU capture files |
-| [Retrieve](retrieve.md) | Profiled kernel and SkillCards | Selected `SKILL.md`, or no selection |
-| [Apply](apply.md) | Kernel and one SkillCard | `kernel.json` |
-| [CodeGen](code_gen.md) | Inline Kernel and one SkillCard | `kernel.json` |
+| [Apply](apply.md) | Kernel and supplied card or memory | `kernel.json`; selected `SKILL.md` when applicable |
 | [Verify](verify.md) | Producer prompt, response and artifacts | Boolean; permitted evidence updates |
-| [Workflow](workflow.md) | Problem and expert repository | Last profile directory |
+| [Workflow](workflow.md) | Problem and expert repository | Latest kernel |
 
 Paths below are relative to the action's `workdir`, unless marked absolute.
 Treat upstream directories as read-only. Preserve referenced directories and input
@@ -50,8 +47,8 @@ No separate `message.json`, `candidate.json`, or `report.md` is required.
 
 ## `kernel.json`
 
-Write with `save_kernel(kernel, workdir)`; read with `load_kernel(workdir)` from
-`klineage.harness.artifacts`. The file contains `Kernel.to_dict()`:
+Use the registered `save_kernel` and `load_kernel`; their APIs are in AGENTS.md.
+The file contains `Kernel.to_dict()`:
 
 | Field | Format and meaning |
 | --- | --- |
@@ -75,8 +72,8 @@ when present. Successful timing requires candidate latency. `accepted` is
 computed from the three gates. Changed code clears
 validation. Paired gate samples, ratios, and rejection reasons are recorded in
 eval-0001-stderr.log under evaluations/evaluate-*, outside kernel.json.
-Harness failures appear in process stderr. NCU diagnostics remain in
-the Profile action's evaluations/ncu-* directory and are not Kernel fields.
+Harness failures appear in process stderr. Counter diagnostics remain under
+evaluations/ncu-* in the calling agent's workdir and are not Kernel fields.
 
 ## Runtime skills
 
@@ -84,6 +81,13 @@ CodexRunner configures PYTHONPATH for the installed package and exposes message
 contracts at `.klineage/message/`. It exposes packaged instructions at
 `.agents/skills/{cuda,hip,ascendc,bench}/` in each workdir.
 Treat these links as read-only.
+The function catalog in workdir/AGENTS.md supplies registered import paths,
+signatures, arguments, results, and limitations. It covers profiling/retrieval,
+problem inspection/evaluation, repository staging, backend selection, and
+Kernel/SkillCard construction, building, and persistence. Call these Python
+functions directly. The agent still checks skill applicability and ranks bottlenecks.
+CodexRunner refreshes the catalog before every call while preserving other
+instructions, including those in an active nonempty AGENTS.override.md.
 The native skills [cuda](../skills/cuda/SKILL.md), [hip](../skills/hip/SKILL.md), and
 [ascendc](../skills/ascendc/SKILL.md) own their bundle formats and bindings;
 the [bench skill](../skills/bench/SKILL.md) owns harness usage and evidence paths.
@@ -93,8 +97,8 @@ their in-memory and inline JSON representations retain four metadata fields and 
 
 ## Runtime Kernel
 
-`Kernel.from_sources(source_files, problem, build_root=Path("build"))` builds a
-callable instance. `kernel(*inputs)` runs it; the callable evaluator accepts that
+`Kernel.from_sources` builds a callable instance; see the function catalog for its
+API. `kernel(*inputs)` runs it; the callable evaluator accepts that
 instance directly. Build language, entry_point and output_style come from config.toml.
 These derived attributes and the compiled function are not serialized.
 `load_kernel` / `Kernel.from_dict` restore source artifacts; call `build()` before

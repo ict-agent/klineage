@@ -15,6 +15,12 @@ class PromptTemplateTests(unittest.TestCase):
     def setUp(self):
         self.contexts = task_contexts()
 
+    def test_selection_converts_paths(self):
+        context = {**self.contexts["apply"], "skill": None}
+        prompt = render_prompt("apply", **context)
+        self.assertIn("Convert directory and card path strings to Path", prompt)
+        self.assertIn("SkillCard.from_dict", prompt)
+
     def test_task_values_stay_data(self):
         values = {
             "problem": '/tmp/问题 "quoted"\n{{ repository }}.json',
@@ -29,8 +35,8 @@ class PromptTemplateTests(unittest.TestCase):
         current = kernel().to_dict()
         inputs = current["problem"]["definition"]["inputs"]
         current["problem"]["definition"]["inputs"] = dict(reversed(inputs.items()))
-        prompt = render_prompt("profile", kernel=current, options={})
-        restored = prompt_inputs(prompt)["kernel"]
+        context = {**self.contexts["apply"], "current_kernel": current}
+        restored = prompt_inputs(render_prompt("apply", **context))["current_kernel"]
         self.assertEqual(
             list(restored["problem"]["definition"]["inputs"]),
             list(reversed(inputs)),
@@ -46,11 +52,8 @@ class PromptTemplateTests(unittest.TestCase):
                 f"verify_{name}": {}
                 for name in (
                     "init",
-                    "code_gen",
                     "decompose",
                     "apply",
-                    "profile",
-                    "retrieve",
                 )
             },
         }
@@ -201,19 +204,32 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertNotIn("signed 32-bit", conditions)
         self.assertIn("FP32", prompt.split("## Example configuration\n", 1)[1])
 
-    def test_codegen_state_contract(self):
-        prompt = render_prompt("code_gen", **self.contexts["code_gen"])
+    def test_apply_state_contract(self):
+        prompt = render_prompt("apply", **self.contexts["apply"])
 
         self.assertIn("preconditions", prompt)
         self.assertIn("actual code", prompt)
         self.assertIn("source_files", prompt)
+
+    def test_apply_selection_mode(self):
+        context = {**self.contexts["apply"], "skill": None}
+        prompt = render_prompt("apply", **context)
+        instructions = prompt.split("# Apply", 1)[0]
+        self.assertEqual(prompt_inputs(prompt), context)
+        self.assertIn("retrieve(current_kernel, memory", instructions)
+        self.assertIn("profile(current_kernel, Path.cwd())", instructions)
+        self.assertIn("no SKILL.md or submission/", instructions)
+
+        explicit = render_prompt("apply", **self.contexts["apply"])
+        self.assertNotIn(
+            "profile(current_kernel, Path.cwd())", explicit.split("# Apply", 1)[0]
+        )
 
     def test_native_backend_routing(self):
         from copy import deepcopy
 
         for language, platform in (("hip", "hygon"), ("ascendc", "ascend")):
             for action, field in (
-                ("code_gen", "current_kernel"),
                 ("apply", "current_kernel"),
                 ("decompose", "input_kernel"),
             ):
@@ -240,7 +256,7 @@ class PromptTemplateTests(unittest.TestCase):
 
     def test_template_names_cannot_escape_the_prompt_package(self):
         with self.assertRaises(ValueError):
-            render_prompt("../code_gen")
+            render_prompt("../apply")
 
 
 if __name__ == "__main__":

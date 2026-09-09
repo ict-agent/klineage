@@ -4,15 +4,9 @@ Extract accelerator optimization skills from expert kernels, then apply them usi
 measured bottlenecks and verified SkillCards.
 
 ```text
-problem + expert repository
-          |
-         Init
-          |
-    Decompose × N ---------> SkillCards
-          |                              |
-        Profile <---- Apply <---- Retrieve
-          |                        ^
-          +------------------------+
+problem + expert -> Init -> Decompose × N -> Apply × N
+                                |               ^
+                                +-- SkillCards -+
 ```
 
 Each action runs Codex. Native CUDA, Hygon HIP, and AscendC kernels connect to Python
@@ -31,8 +25,8 @@ Requires Python 3.12, uv, Codex, and the selected backend's toolchain and hardwa
 | AscendC | `ascendc` | CANN/bisheng, compatible PyTorch + torch_npu, Ascend NPU | NPU events |
 
 Nsight Compute provides CUDA counter profiling. Hygon and Ascend counter profiling
-is not implemented; Init, Decompose, Apply, CodeGen, and `init_memory` use the
-backend evaluator independently of Profile.
+is not implemented. Init, Decompose, `init_memory`, and Apply with a supplied card
+use the backend evaluator independently of counter profiling.
 
 ```bash
 uv venv --system-site-packages
@@ -74,11 +68,9 @@ experiment/
   init/kernel.json
   decompose/0/{kernel.json,SKILL.md}
   decompose/1/{kernel.json,SKILL.md}
-  profile/0/kernel.json
-  retrieve/0/SKILL.md
-  apply/0/kernel.json
-  profile/1/kernel.json
-  retrieve/1/SKILL.md
+  apply/0/{kernel.json,SKILL.md}
+  apply/0/evaluations/ncu-<id>/
+  apply/1/{kernel.json,SKILL.md}
   ...
 ```
 
@@ -90,17 +82,17 @@ The loop stops on that unchanged result without a card, or its run limit. Count
 completed removals by cards; retries and terminal checks add none. A limit does not
 prove naive status.
 
-Each Retrieve selects top-1 from eligible skills using the current profile,
-excluding previously applied skill IDs. Apply changes the kernel once; Profile
-captures fresh NCU measurements before the next retrieval. An accepted empty selection or the apply
-limit ends the loop. The result comes from the last profile directory; zero
-applies returns `profile/0/kernel.json`.
+Each Apply uses agent Python functions to retrieve eligible cards and profile the
+current kernel. It checks prerequisites against source, ranks measured bottlenecks,
+and applies top-1, excluding prior selections. An unchanged result without SKILL.md
+or the apply limit ends the loop. The result is the latest kernel; zero applies
+returns the final Decompose kernel.
 
 Workflow enables verification before each handoff by default. Exhausted stage
 failures stop the workflow. Even with verification disabled, Decompose handoffs
 reject missing kernels, changed problems, changed kernels without cards, and
 unchanged kernels with cards. Naive status still requires a source audit.
-The full Profile/Retrieve loop currently requires CUDA counter capture.
+Memory selection with eligible candidates currently requires CUDA counter capture.
 See [workflow.md](src/klineage/message/workflow.md) for every handoff.
 
 To build a skill memory, use `init_memory`:
@@ -125,7 +117,7 @@ skill_paths = init_memory(
 It runs Init and Decompose on CUDA, Hygon HIP, or AscendC with the same stop rules.
 Each successful step saves its card to `memory_dir/<unique-skill-directory>/SKILL.md`.
 Existing cards remain intact, including repeated skill IDs. The returned tuple contains this run's paths
-in removal order, suitable for Retrieve. Later failures preserve already saved cards.
+in removal order, suitable for Apply's memory input. Later failures preserve already saved cards.
 External verification defaults to disabled; the example enables it explicitly.
 Init and Decompose still perform their own checks.
 
@@ -137,22 +129,33 @@ prepare prompts; Codex writes the artifacts. Lowercase functions wrap `run()`.
 
 ```python
 from pathlib import Path
-from klineage.action import CodeGen
-from klineage.harness.artifacts import load_kernel
-from klineage.memory import load_skill
+from klineage.action import Apply
 
 step = Path("agent-workspace/experiment/decompose/0")
-action = CodeGen(
-    load_kernel(step), load_skill(step / "SKILL.md"),
-    workdir=Path("agent-workspace/code-gen"),
+action = Apply(
+    step, step / "SKILL.md",
+    workdir=Path("agent-workspace/apply"),
     enable_verifier=True,
 )
 action.run()
-# Read agent-workspace/code-gen/kernel.json.
+# Read agent-workspace/apply/kernel.json.
 ```
 
-Use a step containing a SKILL.md, not an unchanged terminal check. CodeGen applies
-one in-memory SkillCard. The workflow uses Apply directly for directory handoffs.
+Use a step containing SKILL.md. Omit the skill and pass `memory=Path("memory")`
+or a sequence of cards/paths to let Apply select an optimization. Its optional
+`exclude_skills` contains previously applied IDs.
+
+The function catalog in workdir/AGENTS.md documents profiling, retrieval,
+evaluation, repository staging, backend selection, and Kernel/SkillCard operations.
+`profile` captures counters; `retrieve` filters scope and exclusions. The agent
+still checks source prerequisites and ranks candidates.
+
+`@agent_function` from `klineage.agent_api` registers the original function's
+signature and docstring without wrapping it. For class methods, place it below
+`@classmethod`. These remain ordinary Python calls. CodexRunner refreshes the
+catalog before each call, preserving other instructions and updating an active
+nonempty AGENTS.override.md as well, following
+[Codex instruction discovery](https://learn.chatgpt.com/docs/agent-configuration/agents-md).
 
 Verification uses a separate Verify action returning exactly `true` or `false`;
 it does not verify itself. Each attempt keeps a unique Codex trace. Failed runs
@@ -177,7 +180,7 @@ ABI. `ABIValue` has `name`, `dtype`, `shape`, `description`.
 validation. The embedded definition supplies the reference; workload descriptors
 locate input data. Keep those input files accessible.
 
-`Kernel.from_sources(source_files, problem)` builds a callable instance.
+The registered `Kernel.from_sources` builds a callable instance.
 Use `kernel(*inputs)` or pass it to `CallableKernelEvaluator(runtime, timer=timer)`.
 Build settings come from config.toml; compiled handles stay in memory.
 `load_kernel()` restores sources without compiling. Call `build()` before direct
@@ -202,7 +205,7 @@ The [bench skill](src/klineage/skills/bench/SKILL.md) documents harness measurem
 CodexRunner links these skills into each workdir's
 `.agents/skills/`; treat these packaged instructions as read-only. They are separate
 from the optimization SkillCards extracted by Decompose.
-Python CodeGen uses the callable configured by config.toml under solution/.
+Python bundles retain the callable configured by config.toml under solution/.
 
 ## Verification and measurements
 
