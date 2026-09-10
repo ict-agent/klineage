@@ -11,7 +11,7 @@ class RunKind(StrEnum):
     INIT = "init"
     #: Removal of one optimization.
     DECOMPOSE = "decompose"
-    #: One independent or memory-guided optimization.
+    #: One full kernel optimization round, with optional skill memory.
     APPLY = "apply"
     #: Review of an action's result.
     VERIFY = "verify"
@@ -25,15 +25,6 @@ class RunKind(StrEnum):
     CODEX = "codex"
     #: Kernel correctness and timing evaluation.
     EVALUATE = "evaluate"
-
-
-class StepMode(StrEnum):
-    """Artifact requirements for an optimization step."""
-
-    #: A changed kernel must carry its selected or extracted SkillCard.
-    SKILL = "skill"
-    #: An independent optimization must not carry a SkillCard.
-    BASELINE = "baseline"
 
 
 #: Parent directory for automatically allocated workspaces.
@@ -64,6 +55,14 @@ BUILD_DIRECTORY = Path("build")
 EVALUATIONS_DIRECTORY = Path("evaluations")
 #: Workspace instruction files; a nonempty override takes precedence.
 AGENT_FILES = ("AGENTS.md", "AGENTS.override.md")
+#: Modules defining built-in agent functions beyond tools.profile.
+AGENT_MODULES = (
+    "klineage.backend",
+    "klineage.artifact.kernel",
+    "klineage.artifact.repository",
+    "klineage.harness.artifacts",
+    "klineage.harness.eval",
+)
 #: Start marker for generated agent function documentation.
 FUNCTION_START = "<!-- klineage:agent-functions:start -->"
 #: End marker for generated agent function documentation.
@@ -74,5 +73,5 @@ MAX_RETRIES = 3
 TIMEOUT = 3600
 #: Default maximum number of Decompose invocations.
 MAX_DECOMPOSE_STEPS = 15
-#: Default maximum number of Apply invocations.
+#: Default maximum number of Apply optimization rounds.
 MAX_APPLY_STEPS = 15

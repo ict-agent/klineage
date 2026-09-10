@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 from kernel_fixtures import kernel
 
+from klineage.artifact.kernel import Kernel
 from klineage.backend import BACKENDS, BackendKind, detect_backend, get_backend
-from klineage.kernel import Kernel
 
 
 class BackendTests(unittest.TestCase):

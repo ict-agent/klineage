@@ -11,9 +11,9 @@ from unittest.mock import Mock, patch
 
 from problem_fixtures import problem_spec
 
+from klineage.artifact.kernel import Kernel
 from klineage.harness.eval import EvaluationRuntime, ValidationResult, WorkerError
 from klineage.harness.timing import TimingPolicy
-from klineage.kernel import Kernel
 
 
 class EvalTransportTests(unittest.TestCase):

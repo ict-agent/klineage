@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import unittest
 from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,10 +16,11 @@ from unittest.mock import patch
 
 from problem_fixtures import problem_spec
 
+from klineage.artifact.kernel import Kernel
 from klineage.errors import ActionError
 from klineage.harness.eval import EvaluationRuntime
+from klineage.harness.profiling import ProfileOptions
 from klineage.harness.timing import ncu_command, parse_metrics
-from klineage.kernel import Kernel
 
 _LONG_HEADER = (
     "ID",
@@ -70,7 +72,7 @@ def csv_text(*rows):
 
 class ProfileCommandTests(unittest.TestCase):
     def test_target_only_command(self):
-        options = SimpleNamespace(set="full", sections=(), kernel_filter=None)
+        options = ProfileOptions(set="full")
 
         self.assertEqual(
             ncu_command(options, Path("/out/raw.csv"), Path("/out/report")),
@@ -101,7 +103,7 @@ class ProfileCommandTests(unittest.TestCase):
         )
 
     def test_sections_and_kernel_filter(self):
-        options = SimpleNamespace(
+        options = ProfileOptions(
             set="basic",
             sections=("LaunchStats", "Occupancy"),
             kernel_filter="Sobel.*",
@@ -113,7 +115,7 @@ class ProfileCommandTests(unittest.TestCase):
         self.assertIn(("--section", "Occupancy"), tuple(pairwise(command)))
         self.assertEqual(command[command.index("--kernel-name") + 1], "regex:Sobel.*")
 
-        options.kernel_filter = "regex:Sobel.*"
+        options = replace(options, kernel_filter="regex:Sobel.*")
         command = ncu_command(options, Path("/raw.csv"), Path("/report"))
         self.assertEqual(command[command.index("--kernel-name") + 1], "regex:Sobel.*")
 
@@ -226,9 +228,7 @@ class ProfileDriverTests(unittest.TestCase):
             source_files={"kernel.cu": artifact.read_text()},
         )
         self.runtime = EvaluationRuntime()
-        self.options = SimpleNamespace(
-            set="detailed", sections=(), kernel_filter=None, timeout_seconds=37
-        )
+        self.options = ProfileOptions(timeout_seconds=37)
         self.calls = []
 
     def run_profile(self, **kwargs):

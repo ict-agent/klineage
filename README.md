@@ -2,7 +2,7 @@
 
 KLineage extracts reusable optimization skills from expert accelerator kernels.
 Codex removes one optimization per Decompose step and saves it as `SKILL.md`.
-The full workflow then selects and applies skills using measured bottlenecks.
+The full workflow uses those skills to guide kernel optimization rounds.
 
 Supports CUDA, Hygon HIP, and AscendC.
 
@@ -34,7 +34,7 @@ uv run klineage-init-memory \
   --workdir agent-workspace/extract
 ```
 
-Run extraction followed by skill selection and application. Verification defaults
+Run extraction followed by kernel optimization rounds. Verification defaults
 to on; stdout is the final kernel as JSON.
 
 ```bash
@@ -65,15 +65,14 @@ uv run klineage-optimize \
   --workdir agent-workspace/baseline
 ```
 
-Baseline steps choose their own optimization without reading or mounting memory
-or producing SKILL.md. Changed kernels continue to the next step; an unchanged
-kernel or the step limit stops the run. An existing empty memory directory keeps
-skill selection enabled and produces an unchanged result when no card applies.
+Each Apply round can combine techniques and iterate on measured results. Memory
+provides optional guidance; an empty directory does not stop optimization. Apply
+emits the best validated kernel, without SKILL.md. An unchanged kernel ends the
+loop; `--max-apply-step` limits rounds.
 
 The input is a `kernel.json` file or its directory, with the complete problem and
-source bundle; a bare source directory is insufficient. In memory mode, Apply reads
-SKILL.md files through `.agents/skills/memory` and selects one optimization per step.
-Ranking memory candidates currently requires CUDA and Nsight Compute. Optimize
+source bundle; a bare source directory is insufficient. When supplied, memory is
+read through `.agents/skills/memory`. CUDA/NCU counter profiling is optional. Optimize
 enables verification by default and writes the final kernel as JSON to stdout.
 Every handoff preserves the problem and ordered input/output ABI, including when
 verification is disabled.

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from klineage.action.decompose import Decompose
 from klineage.action.init import Init
+from klineage.artifact.kernel import Kernel
 from klineage.constants import (
     MAX_DECOMPOSE_STEPS,
     MAX_RETRIES,
@@ -14,12 +15,10 @@ from klineage.constants import (
     SUBMISSION_DIRECTORY,
     TIMEOUT,
     RunKind,
-    StepMode,
 )
 from klineage.contract import ValueRole
 from klineage.errors import StructuredOutputError
 from klineage.harness.artifacts import load_kernel
-from klineage.kernel import Kernel
 from klineage.memory.skillcard import SkillCard
 from klineage.memory.storage import load_skill
 
@@ -95,9 +94,8 @@ def read_step(
     before: Kernel,
     workdir: Path,
     stage: RunKind,
-    mode: StepMode = StepMode.SKILL,
 ) -> tuple[Kernel, SkillCard | None]:
-    """Validate the problem, ABI, and mode-specific card contract."""
+    """Validate the problem, ABI, and action-specific card contract."""
 
     label = stage.value.capitalize()
     after = load_kernel(workdir)
@@ -128,9 +126,9 @@ def read_step(
             )
         return after, None
 
-    if mode is StepMode.BASELINE:
+    if stage is RunKind.APPLY:
         if has_card:
-            raise StructuredOutputError(f"{label} baseline must not emit {SKILL_FILE}")
+            raise StructuredOutputError(f"{label} must not emit {SKILL_FILE}")
         return after, None
 
     if not skill_path.is_file():

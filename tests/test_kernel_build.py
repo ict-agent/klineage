@@ -5,8 +5,8 @@ from pathlib import Path
 
 from problem_fixtures import io_problem
 
+from klineage.artifact.kernel import Kernel
 from klineage.contract import ABIValue, OutputStyle
-from klineage.kernel import Kernel
 
 SOURCES = {
     "config.toml": """[solution]

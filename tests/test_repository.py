@@ -3,7 +3,7 @@ import unittest
 from contextlib import chdir
 from pathlib import Path
 
-from klineage.repository import repository_ignore, stage_repository
+from klineage.artifact.repository import repository_ignore, stage_repository
 
 
 class RepositoryTests(unittest.TestCase):

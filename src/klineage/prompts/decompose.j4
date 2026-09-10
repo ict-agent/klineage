@@ -40,8 +40,8 @@ thread mapping, and instructions are not prerequisites for HIP or AscendC cards.
 # Procedure
 
 1. Read the skills and message contracts above. Load input_kernel as a Kernel
-   named input: use load_kernel for a directory or klineage.kernel.Kernel.from_dict
-   for an inline dictionary. Inspect the complete
+   named input: use load_kernel for a directory or
+   klineage.artifact.kernel.Kernel.from_dict for an inline dictionary. Inspect the complete
    bundle, config, ABI, launch path, and device code. Identify computation, data
    movement, layouts, synchronization, and scheduling patterns.
    If the input is already naive, save it unchanged to kernel.json and emit no

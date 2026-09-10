@@ -2,8 +2,8 @@
 
 from collections.abc import Sequence
 
+from klineage.artifact.kernel import Kernel
 from klineage.contract import ProblemSpec
-from klineage.kernel import Kernel
 from klineage.memory.skillcard import SkillCard
 from klineage.utils import string_tuple
 

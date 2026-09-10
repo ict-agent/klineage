@@ -1,21 +1,22 @@
 # Action messages
 
-Domain actions render task parameters into Jinja prompts and write into their `workdir`.
-Action and Verify also accept plain prompts.
-The workflow passes that directory's absolute path to the next action.
+Actions exchange information through files. A producer writes artifacts into its
+`workdir`; the caller passes that directory to the next action, which reads the
+named files. Each action's Markdown contract defines its accepted inputs, output
+directory layout, artifact meanings, and handoff rules.
+
+| Contract | Accepted input | Output |
+| --- | --- | --- |
+| [Action](action.md) | Prompt and workdir | Runner records and action-specific artifacts |
+| [Init](init.md) | Problem definition and expert repository | `kernel.json` and standalone source bundle |
+| [Decompose](decompose.md) | Kernel directory | `kernel.json`; `SKILL.md` for removals |
+| [Apply](apply.md) | Kernel and optional memory directory | `kernel.json` after an optimization round |
+| [Verify](verify.md) | Producer's generation record and artifacts | `true`/`false`; permitted artifact updates |
+
+[Workflow](workflow.md) describes CLI orchestration, stage directories, and stop rules.
+
 Consume artifacts only after `run()` succeeds; file existence alone is insufficient.
 With verification enabled, success also requires `Verify` to return `true`.
-
-| Contract | Input | Downstream artifact |
-| --- | --- | --- |
-| [Action](action.md) | Prompt and workdir | Action-specific files |
-| [Init](init.md) | Problem definition and expert repository | `kernel.json` |
-| [Decompose](decompose.md) | Kernel directory | `kernel.json`, `SKILL.md` for a removal |
-| [Apply](apply.md) | Kernel and optional memory directory | `kernel.json`; selected `SKILL.md` when applicable |
-| [Verify](verify.md) | Producer prompt, response and artifacts | Boolean; permitted evidence updates |
-| [Workflow CLI](workflow.md) | Problem and expert repository | Latest kernel JSON on stdout |
-| [Memory CLI](workflow.md#memory-initialization) | Problem, expert repository and memory directory | Saved skill paths as JSON on stdout |
-| [Optimize CLI](workflow.md#optimization) | Starting kernel and optional memory directory | Latest kernel JSON on stdout |
 
 Paths below are relative to the action's `workdir`, unless marked absolute.
 Treat upstream directories as read-only. Preserve referenced directories and input
@@ -42,9 +43,8 @@ Artifact filenames are fixed; optional directories appear only when used.
 Kernel source_files contains the complete source bundle. Generated bundles use
 submission/. The subprocess harness rebuilds from source_files, so unchanged
 kernels need no copied submission directory.
-Builds reuse `build/source-<sha256>/` for identical source maps; modified snapshots
-are rejected. Measurements retain separate records for each evaluation.
-Final responses remain in runner records; directory consumers read the named artifacts.
+Measurements retain separate records for each evaluation. Final responses remain
+in runner records; downstream actions consume the files named by their contracts.
 No separate `message.json`, `candidate.json`, or `report.md` is required.
 
 ## `kernel.json`
@@ -65,6 +65,9 @@ Workload object (`uuid`, `axes`, `inputs`), without its surrounding Trace record
 Preserve order, dtypes, axis bindings and input descriptors. File-backed workload
 inputs carry absolute paths, resolved during inspection.
 `Kernel.fingerprint` is computed; it is not a serialized Kernel field.
+Compiled functions are not serialized. `load_kernel` restores sources without
+compiling; call `build()` before direct execution. The harness builds restored
+kernels in its worker.
 
 Validation fields are `compile_passed`, `correctness_passed`, `profile_passed`,
 `latency_ms`, and `reference_latency_ms`. Latencies are measured medians in ms:
@@ -77,35 +80,11 @@ eval-0001-stderr.log under evaluations/evaluate-*, outside kernel.json.
 Harness failures appear in process stderr. Counter diagnostics remain under
 evaluations/ncu-* in the calling agent's workdir and are not Kernel fields.
 
-## Runtime skills
+## Implementation references
 
-CodexRunner configures PYTHONPATH for the installed package and exposes message
-contracts at `.klineage/message/`. It exposes packaged instructions at
-`.agents/skills/{cuda,hip,ascendc,bench}/` in each workdir.
-Treat these links and their source directories as read-only.
-When supplied, Apply mounts its memory directory at `.agents/skills/memory`.
-Only in that mode, enumerate and read memory SKILL.md files explicitly; custom
-SkillCard metadata need not appear in the native skill index. Keep that mount
-read-only. Packaged runtime skills are not optimization candidates.
-The function catalog in workdir/AGENTS.md supplies registered import paths,
-signatures, arguments, results, and limitations. It covers profiling,
-problem inspection/evaluation, repository staging, backend selection, source loading,
-and kernel building/persistence. Call these Python
-functions directly. The agent still checks skill applicability and ranks bottlenecks.
-CodexRunner refreshes the catalog before every call while preserving other
-instructions, including those in an active nonempty AGENTS.override.md.
-The native skills [cuda](../skills/cuda/SKILL.md), [hip](../skills/hip/SKILL.md), and
-[ascendc](../skills/ascendc/SKILL.md) own their bundle formats and bindings;
-the [bench skill](../skills/bench/SKILL.md) owns harness usage and evidence paths.
-These runtime skills are separate from optimization SkillCards emitted as
-SKILL.md. Optimization cards use YAML frontmatter and Markdown instructions;
-their in-memory and inline JSON representations retain four metadata fields and body.
-
-## Runtime Kernel
-
-`Kernel.from_sources` builds a callable instance. `kernel(*inputs)` runs it;
-the callable evaluator accepts that
-instance directly. Build language, entry_point and output_style come from config.toml.
-These derived attributes and the compiled function are not serialized.
-`load_kernel` / `Kernel.from_dict` restore source artifacts; call `build()` before
-direct execution. The subprocess harness builds restored kernels in its worker.
+CodexRunner exposes these contracts at `.klineage/message/` and packaged skills at
+`.agents/skills/{cuda,hip,ascendc,bench}/`; keep those links read-only.
+[CUDA](../skills/cuda/SKILL.md), [HIP](../skills/hip/SKILL.md), and
+[AscendC](../skills/ascendc/SKILL.md) define native bundles and bindings.
+[Bench](../skills/bench/SKILL.md) defines evaluation procedures and evidence.
+Read workdir/AGENTS.md for registered Python functions and their import paths.

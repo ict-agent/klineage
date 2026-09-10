@@ -45,7 +45,6 @@ YAML frontmatter contains exactly skill_id, intent, preconditions,
 and scope. The independent body
 contains `# Overview`, `# Precondition`, `# Scope`, and `# Code Change Snippet`, with
 `## Before` and `## After` code blocks showing the forward optimization.
-SkillCard.to_dict() carries the four metadata fields plus body for inline handoffs.
 Keep SKILL.md outside submission/ and Kernel.source_files.
 
 | Field | Format |

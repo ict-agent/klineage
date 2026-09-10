@@ -1,53 +1,51 @@
 {% set use_memory = memory is not none and memory | trim != "" %}
 Verify kernel.json against current_kernel in the generation record. Load the input
-Kernel from its directory or inline dictionary. Preserve upstream files and candidate
-sources.
+Kernel from its directory or inline dictionary. Keep this fixed round input as the
+reference; preserve upstream files and candidate sources. Reject an output SKILL.md.
 
 {% if use_memory %}
 Read memory and exclude_skills from that record. Memory is the absolute
-.agents/skills/memory mount. Enumerate and read its SKILL.md files; custom SkillCard
-metadata need not appear in the native skill index. Packaged bench/backend skills
-are not optimization candidates. Preserve the mount, its source memory, and cards.
+.agents/skills/memory mount. Enumerate and read its SKILL.md files; custom metadata
+need not appear in the native skill index. Preserve the mount and its source memory.
+Packaged bench/backend skills are runtime instructions, not reference cards.
 
-Recompute candidates using klineage.agent_tools.retrieve with Path(memory) and the
-original exclusions. This filters scope and excluded IDs only; check prerequisites
-and existing mechanisms against the input source. If candidates existed, inspect the
-generation's actual profile request, result, metrics, and report. Require matching
-kernel fingerprint/problem and source-grounded ranking. Missing, stale, or unsupported
-measurements mean false.
-
-- With SKILL.md, require exactly one unchanged card from those candidates. Reject
-  excluded or inapplicable cards, invented recipes, and unsupported ranking claims.
-- Without SKILL.md, require the exact unchanged input, including validation, and no
-  submission/. Accept only if no candidate applies, with reasons for every rejection.
-  Finish without remeasurement or new validation.
-
-Audit the selected card's scope, preconditions, intent, and body against the input
-and final implementation: types, layout/contiguity and parallel ownership, storage
-placement, pipeline stages/ordering, and hardware features.
-{% else %}
-Reject SKILL.md. For a changed kernel, require exactly one independently chosen
-optimization. Check its stated bottleneck and dependencies against actual source
-and target hardware. Counter profiling is optional; correctness and paired
-performance measurements are required.
-
-For an unchanged result, require the exact input, including validation, and no
-submission/. Audit actual attempts and source/measurement evidence that no proposed
-optimization passed. A tool failure or exhausted budget alone is insufficient.
-Finish without remeasurement or new validation.
+Use klineage.tools.retrieve with Path(memory) and the exclusions to inspect
+references cited by the generation. Scope filtering does not check source prerequisites.
+Audit each referenced technique against the working state where it was introduced,
+including preceding transformations. Multiple references, adaptations, and independent
+source-guided optimizations are valid. An empty reference set does not establish that
+optimization was exhausted; no copied card or separate manifest is required.
 {% endif %}
 
-For an application, require the complete problem and ABI to match the input and
-submission/ to match source_files. Reject additional unrelated optimizations.
+Audit the round's actual trial evidence. For each retained comparison, the evaluation
+request must contain the fixed round input as reference and the tested candidate's
+exact source map. Require accepted correctness/performance results and comparable
+workload/timing policy. Check that the final artifact is the best validated candidate
+supported by those comparisons, not a later regression or unmeasured intermediate.
+Acceptance alone permits a small regression; a changed output must show measured
+reference_latency_ms / latency_ms greater than 1. No claimed improvement may depend
+on switching to an intermediate reference or inventing measurements.
+
+For unchanged output, require the exact input, including name and validation, and
+no submission/. Audit actual attempts and evidence that no validated improvement
+was reached. Missing evaluation tools or required measurements mean false. Finish
+without remeasurement or new validation for an accepted unchanged result.
+
+For changed output, require the complete problem and ordered ABI to match the input
+and submission/ to match source_files. Audit the combined optimization mechanisms,
+their prerequisites, and their interactions at source locations. Multiple techniques
+are expected when useful; do not impose a transformation or reference-card count.
+Counter profiling is optional on CUDA with NCU. If cited, match its request to the
+profiled trial; reject fabricated or stale counter claims. Other backends need no
+counter capture.
 {% include "backend.j4" %}
-Audit the selected backend's bundle; for Python, check the configured callable and
-output convention. Confirm the intended mechanism and preserved unrelated behavior
-at actual source locations.
+Audit the selected backend's bundle; for Python, check its configured callable and
+output convention.
 
 Use .agents/skills/bench/SKILL.md and klineage.harness.evaluate(candidate, workdir,
 reference=current_kernel). Require ValidationResult.accepted, including the paired
-performance gate. Record measurements and source citations under evaluations/ and
-attach only measured validation to kernel.json. Missing evidence or unavailable tools
-mean false; do not fabricate speedups or passed checks.
+performance gate, and a measured ratio greater than 1 against the fixed round input.
+Record measurements and source citations under evaluations/ and attach only measured
+validation to kernel.json. Do not fabricate speedups or passed checks.
 
 {% include "message/verify.md" %}

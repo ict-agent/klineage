@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import os
 import re
@@ -12,7 +11,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, get_args
 
-from klineage.agent_api import write_agent_docs
 from klineage.backend import BACKENDS
 from klineage.constants import (
     MEMORY_DIRECTORY,
@@ -22,6 +20,7 @@ from klineage.constants import (
     RunKind,
 )
 from klineage.harness.artifacts import stop_process
+from klineage.tools import write_agent_docs
 from klineage.utils import operation_id
 
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
@@ -121,8 +120,6 @@ class CodexRunner:
                 "only letters, digits, '.', '_' or '-' (maximum 128 characters)"
             )
 
-        # Importing the tool module registers its decorated functions.
-        importlib.import_module("klineage.agent_tools")
         write_agent_docs(self.work_dir)
 
         run_dir = self.trace_root / resolved_run_id

@@ -1,9 +1,9 @@
 # Workflow
 
-`klineage-workflow` runs Init, Decompose, then repeated Apply. Memory selection with
-eligible candidates requires CUDA counter capture. `klineage-init-memory` runs
-only Init and Decompose and supports CUDA, Hygon HIP, and AscendC.
-`klineage-optimize` runs repeated Apply from an existing kernel, with optional memory.
+`klineage-workflow` runs Init, Decompose, then Apply optimization rounds.
+`klineage-init-memory` runs only Init and Decompose.
+`klineage-optimize` runs Apply rounds from an existing kernel, with optional memory.
+All support CUDA, Hygon HIP, and AscendC; optional counter profiling requires CUDA/NCU.
 
 [Shared message contract](README.md). Workflow orchestrates actions; it is not an
 Action subclass and does not emit a separate LLM message.
@@ -23,7 +23,7 @@ Run `uv run klineage-workflow` or `uv run klineage-init-memory` with:
 | `--max-retries` | Retries after the initial attempt; 3 |
 | `--verifier` / `--no-verifier` | External verification; enabled for workflow, disabled for memory initialization |
 
-Workflow additionally accepts `--max-apply-step`, a nonnegative Apply invocation limit
+Workflow additionally accepts `--max-apply-step`, a nonnegative optimization round limit
 defaulting to 15. Memory initialization requires `--memory-dir`.
 Disabling verification preserves action self-checks and deterministic handoff checks.
 
@@ -45,10 +45,9 @@ Module entry points are `python -m klineage.cli.workflow` and
   memory/<i>/
     SKILL.md                   # Collected Decompose card
   apply/<j>/
-    kernel.json                # Result of that one selected skill
-    SKILL.md                   # Selected unchanged card, absent for empty selection
+    kernel.json                # Best validated kernel from this round
     submission/
-    evaluations/ncu-<id>/
+    evaluations/               # Trial measurements and optional profiles
     .agents/skills/memory       # Mounted memory directory
 ```
 
@@ -63,7 +62,7 @@ contract. Loop indices start at zero; only executed stages exist.
 | Decompose i | Decompose i+1 | `decompose/i/`; read `kernel.json` |
 | Final Decompose | Apply 0 | Final decomposition directory |
 | All Decompose steps | Each Apply | Cards collected in `<workdir>/memory/`, mounted into each Apply |
-| Apply j | Apply j+1 | Current kernel directory, same memory, prior selected IDs excluded |
+| Apply j | Apply j+1 | Current kernel directory and the same optional memory |
 
 Decompose stops when an accepted invocation preserves the naive input and emits
 no SKILL.md, or at its invocation limit. An unchanged terminal check consumes one
@@ -79,18 +78,18 @@ an unchanged kernel must preserve its name and have no SKILL.md or submission/.
 These checks also run with verification
 disabled. They establish artifact consistency, not naive status or correctness.
 
-Workflow always uses the collected memory directory, even when empty. Apply calls
-`klineage.agent_tools.retrieve` to filter declared scope and excluded IDs.
-If candidates exist, it calls `profile` for fresh counters, checks textual
-prerequisites and existing mechanisms, then selects and applies top-1.
-Both are ordinary Python calls.
+Workflow supplies the collected memory directory, even when empty. Within a round,
+Apply may combine techniques, adapt relevant recipes, and iterate on measured
+results. It checks prerequisites against each current implementation. Memory is
+guidance; an empty directory or no applicable recipe does not end the round.
+Prior recipe use is not automatically excluded from later rounds.
 
 An unchanged kernel ends the apply loop only with its name and validation preserved
-and no SKILL.md or submission/. A changed kernel requires an unchanged card from
-memory whose ID was not excluded. Handoffs preserve the problem and ordered ABI,
-including when verification is disabled. A missing or unsupported profile is an
-error, not an empty selection. The limit counts Apply invocations, including the
-terminal check; retries stay within an invocation. Stage failures stop the workflow.
+and no SKILL.md or submission/. Changed kernels continue the loop without a card.
+Handoffs preserve the problem and ordered ABI, including when verification is
+disabled. Each round self-checks with its fixed input as the paired reference and
+returns its best validated kernel. Counter profiling is optional. The limit counts
+rounds, including an unchanged round; retries stay within a round. Failures propagate.
 
 ## Result
 
@@ -98,7 +97,7 @@ terminal check; retries stay within an invocation. Stage failures stop the workf
 including an unchanged terminal Apply result when present. With zero applies,
 it returns the final Decompose kernel. The Python function returns that Kernel.
 Profiling and measurement evidence stays in the Apply workdir's evaluations/.
-No root-level kernel or historical-best selection is produced.
+No root-level kernel is produced; selection among trials happens inside each round.
 
 ## Memory initialization
 
@@ -119,19 +118,19 @@ Run `uv run klineage-optimize` with required `--start_kernel` and `--workdir`.
 Start with a `kernel.json` file or its directory, containing the complete problem
 and source bundle. Preserve referenced workload files. The workdir must not exist.
 
-Omit `--memory_dir`, or pass a blank value, for baseline optimization. Each Apply
-independently chooses an optimization and emits no SKILL.md. Changed kernels continue
+Omit `--memory_dir`, or pass a blank value, for independent baseline rounds.
+Apply emits no SKILL.md in either mode. Changed kernels continue
 the loop; an evidence-backed unchanged result stops it. Both preserve the problem and
 ordered ABI; terminal results also preserve name/validation and have no submission/.
 Counter profiling is optional; changed kernels require paired self-checks.
 
-With `--memory_dir`, use the same memory selection and handoffs as workflow. Memory
+With `--memory_dir`, use the same memory guidance and handoffs as workflow. Memory
 contains SKILL.md files and is mounted at each Apply workdir's `.agents/skills/memory`;
-treat it as read-only. The workdir must be outside memory. An existing empty memory
-directory produces an unchanged terminal result; it does not enable baseline mode.
+treat it as read-only. The workdir must be outside memory. An existing empty directory
+is mounted but supplies no recipes; optimization continues from source analysis.
 `--start-kernel` and `--memory-dir` are equivalent flag spellings.
 
-`--max-apply-step` limits invocations, defaults to 15, and includes terminal checks.
+`--max-apply-step` limits rounds, defaults to 15, and includes unchanged rounds.
 Verification defaults to on;
 `--verifier` / `--no-verifier`, `--timeout`, and `--max-retries` behave as above.
 Stdout contains the latest kernel as JSON; zero steps preserves the input.

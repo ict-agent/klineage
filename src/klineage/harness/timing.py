@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from klineage.backend import Backend
-    from klineage.profiling import ProfileOptions
+    from klineage.harness.profiling import ProfileOptions
 
 
 _BenchmarkCallable = Callable[..., Sequence[float]]

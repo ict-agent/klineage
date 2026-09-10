@@ -12,9 +12,9 @@ from unittest.mock import patch
 
 from problem_fixtures import problem_spec
 
+from klineage.artifact.kernel import Kernel
 from klineage.contract import OutputStyle
 from klineage.harness.artifacts import BundleLoader
-from klineage.kernel import Kernel
 
 _CONFIG = """[solution]
 name = "example"

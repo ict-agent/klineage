@@ -11,7 +11,6 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from klineage.agent_api import agent_function
 from klineage.backend import get_backend
 from klineage.constants import BUILD_DIRECTORY, BUNDLE_CONFIG, BUNDLE_SOLUTION
 from klineage.contract import (
@@ -20,6 +19,7 @@ from klineage.contract import (
     relative_source_path,
 )
 from klineage.harness.eval import ValidationResult
+from klineage.tools import agent_function
 from klineage.utils import mapping, nonempty
 
 

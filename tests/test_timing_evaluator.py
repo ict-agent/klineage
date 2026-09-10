@@ -13,6 +13,7 @@ from unittest.mock import Mock
 
 from problem_fixtures import io_problem
 
+from klineage.artifact.kernel import Kernel
 from klineage.contract import ABIValue
 from klineage.harness.eval import (
     CallableKernelEvaluator,
@@ -25,7 +26,6 @@ from klineage.harness.timing import (
     TimingResult,
     verify_performance,
 )
-from klineage.kernel import Kernel
 
 
 def timing_result(latency_ms=1.0, *, samples=None, backend="cupti") -> TimingResult:

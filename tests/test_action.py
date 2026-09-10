@@ -194,30 +194,44 @@ class ActionRunTests(unittest.TestCase):
 
 class ImportTests(unittest.TestCase):
     def test_import_without_gpu_libs(self):
-        subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                """
+        script = """
+import importlib
 import sys
 class NoGpuImports:
     def find_spec(self, fullname, path=None, target=None):
         if fullname.split('.')[0] in {'torch', 'torch_npu', 'flashinfer', 'cupti'}:
             raise AssertionError('unexpected GPU dependency: ' + fullname)
 sys.meta_path.insert(0, NoGpuImports())
+importlib.import_module(sys.argv[1])
+from klineage.tools import function_docs
+catalog = {
+    line.removeprefix('### klineage.')
+    for line in function_docs().splitlines()
+    if line.startswith('### klineage.')
+}
+assert len(catalog) == 11, catalog
+assert {
+    'tools.profile',
+    'artifact.kernel.Kernel.from_sources',
+    'artifact.kernel.Kernel.build',
+    'artifact.repository.stage_repository',
+} <= catalog, catalog
 from klineage.action import Action, Verify
 from klineage.cli.init_memory import init_memory
 from klineage.cli.workflow import workflow
-from klineage.agent_api import function_docs
-from klineage.agent_tools import profile, retrieve
+from klineage.tools import profile, retrieve
 from klineage.harness import evaluate
 from klineage.harness.artifacts import BundleLoader
-from klineage.kernel import Kernel
-assert 'klineage.agent_tools.profile' in function_docs()
-""",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
+from klineage.artifact import Kernel, stage_repository
+from klineage.harness.profiling import ProfileOptions
+"""
+        for first in ("klineage.tools", "klineage.artifact.kernel"):
+            with self.subTest(first=first):
+                result = subprocess.run(
+                    [sys.executable, "-c", script, first],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)

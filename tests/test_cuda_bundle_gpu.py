@@ -7,9 +7,9 @@ from dataclasses import replace
 from problem_fixtures import io_problem
 from test_cuda_bundle import BundleCase
 
+from klineage.artifact.kernel import Kernel
 from klineage.harness.artifacts import read_source_tree
 from klineage.harness.codex_runner import SKILL_ROOT
-from klineage.kernel import Kernel
 
 RUN_CUDA = os.environ.get("KLINEAGE_CUDA_TESTS") == "1"
 SIZE = 1027

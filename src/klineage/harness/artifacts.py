@@ -21,7 +21,6 @@ from tempfile import TemporaryDirectory
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, TypeGuard
 
-from klineage.agent_api import agent_function
 from klineage.backend import Backend, get_backend, platform_backend
 from klineage.constants import BUNDLE_CONFIG, BUNDLE_SOLUTION, KERNEL_FILE
 from klineage.contract import (
@@ -32,11 +31,12 @@ from klineage.contract import (
     relative_source_path,
 )
 from klineage.errors import StructuredOutputError
+from klineage.tools import agent_function
 
 if TYPE_CHECKING:
     import torch
 
-    from klineage.kernel import Kernel
+    from klineage.artifact.kernel import Kernel
 
 
 _MAX_SOURCE_BYTES = 16 * 1024 * 1024
@@ -192,7 +192,7 @@ def load_kernel(workdir: Path) -> Kernel:
     Returns a Kernel with embedded sources and problem. Evaluation builds it in
     a worker; call Kernel.build before direct execution in this process.
     """
-    from klineage.kernel import Kernel
+    from klineage.artifact.kernel import Kernel
 
     return Kernel.from_dict(
         json.loads((workdir / KERNEL_FILE).read_text(encoding="utf-8"))

@@ -5,7 +5,7 @@ import unittest
 from problem_fixtures import problem_spec
 
 from klineage import contract
-from klineage.kernel import Kernel
+from klineage.artifact.kernel import Kernel
 
 _CONFIG = """[solution]
 name = "gemm"

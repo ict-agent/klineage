@@ -9,7 +9,7 @@ from problem_fixtures import problem_spec
 from prompt_fixtures import prompt_inputs
 
 from klineage.action import Apply, Decompose, Init
-from klineage.kernel import Kernel
+from klineage.artifact.kernel import Kernel
 from klineage.memory import (
     Scope,
     SkillCard,

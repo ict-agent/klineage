@@ -111,7 +111,7 @@ With the inspected `problem`:
 from pathlib import Path
 
 from klineage.harness.artifacts import read_source_tree, save_kernel
-from klineage.kernel import Kernel
+from klineage.artifact.kernel import Kernel
 
 source_files = read_source_tree(Path.cwd() / "submission", "candidate")
 candidate = Kernel.from_sources(

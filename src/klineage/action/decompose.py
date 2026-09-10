@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from klineage.action.action import Action
+from klineage.artifact.kernel import Kernel
 from klineage.constants import MAX_RETRIES, TIMEOUT, RunKind
-from klineage.kernel import Kernel
 from klineage.prompts import render_prompt
 from klineage.utils import new_workdir
 

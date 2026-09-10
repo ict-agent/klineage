@@ -12,7 +12,7 @@ from klineage.cli.common import read_step
 from klineage.cli.init_memory import init_memory
 from klineage.cli.optimize import optimize
 from klineage.cli.workflow import workflow
-from klineage.constants import RunKind, StepMode
+from klineage.constants import RunKind
 from klineage.contract import ValueRole
 from klineage.errors import StructuredOutputError, ValidationGateError
 from klineage.harness.artifacts import load_kernel, save_kernel
@@ -95,45 +95,15 @@ class WorkflowTests(unittest.TestCase):
             index = int(runner.work_dir.name)
             if "memory" not in data:
                 self.assertFalse(memory.exists())
-                if index != self.empty_at:
-                    current = replace(
-                        current,
-                        source_files={
-                            "kernel.cu": current.source_files["kernel.cu"]
-                            + f" // baseline-{index}"
-                        },
-                        validation=None,
-                    )
-                save_kernel(current, runner.work_dir)
-                return SimpleNamespace(final_message="generated")
-
-            self.assertEqual(data["memory"], str(memory))
-            self.assertTrue(memory.is_dir())
-            choices = []
-            for path in sorted(memory.rglob("SKILL.md")):
-                card = load_skill(path)
-                if card.skill_id in data.get("exclude_skills", ()):
-                    continue
-                index_in_memory = next(
-                    i
-                    for i, item in enumerate(self.cards)
-                    if item.skill_id == card.skill_id
-                )
-                if (
-                    index_in_memory
-                    and self.cards[index_in_memory - 1].skill_id
-                    not in current.source_files["kernel.cu"]
-                ):
-                    continue
-                choices.append(card)
-            if choices and index != self.empty_at:
-                card = choices[0]
-                save_skill(card, runner.work_dir / "SKILL.md")
+            else:
+                self.assertEqual(data["memory"], str(memory))
+                self.assertTrue(memory.is_dir())
+            if index != self.empty_at:
                 current = replace(
                     current,
                     source_files={
                         "kernel.cu": current.source_files["kernel.cu"]
-                        + f" // {card.skill_id}"
+                        + f" // round-{index}"
                     },
                     validation=None,
                 )
@@ -317,10 +287,10 @@ class WorkflowTests(unittest.TestCase):
                 "apply/1",
             ],
         )
-        self.assertTrue(result.source_files["kernel.cu"].endswith(" // tile // mma"))
+        self.assertTrue(
+            result.source_files["kernel.cu"].endswith(" // round-0 // round-1")
+        )
         self.assertEqual(result, load_kernel(self.work / "apply/1"))
-        self.assertFalse((self.work / "profile").exists())
-        self.assertFalse((self.work / "retrieve").exists())
         self.assertTrue(all(event[3] == 42 for event in self.events))
         data = {stage: value for stage, _, value, _ in self.events}
         self.assertEqual(data["decompose/0"]["input_kernel"], str(self.work / "init"))
@@ -331,7 +301,7 @@ class WorkflowTests(unittest.TestCase):
             data["apply/0"]["current_kernel"], str(self.work / "decompose/1")
         )
         self.assertEqual(data["apply/1"]["current_kernel"], str(self.work / "apply/0"))
-        self.assertEqual(data["apply/1"]["exclude_skills"], ["tile"])
+        self.assertEqual(data["apply/1"]["exclude_skills"], [])
         self.assertEqual(
             data["apply/1"]["memory"],
             str(self.work / "apply/1/.agents/skills/memory"),
@@ -343,6 +313,7 @@ class WorkflowTests(unittest.TestCase):
             card = load_skill(self.work / f"decompose/{step}/SKILL.md")
             self.assertEqual(card, self.cards[1 - step])
             self.assertEqual(load_skill(self.work / f"memory/{step}/SKILL.md"), card)
+            self.assertFalse((self.work / f"apply/{step}/SKILL.md").exists())
 
     def test_complete_stops_decompose(self):
         result = self.run_workflow(max_decompose_step=5, max_apply_step=0)
@@ -365,7 +336,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_apply_budget(self):
         result = self.run_workflow(max_apply_step=1)
-        self.assertTrue(result.source_files["kernel.cu"].endswith(" // tile"))
+        self.assertTrue(result.source_files["kernel.cu"].endswith(" // round-0"))
         self.assertEqual(self.events[-1][0], "apply/0")
         self.assertFalse((self.work / "apply/1").exists())
 
@@ -400,7 +371,7 @@ class WorkflowTests(unittest.TestCase):
             ],
         )
 
-    def test_empty_selection(self):
+    def test_unchanged_round_stops(self):
         self.empty_at = 0
         result = self.run_workflow(max_apply_step=3)
         self.assertEqual(result, load_kernel(self.work / "apply/0"))
@@ -409,13 +380,6 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse((self.work / "apply/0/SKILL.md").exists())
         self.assertFalse((self.work / "apply/1").exists())
 
-    def test_stops_after_last_skill(self):
-        result = self.run_workflow(max_apply_step=5)
-        self.assertTrue(result.source_files["kernel.cu"].endswith(" // tile // mma"))
-        self.assertEqual(self.events[-1][0], "apply/2")
-        self.assertEqual(self.events[-1][2]["exclude_skills"], ["tile", "mma"])
-        self.assertFalse((self.work / "apply/2/SKILL.md").exists())
-
     def test_missing_output_fails(self):
         self.missing_stage = "apply/0"
         with self.assertRaises(FileNotFoundError):
@@ -423,50 +387,43 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse((self.work / "apply/1").exists())
 
     def test_apply_checks_artifacts(self):
-        mutations = ("problem", "missing_card", "unchanged", "modified_card", "name")
-        for mutation in mutations:
-            with self.subTest(mutation=mutation):
-                self.work = self.root / mutation
-                self.empty_at = 0 if mutation == "name" else None
+        start = self.root / "start"
+        start.mkdir()
+        save_kernel(self.states[0], start)
+        memory = self.root / "memory"
+        save_skill(self.cards[0], memory / "tile" / "SKILL.md")
+        for directory in (None, memory):
+            for change in ("problem", "card", "name"):
+                self.work = self.root / f"{directory is None}-{change}"
+                self.empty_at = 0 if change == "name" else None
 
-                def generate(runner, prompt, *, run_id, mutation=mutation):
+                def generate(runner, prompt, *, run_id, change=change):
                     result = self.run_codex(runner, prompt, run_id=run_id)
-                    if not run_id.startswith("Apply-"):
-                        return result
-                    path = runner.work_dir / "SKILL.md"
                     candidate = load_kernel(runner.work_dir)
-                    if mutation == "problem":
+                    if change == "card":
+                        save_skill(self.cards[0], runner.work_dir / "SKILL.md")
+                    elif change == "problem":
                         candidate = replace(
                             candidate,
-                            problem=replace(candidate.problem, name="different"),
+                            problem=replace(candidate.problem, name="changed"),
                         )
-                    elif mutation == "missing_card":
-                        path.unlink()
-                    elif mutation == "unchanged":
-                        candidate = load_kernel(
-                            Path(prompt_inputs(prompt)["current_kernel"])
-                        )
-                    elif mutation == "modified_card":
-                        save_skill(replace(load_skill(path), intent="modified"), path)
                     else:
-                        candidate = replace(candidate, name="renamed")
+                        candidate = replace(candidate, name="changed")
                     save_kernel(candidate, runner.work_dir)
                     return result
 
                 self.calls.side_effect = generate
-                with self.assertRaises(StructuredOutputError):
-                    self.run_workflow(max_apply_step=1)
-
-    def test_apply_excludes_used_skill(self):
-        def generate(runner, prompt, *, run_id):
-            result = self.run_codex(runner, prompt, run_id=run_id)
-            if run_id.startswith("Apply-") and runner.work_dir.name == "1":
-                save_skill(self.cards[0], runner.work_dir / "SKILL.md")
-            return result
-
-        self.calls.side_effect = generate
-        with self.assertRaisesRegex(StructuredOutputError, "excluded"):
-            self.run_workflow(max_apply_step=2)
+                with (
+                    self.subTest(memory=directory, change=change),
+                    self.assertRaises(StructuredOutputError),
+                ):
+                    optimize(
+                        start,
+                        directory,
+                        self.work,
+                        max_apply_step=1,
+                        enable_verifier=False,
+                    )
 
     def test_existing_dir_is_kept(self):
         self.work.mkdir()
@@ -495,6 +452,7 @@ class WorkflowTests(unittest.TestCase):
         for index, card in enumerate(self.cards):
             save_skill(card, memory / str(index) / "SKILL.md")
 
+        self.empty_at = 2
         result = optimize(
             start / "kernel.json",
             memory,
@@ -503,7 +461,9 @@ class WorkflowTests(unittest.TestCase):
             enable_verifier=False,
             timeout=42,
         )
-        self.assertTrue(result.source_files["kernel.cu"].endswith(" // tile // mma"))
+        self.assertTrue(
+            result.source_files["kernel.cu"].endswith(" // round-0 // round-1")
+        )
         self.assertEqual(
             [event[0] for event in self.events], ["apply/0", "apply/1", "apply/2"]
         )
@@ -549,10 +509,7 @@ class WorkflowTests(unittest.TestCase):
         for index, memory in enumerate((None, "", " \t ")):
             self.work = self.root / f"baseline-{index}"
             self.events.clear()
-            with (
-                self.subTest(memory=memory),
-                patch("klineage.cli.optimize.load_skill") as load_card,
-            ):
+            with self.subTest(memory=memory):
                 result = optimize(
                     start,
                     memory,
@@ -560,57 +517,27 @@ class WorkflowTests(unittest.TestCase):
                     max_apply_step=5,
                     enable_verifier=False,
                 )
-            self.assertTrue(
-                result.source_files["kernel.cu"].endswith(
-                    " // baseline-0 // baseline-1"
+                self.assertTrue(
+                    result.source_files["kernel.cu"].endswith(" // round-0 // round-1")
                 )
-            )
-            self.assertEqual(
-                [event[0] for event in self.events], ["apply/0", "apply/1", "apply/2"]
-            )
-            self.assertFalse(list(self.work.rglob("SKILL.md")))
-            load_card.assert_not_called()
-
-    def test_baseline_rejects_bad_output(self):
-        start = self.root / "start"
-        start.mkdir()
-        save_kernel(self.states[0], start)
-        for change in ("problem", "card", "name"):
-            self.work = self.root / change
-            self.empty_at = 0 if change == "name" else None
-
-            def generate(runner, prompt, *, run_id, change=change):
-                result = self.run_codex(runner, prompt, run_id=run_id)
-                candidate = load_kernel(runner.work_dir)
-                if change == "card":
-                    save_skill(self.cards[0], runner.work_dir / "SKILL.md")
-                elif change == "problem":
-                    save_kernel(
-                        replace(
-                            candidate,
-                            problem=replace(candidate.problem, name="changed"),
-                        ),
-                        runner.work_dir,
-                    )
-                else:
-                    save_kernel(replace(candidate, name="changed"), runner.work_dir)
-                return result
-
-            self.calls.side_effect = generate
-            with self.subTest(change=change), self.assertRaises(StructuredOutputError):
-                optimize(
-                    start, None, self.work, max_apply_step=1, enable_verifier=False
+                self.assertEqual(
+                    [event[0] for event in self.events],
+                    ["apply/0", "apply/1", "apply/2"],
                 )
+                self.assertFalse(list(self.work.rglob("SKILL.md")))
 
-    def test_empty_directory_uses_memory(self):
+    def test_empty_memory_round(self):
         start = self.root / "start"
         start.mkdir()
         save_kernel(self.states[0], start)
         memory = self.root / "empty-memory"
         memory.mkdir()
-        result = optimize(start, memory, self.work, enable_verifier=False)
-        self.assertEqual(result, self.states[0])
-        self.assertEqual([event[0] for event in self.events], ["apply/0"])
+        self.empty_at = 1
+        result = optimize(
+            start, memory, self.work, max_apply_step=3, enable_verifier=False
+        )
+        self.assertTrue(result.source_files["kernel.cu"].endswith(" // round-0"))
+        self.assertEqual([event[0] for event in self.events], ["apply/0", "apply/1"])
         self.assertEqual(Path(self.events[0][2]["memory"]).resolve(), memory)
 
     def test_rejects_reordered_abi(self):
@@ -632,7 +559,6 @@ class WorkflowTests(unittest.TestCase):
             work = self.root / role
             work.mkdir()
             save_kernel(after, work)
-            save_skill(self.cards[0], work / "SKILL.md")
             with (
                 self.subTest(role=role),
                 self.assertRaisesRegex(StructuredOutputError, "ABI"),
@@ -640,14 +566,9 @@ class WorkflowTests(unittest.TestCase):
                 read_step(before, work, RunKind.APPLY)
 
     def test_terminal_contract(self):
-        modes = (
-            (RunKind.DECOMPOSE, StepMode.SKILL),
-            (RunKind.APPLY, StepMode.SKILL),
-            (RunKind.APPLY, StepMode.BASELINE),
-        )
-        for stage, mode in modes:
+        for stage in (RunKind.DECOMPOSE, RunKind.APPLY):
             for artifact in ("card_dir", "card_link", "submission", "validation"):
-                work = self.root / f"{stage}-{mode}-{artifact}"
+                work = self.root / f"{stage}-{artifact}"
                 work.mkdir()
                 before = self.states[0]
                 after = (
@@ -662,14 +583,12 @@ class WorkflowTests(unittest.TestCase):
                     (work / "SKILL.md").symlink_to(work / "missing")
                 elif artifact == "submission":
                     (work / "submission").mkdir()
-                with self.subTest(stage=stage, mode=mode, artifact=artifact):
+                with self.subTest(stage=stage, artifact=artifact):
                     if stage is RunKind.DECOMPOSE and artifact == "validation":
-                        self.assertEqual(
-                            read_step(before, work, stage, mode), (after, None)
-                        )
+                        self.assertEqual(read_step(before, work, stage), (after, None))
                         continue
                     with self.assertRaises(StructuredOutputError):
-                        read_step(before, work, stage, mode)
+                        read_step(before, work, stage)
 
 
 if __name__ == "__main__":

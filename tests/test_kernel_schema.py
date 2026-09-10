@@ -6,9 +6,9 @@ from pathlib import Path
 
 from kernel_fixtures import accepted, kernel
 
+from klineage.artifact.kernel import Kernel
 from klineage.harness.artifacts import load_kernel, save_kernel
 from klineage.harness.eval import ValidationResult
-from klineage.kernel import Kernel
 
 
 class KernelSchemaTests(unittest.TestCase):

@@ -9,9 +9,9 @@ from unittest.mock import patch
 
 from kernel_fixtures import kernel
 
+from klineage.artifact.kernel import Kernel
 from klineage.backend import BACKENDS, Backend, get_backend
 from klineage.harness.artifacts import BUILD_LOCK, BundleLoader, native_sources
-from klineage.kernel import Kernel
 
 
 class BackendBundleTests(unittest.TestCase):

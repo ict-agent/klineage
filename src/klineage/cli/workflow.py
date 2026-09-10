@@ -5,6 +5,7 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
+from klineage.artifact.kernel import Kernel
 from klineage.cli.common import (
     argument_parser,
     decompose_steps,
@@ -19,7 +20,6 @@ from klineage.constants import (
     TIMEOUT,
     RunKind,
 )
-from klineage.kernel import Kernel
 from klineage.memory.storage import save_skill
 from klineage.utils import new_workdir
 
@@ -48,7 +48,6 @@ def workflow(
     memory_dir.mkdir()
 
     current_dir = workdir / RunKind.INIT
-    cards = []
     for current_dir, card in decompose_steps(
         problem,
         repo,
@@ -61,12 +60,10 @@ def workflow(
     ):
         if card is not None:
             save_skill(card, memory_dir / current_dir.name / SKILL_FILE)
-            cards.append(card)
 
     return apply_steps(
         current_dir,
         memory_dir,
-        tuple(cards),
         workdir=workdir,
         max_apply_step=max_apply_step,
         enable_verifier=enable_verifier,
@@ -77,7 +74,12 @@ def workflow(
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argument_parser(__doc__)
-    parser.add_argument("--max-apply-step", type=int, default=MAX_APPLY_STEPS)
+    parser.add_argument(
+        "--max-apply-step",
+        type=int,
+        default=MAX_APPLY_STEPS,
+        help="Maximum number of optimization rounds",
+    )
     parser.set_defaults(enable_verifier=True)
     args = parser.parse_args(argv)
     kernel = workflow(**vars(args))

@@ -3,8 +3,8 @@ from dataclasses import replace
 
 from problem_fixtures import problem_spec
 
+from klineage.artifact.kernel import Kernel
 from klineage.contract import ProblemSpec
-from klineage.kernel import Kernel
 
 CUDA_SOURCE = "__global__ void kernel() {}"
 

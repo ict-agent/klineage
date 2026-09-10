@@ -18,7 +18,6 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Protocol
 
-from klineage.agent_api import agent_function
 from klineage.backend import Backend, BackendKind, detect_backend, get_backend
 from klineage.constants import BUILD_DIRECTORY, EVALUATIONS_DIRECTORY, RunKind
 from klineage.contract import ProblemSpec, ValueRole
@@ -49,13 +48,14 @@ from klineage.harness.timing import (
     timing_policy,
     verify_performance,
 )
+from klineage.tools import agent_function
 from klineage.utils import boolean, operation_id
 
 if TYPE_CHECKING:
     import torch
 
-    from klineage.kernel import Kernel
-    from klineage.profiling import ProfileOptions
+    from klineage.artifact.kernel import Kernel
+    from klineage.harness.profiling import ProfileOptions
 
 
 WORKER_ENTRY = "from klineage.harness.eval import main; raise SystemExit(main())"
@@ -665,7 +665,7 @@ def inspect_reference(
 
 def evaluate_request(request: Mapping[str, Any]) -> ValidationResult:
     """Evaluate one serialized candidate request."""
-    from klineage.kernel import Kernel
+    from klineage.artifact.kernel import Kernel
 
     kernel_value = require_mapping(request.get("kernel"), "kernel")
     reference_value = request.get("reference")
@@ -705,7 +705,7 @@ def evaluate_request(request: Mapping[str, Any]) -> ValidationResult:
 
 
 def profile_request(request: Mapping[str, Any]) -> dict[str, Any]:
-    from klineage.kernel import Kernel
+    from klineage.artifact.kernel import Kernel
 
     kernel = Kernel.from_dict(require_mapping(request.get("kernel"), "kernel"))
     backend = kernel_backend(kernel)

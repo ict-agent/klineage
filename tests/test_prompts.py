@@ -173,11 +173,10 @@ class PromptTemplateTests(unittest.TestCase):
         prompt = render_prompt("apply", **context)
         self.assertEqual(prompt_inputs(prompt), context)
         self.assertNotIn("Skill:", prompt)
-        self.assertIn("retrieve(current_kernel, Path(memory)", prompt)
-        self.assertIn("profile(current_kernel, Path.cwd())", prompt)
+        self.assertIn("retrieve(working, Path(memory)", prompt)
         self.assertIn("enumerate and read", prompt)
         self.assertNotIn("SkillCard.from_dict", prompt)
-        self.assertIn("no SKILL.md or submission/", prompt)
+        self.assertIn("Do not emit SKILL.md", prompt)
 
     def test_apply_baseline_modes(self):
         for memory in (None, "", " \t\n"):
@@ -188,12 +187,24 @@ class PromptTemplateTests(unittest.TestCase):
                     prompt_inputs(prompt),
                     {"current_kernel": context["current_kernel"]},
                 )
-                self.assertIn("Independently choose one optimization", prompt)
+                self.assertIn("Optimize independently", prompt)
                 self.assertIn("Do not emit SKILL.md", prompt)
                 for text in (prompt, render_prompt("verify_apply", memory=memory)):
                     self.assertNotIn("retrieve", text)
                     self.assertNotIn(".agents/skills/memory", text)
-                    self.assertNotIn("no candidate", text)
+
+    def test_apply_round_semantics(self):
+        for memory in (None, self.contexts["apply"]["memory"]):
+            with self.subTest(memory=memory):
+                context = {**self.contexts["apply"], "memory": memory}
+                for text in (
+                    render_prompt("apply", **context),
+                    render_prompt("verify_apply", memory=memory),
+                ):
+                    self.assertNotIn("exactly one", text)
+                    self.assertNotIn("atomic optimization", text)
+                    self.assertIn("best validated candidate", text)
+                    self.assertIn("fixed round input", text)
 
     def test_apply_self_verification(self):
         for memory in (None, self.contexts["apply"]["memory"]):

@@ -32,7 +32,7 @@ Other text raises `StructuredOutputError`. Missing evidence or failed checks mea
 | Producer | Permitted artifact updates |
 | --- | --- |
 | Init | Original adapter under `expert/`; measurements in `evaluations/`; validation in `kernel.json` |
-| Apply | Inspect selection/profile evidence; write evaluation evidence and changed-kernel validation |
+| Apply | Audit round trials and final selection; write evaluation evidence and changed-kernel validation |
 | Decompose | Reconstruction/evidence under `evaluations/`; predecessor validation in `kernel.json` |
 
 Measurement checks also create build caches under `build/`. Preserve candidate

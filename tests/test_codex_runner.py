@@ -237,16 +237,14 @@ class CodexRunnerTests(unittest.TestCase):
         docs = self.trace_event(first.trace_path)["agents"]
         self.assertIn("Keep user guidance.", docs)
         for module, name in (
-            ("klineage.agent_tools", "profile"),
+            ("klineage.tools", "profile"),
             ("klineage.harness.eval", "evaluate"),
         ):
             self.assertIn(f"from {module} import {name}", docs)
             self.assertIn(f"Signature: `{name}(kernel:", docs)
-        self.assertNotIn("### klineage.agent_tools.retrieve\n", docs)
+        self.assertNotIn("### klineage.tools.retrieve\n", docs)
 
-        path.write_text(
-            docs.replace("klineage.agent_tools.profile", "obsolete.profile")
-        )
+        path.write_text(docs.replace("klineage.tools.profile", "obsolete.profile"))
         second = runner("inspect", run_id="second")
         self.assertEqual(self.trace_event(second.trace_path)["agents"], docs)
 

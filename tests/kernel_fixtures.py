@@ -2,8 +2,8 @@
 
 from problem_fixtures import problem_spec
 
+from klineage.artifact.kernel import Kernel
 from klineage.harness.eval import ValidationResult
-from klineage.kernel import Kernel
 from klineage.memory import Scope, SkillCard
 
 CUDA_SOURCE = 'extern "C" __global__ void kernel(float *x) { x[0] += 1; }'

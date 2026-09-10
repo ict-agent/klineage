@@ -1,4 +1,4 @@
-"""Apply one optimization, optionally guided by skill memory."""
+"""Run a kernel optimization round, optionally guided by skill memory."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from klineage.action.action import Action
+from klineage.artifact.kernel import Kernel
 from klineage.constants import MAX_RETRIES, MEMORY_DIRECTORY, TIMEOUT, RunKind
-from klineage.kernel import Kernel
 from klineage.prompts import render_prompt
 from klineage.utils import new_workdir, optional_directory, string_tuple
 

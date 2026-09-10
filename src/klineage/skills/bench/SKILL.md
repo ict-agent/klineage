@@ -78,15 +78,23 @@ reasons appear in `Performance gate:`. Invalid timing evidence fails evaluation,
 including standalone runs.
 Read these records before changing code; preserve failed observations.
 
-Once required checks pass and final artifacts agree, finish. Repeat only after
-relevant edits, failed checks, or new evidence. Do not tune a deoptimized kernel
+Finish when the action's objective and planned evidence-guided trials are complete,
+required checks pass, and final artifacts agree. Repeat checks only after relevant
+edits, failed checks, or new evidence. Do not tune a deoptimized kernel
 to force a slowdown, change workload/tolerances, or replace the evaluator.
 Self-checks remain required when the action disables external verification;
 leave changed Kernel.validation unset. External verification runs only when enabled.
 
 `inspect_problem(problem_path, work)` resolves an input ProblemSpec.
-`klineage.agent_tools.profile(kernel, work, options=ProfileOptions(...))` collects
-NCU diagnostics on CUDA.
+For CUDA NCU diagnostics:
+
+```python
+from klineage.harness.profiling import ProfileOptions
+from klineage.tools import profile
+
+diagnostics = profile(candidate, work, options=ProfileOptions())
+```
+
 Hardware-counter profiling is unsupported on Hygon and Ascend; report that
 capability error without substituting event timings for bottleneck metrics.
 Neither replaces `evaluate` for correctness or latency.

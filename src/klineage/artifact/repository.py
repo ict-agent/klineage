@@ -8,8 +8,8 @@ import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 
-from klineage.agent_api import agent_function
 from klineage.errors import ActionError
+from klineage.tools import agent_function
 
 
 @agent_function

@@ -197,7 +197,7 @@ class BackendWorkerTests(unittest.TestCase):
         self.assertEqual(problem.call_args.kwargs["language"], "ascendc")
 
     def test_worker_dispatches_timer(self):
-        from klineage.kernel import Kernel
+        from klineage.artifact.kernel import Kernel
 
         for name in ("hip-events", "npu-events"):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:

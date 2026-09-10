@@ -14,7 +14,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from klineage.agent_api import agent_function
+from klineage.tools import agent_function
 from klineage.utils import safe_name
 
 CFLAGS = ("-O3", "-std=c++17")

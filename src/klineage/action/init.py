@@ -6,9 +6,9 @@ import os
 from pathlib import Path
 
 from klineage.action.action import Action
+from klineage.artifact.repository import looks_like_git_url
 from klineage.constants import MAX_RETRIES, TIMEOUT, RunKind
 from klineage.prompts import render_prompt
-from klineage.repository import looks_like_git_url
 from klineage.utils import new_workdir
 
 
