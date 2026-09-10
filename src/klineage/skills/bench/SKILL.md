@@ -11,8 +11,8 @@ Use the existing Kernel evaluator for every correctness and latency check:
 
 ```python
 from pathlib import Path
+from klineage.artifact.kernel import load_kernel
 from klineage.harness import evaluate
-from klineage.harness.artifacts import load_kernel
 
 work = Path.cwd()
 candidate = load_kernel(work)

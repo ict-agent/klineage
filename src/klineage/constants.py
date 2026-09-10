@@ -33,6 +33,8 @@ WORKSPACE_DIR = "agent-workspace"
 KERNEL_FILE = "kernel.json"
 #: Source bundle configuration filename.
 BUNDLE_CONFIG = "config.toml"
+#: Digest prefix length used in generated module names.
+MODULE_HASH_LENGTH = 20
 #: Source directory within a configured bundle.
 BUNDLE_SOLUTION = "solution"
 #: Generated source bundle within an action workspace.
@@ -60,7 +62,7 @@ AGENT_MODULES = (
     "klineage.backend",
     "klineage.artifact.kernel",
     "klineage.artifact.repository",
-    "klineage.harness.artifacts",
+    "klineage.artifact.source",
     "klineage.harness.eval",
 )
 #: Start marker for generated agent function documentation.

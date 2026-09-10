@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import keyword
+import math
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -12,15 +13,70 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from klineage.backend import get_backend
-from klineage.constants import BUILD_DIRECTORY, BUNDLE_CONFIG, BUNDLE_SOLUTION
+from klineage.constants import (
+    BUILD_DIRECTORY,
+    BUNDLE_CONFIG,
+    BUNDLE_SOLUTION,
+    KERNEL_FILE,
+)
 from klineage.contract import (
     OutputStyle,
     ProblemSpec,
     relative_source_path,
 )
-from klineage.harness.eval import ValidationResult
 from klineage.tools import agent_function
-from klineage.utils import mapping, nonempty
+from klineage.utils import boolean, mapping, nonempty
+
+
+@dataclass(frozen=True, slots=True)
+class ValidationResult:
+    """Measured validation attached to a kernel."""
+
+    compile_passed: bool
+    correctness_passed: bool
+    profile_passed: bool
+    latency_ms: float | None = None
+    reference_latency_ms: float | None = None
+
+    def __post_init__(self):
+        for name in ("compile_passed", "correctness_passed", "profile_passed"):
+            if type(getattr(self, name)) is not bool:
+                raise TypeError(f"{name} must be a bool")
+        if self.profile_passed and self.latency_ms is None:
+            raise ValueError("successful timing requires latency_ms")
+        for name in ("latency_ms", "reference_latency_ms"):
+            latency = getattr(self, name)
+            if latency is None:
+                continue
+            if type(latency) not in (int, float):
+                raise TypeError(f"{name} must be a number")
+            if not math.isfinite(latency) or latency <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+
+    @property
+    def accepted(self) -> bool:
+        return self.compile_passed and self.correctness_passed and self.profile_passed
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "compile_passed": self.compile_passed,
+            "correctness_passed": self.correctness_passed,
+            "profile_passed": self.profile_passed,
+            "latency_ms": self.latency_ms,
+            "reference_latency_ms": self.reference_latency_ms,
+        }
+
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> ValidationResult:
+        return cls(
+            compile_passed=boolean(value["compile_passed"], "compile_passed"),
+            correctness_passed=boolean(
+                value["correctness_passed"], "correctness_passed"
+            ),
+            profile_passed=boolean(value["profile_passed"], "profile_passed"),
+            latency_ms=value.get("latency_ms"),
+            reference_latency_ms=value.get("reference_latency_ms"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,7 +204,7 @@ class Kernel:
     ):
         """Build in this process; serialized kernels contain no runtime handles."""
         object.__setattr__(self, "function", None)
-        from klineage.harness.artifacts import BundleLoader
+        from klineage.artifact.bundle import BundleLoader
 
         function = BundleLoader(build_root, include_paths=include_paths).build(
             self, strides=strides
@@ -200,4 +256,32 @@ class Kernel:
         )
 
 
-__all__ = ["Kernel"]
+@agent_function
+def save_kernel(kernel: Kernel, workdir: Path) -> None:
+    """Write kernel.json in an existing workdir, replacing its prior metadata.
+
+    Serializes the Kernel's sources, problem, and validation; it does not reread
+    edited disk sources or compile. Reconstruct the Kernel after source edits.
+    """
+    path = workdir / KERNEL_FILE
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(kernel.to_dict(), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+@agent_function
+def load_kernel(workdir: Path) -> Kernel:
+    """Restore kernel.json from a directory without compiling or running it.
+
+    Returns a Kernel with embedded sources and problem. Evaluation builds it in
+    a worker; call Kernel.build before direct execution in this process.
+    """
+    return Kernel.from_dict(
+        json.loads((workdir / KERNEL_FILE).read_text(encoding="utf-8"))
+    )
+
+
+__all__ = ["Kernel", "ValidationResult", "load_kernel", "save_kernel"]

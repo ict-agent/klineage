@@ -110,8 +110,8 @@ With the inspected `problem`:
 ```python
 from pathlib import Path
 
-from klineage.harness.artifacts import read_source_tree, save_kernel
-from klineage.artifact.kernel import Kernel
+from klineage.artifact.kernel import Kernel, save_kernel
+from klineage.artifact.source import read_source_tree
 
 source_files = read_source_tree(Path.cwd() / "submission", "candidate")
 candidate = Kernel.from_sources(

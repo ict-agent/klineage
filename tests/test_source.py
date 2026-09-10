@@ -4,11 +4,11 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import chdir
 from pathlib import Path
 
+from klineage.artifact.source import read_source_tree, snapshot
 from klineage.errors import StructuredOutputError
-from klineage.harness.artifacts import read_source_tree, snapshot
 
 
-class ArtifactTests(unittest.TestCase):
+class SourceTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.bundle = self.root / "submission"

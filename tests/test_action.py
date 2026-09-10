@@ -221,11 +221,19 @@ from klineage.cli.init_memory import init_memory
 from klineage.cli.workflow import workflow
 from klineage.tools import profile, retrieve
 from klineage.harness import evaluate
-from klineage.harness.artifacts import BundleLoader
+from klineage.artifact.bundle import BundleLoader
 from klineage.artifact import Kernel, stage_repository
 from klineage.harness.profiling import ProfileOptions
 """
-        for first in ("klineage.tools", "klineage.artifact.kernel"):
+        for first in (
+            "klineage.tools",
+            "klineage.artifact.kernel",
+            "klineage.artifact.source",
+            "klineage.artifact.bundle",
+            "klineage.artifact.problem",
+            "klineage.artifact.tensor",
+            "klineage.harness.process",
+        ):
             with self.subTest(first=first):
                 result = subprocess.run(
                     [sys.executable, "-c", script, first],

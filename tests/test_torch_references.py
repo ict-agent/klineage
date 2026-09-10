@@ -11,7 +11,7 @@ if TORCH_AVAILABLE:
     import torch
     import torch.nn.functional as F
 
-    from klineage.harness.artifacts import load_trace, trace_inputs
+    from klineage.artifact.problem import load_trace, trace_inputs
 
 
 @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is unavailable")

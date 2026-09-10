@@ -8,6 +8,7 @@ from unittest.mock import patch
 from kernel_fixtures import accepted, kernel, skill
 from prompt_fixtures import prompt_inputs
 
+from klineage.artifact.kernel import load_kernel, save_kernel
 from klineage.cli.common import read_step
 from klineage.cli.init_memory import init_memory
 from klineage.cli.optimize import optimize
@@ -15,7 +16,6 @@ from klineage.cli.workflow import workflow
 from klineage.constants import RunKind
 from klineage.contract import ValueRole
 from klineage.errors import StructuredOutputError, ValidationGateError
-from klineage.harness.artifacts import load_kernel, save_kernel
 from klineage.memory import load_skill, save_skill
 
 

@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from klineage.action.apply import Apply
-from klineage.artifact.kernel import Kernel
+from klineage.artifact.kernel import Kernel, load_kernel
 from klineage.cli.common import add_run_options, read_step
 from klineage.constants import (
     KERNEL_FILE,
@@ -16,7 +16,6 @@ from klineage.constants import (
     TIMEOUT,
     RunKind,
 )
-from klineage.harness.artifacts import load_kernel
 from klineage.utils import optional_directory
 
 

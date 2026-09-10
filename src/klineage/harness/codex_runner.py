@@ -19,7 +19,7 @@ from klineage.constants import (
     STATE_DIRECTORY,
     RunKind,
 )
-from klineage.harness.artifacts import stop_process
+from klineage.harness.process import stop_process
 from klineage.tools import write_agent_docs
 from klineage.utils import operation_id
 

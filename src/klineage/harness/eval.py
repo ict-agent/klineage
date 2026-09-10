@@ -6,7 +6,6 @@ import contextlib
 import copy
 import inspect
 import json
-import math
 import os
 import subprocess
 import sys
@@ -18,25 +17,20 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Protocol
 
-from klineage.backend import Backend, BackendKind, detect_backend, get_backend
-from klineage.constants import BUILD_DIRECTORY, EVALUATIONS_DIRECTORY, RunKind
-from klineage.contract import ProblemSpec, ValueRole
-from klineage.errors import ActionError
-from klineage.harness.artifacts import (
-    existing_dir,
+from klineage.artifact.kernel import ValidationResult
+from klineage.artifact.problem import (
     load_problem,
-    make_log_dir,
-    require_tensor,
-    resolve_path,
-    run_process,
-    tensor_dtype,
-    tensor_values,
     trace_definition,
     trace_inputs,
     trace_module,
     trace_workload,
-    write_json,
 )
+from klineage.artifact.tensor import require_tensor, tensor_dtype, tensor_values
+from klineage.backend import Backend, BackendKind, detect_backend, get_backend
+from klineage.constants import BUILD_DIRECTORY, EVALUATIONS_DIRECTORY, RunKind
+from klineage.contract import ProblemSpec, ValueRole
+from klineage.errors import ActionError
+from klineage.harness.process import run_process
 from klineage.harness.timing import (
     KernelTimer,
     TimingPolicy,
@@ -49,7 +43,13 @@ from klineage.harness.timing import (
     verify_performance,
 )
 from klineage.tools import agent_function
-from klineage.utils import boolean, operation_id
+from klineage.utils import (
+    existing_dir,
+    make_log_dir,
+    operation_id,
+    resolve_path,
+    write_json,
+)
 
 if TYPE_CHECKING:
     import torch
@@ -64,55 +64,6 @@ _SEED = 20260903
 _MAX_JOBS = 4
 _ERROR_TAIL = 2000
 _DEFAULT_SEED = 0
-
-
-@dataclass(frozen=True, slots=True)
-class ValidationResult:
-    compile_passed: bool
-    correctness_passed: bool
-    profile_passed: bool
-    latency_ms: float | None = None
-    reference_latency_ms: float | None = None
-
-    def __post_init__(self):
-        for name in ("compile_passed", "correctness_passed", "profile_passed"):
-            if type(getattr(self, name)) is not bool:
-                raise TypeError(f"{name} must be a bool")
-        if self.profile_passed and self.latency_ms is None:
-            raise ValueError("successful timing requires latency_ms")
-        for name in ("latency_ms", "reference_latency_ms"):
-            latency = getattr(self, name)
-            if latency is None:
-                continue
-            if type(latency) not in (int, float):
-                raise TypeError(f"{name} must be a number")
-            if not math.isfinite(latency) or latency <= 0:
-                raise ValueError(f"{name} must be finite and positive")
-
-    @property
-    def accepted(self) -> bool:
-        return self.compile_passed and self.correctness_passed and self.profile_passed
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "compile_passed": self.compile_passed,
-            "correctness_passed": self.correctness_passed,
-            "profile_passed": self.profile_passed,
-            "latency_ms": self.latency_ms,
-            "reference_latency_ms": self.reference_latency_ms,
-        }
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> ValidationResult:
-        return cls(
-            compile_passed=boolean(value["compile_passed"], "compile_passed"),
-            correctness_passed=boolean(
-                value["correctness_passed"], "correctness_passed"
-            ),
-            profile_passed=boolean(value["profile_passed"], "profile_passed"),
-            latency_ms=value.get("latency_ms"),
-            reference_latency_ms=value.get("reference_latency_ms"),
-        )
 
 
 class KernelEvaluator(Protocol):

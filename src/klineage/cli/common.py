@@ -7,7 +7,7 @@ from pathlib import Path
 
 from klineage.action.decompose import Decompose
 from klineage.action.init import Init
-from klineage.artifact.kernel import Kernel
+from klineage.artifact.kernel import Kernel, load_kernel
 from klineage.constants import (
     MAX_DECOMPOSE_STEPS,
     MAX_RETRIES,
@@ -18,7 +18,6 @@ from klineage.constants import (
 )
 from klineage.contract import ValueRole
 from klineage.errors import StructuredOutputError
-from klineage.harness.artifacts import load_kernel
 from klineage.memory.skillcard import SkillCard
 from klineage.memory.storage import load_skill
 

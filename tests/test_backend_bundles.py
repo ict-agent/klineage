@@ -9,9 +9,9 @@ from unittest.mock import patch
 
 from kernel_fixtures import kernel
 
+from klineage.artifact.bundle import BUILD_LOCK, BundleLoader, native_sources
 from klineage.artifact.kernel import Kernel
 from klineage.backend import BACKENDS, Backend, get_backend
-from klineage.harness.artifacts import BUILD_LOCK, BundleLoader, native_sources
 
 
 class BackendBundleTests(unittest.TestCase):
@@ -148,7 +148,7 @@ class NpuInputTests(unittest.TestCase):
     def test_random_inputs_use_cpu(self):
         import torch
 
-        from klineage.harness.artifacts import load_trace, trace_inputs
+        from klineage.artifact.problem import load_trace, trace_inputs
 
         module = load_trace(
             Path(__file__).parents[1] / "problems/definitions/gemm.json"
@@ -169,7 +169,7 @@ class NpuInputTests(unittest.TestCase):
         import torch
         from safetensors import safe_open
 
-        from klineage.harness.artifacts import (
+        from klineage.artifact.problem import (
             trace_definition,
             trace_inputs,
             trace_workload,

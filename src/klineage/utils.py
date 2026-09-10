@@ -1,7 +1,8 @@
-"""Small validation and identity helpers shared by klineage modules."""
+"""Shared validation, identity, path, and JSON helpers."""
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import secrets
@@ -69,13 +70,43 @@ def optional_directory(value: str | os.PathLike[str] | None) -> Path | None:
     return path
 
 
+def resolve_path(path: str | Path) -> Path:
+    return Path(path).expanduser().resolve(strict=True)
+
+
+def make_log_dir(path: Path) -> Path:
+    directory = Path(path).expanduser().absolute()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return directory
+
+
+def write_json(path: Path, value: Any):
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def existing_dir(value: Any, label: str) -> Path:
+    if not isinstance(value, (str, Path)):
+        raise TypeError(f"{label} must be a path string")
+    path = resolve_path(value)
+    if not path.is_dir():
+        raise NotADirectoryError(f"{label} is not a directory: {path}")
+    return path
+
+
 __all__ = [
     "boolean",
+    "existing_dir",
+    "make_log_dir",
     "mapping",
     "new_workdir",
     "nonempty",
     "operation_id",
     "optional_directory",
+    "resolve_path",
     "safe_name",
     "string_tuple",
+    "write_json",
 ]

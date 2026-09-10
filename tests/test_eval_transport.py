@@ -26,7 +26,7 @@ class EvalTransportTests(unittest.TestCase):
         self.runtime = EvaluationRuntime()
 
     def test_interrupt_stops_worker(self):
-        from klineage.harness.artifacts import run_process
+        from klineage.harness.process import run_process
 
         for error in (KeyboardInterrupt(), SystemExit()):
             process = Mock()
@@ -34,9 +34,9 @@ class EvalTransportTests(unittest.TestCase):
             with (
                 self.subTest(error=type(error).__name__),
                 patch(
-                    "klineage.harness.artifacts.subprocess.Popen", return_value=process
+                    "klineage.harness.process.subprocess.Popen", return_value=process
                 ),
-                patch("klineage.harness.artifacts.stop_process") as stop,
+                patch("klineage.harness.process.stop_process") as stop,
                 self.assertRaises(type(error)),
             ):
                 run_process(("worker",), payload="", timeout=1, environment={})

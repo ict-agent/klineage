@@ -17,9 +17,9 @@ TORCH_AVAILABLE = importlib.util.find_spec("torch") is not None
 if TORCH_AVAILABLE:
     import torch
 
+    from klineage.artifact import tensor
     from klineage.backend import Backend, get_backend
     from klineage.contract import ABIValue, OutputStyle
-    from klineage.harness import artifacts as launch
     from klineage.harness import eval as worker
 
 
@@ -42,11 +42,11 @@ class EvalWorkerTests(unittest.TestCase):
 
         with (
             patch.object(
-                launch, "require_tensor", side_effect=lambda value, *args: value
+                tensor, "require_tensor", side_effect=lambda value, *args: value
             ),
             patch.object(torch.cuda, "device", return_value=nullcontext()),
         ):
-            fn = launch.BundleCallable(problem, run, OutputStyle.DESTINATION)
+            fn = tensor.BundleCallable(problem, run, OutputStyle.DESTINATION)
             first = fn(torch.tensor([1.0, 2.0]))
             second = fn(torch.tensor([3.0, 4.0]))
 
@@ -61,11 +61,11 @@ class EvalWorkerTests(unittest.TestCase):
         )
         with (
             patch.object(
-                launch, "require_tensor", side_effect=lambda value, *args: value
+                tensor, "require_tensor", side_effect=lambda value, *args: value
             ),
             patch.object(torch.cuda, "device", return_value=nullcontext()),
         ):
-            fn = launch.BundleCallable(problem, lambda x: x + 1, OutputStyle.RETURN)
+            fn = tensor.BundleCallable(problem, lambda x: x + 1, OutputStyle.RETURN)
             torch.testing.assert_close(
                 fn(torch.tensor([2.0, 3.0])), torch.tensor([3.0, 4.0])
             )
@@ -73,7 +73,7 @@ class EvalWorkerTests(unittest.TestCase):
                 fn()
             with self.assertRaisesRegex(ValueError, "dtype"):
                 fn(torch.tensor([2, 3]))
-            bad = launch.BundleCallable(problem, lambda x: x[:1], OutputStyle.RETURN)
+            bad = tensor.BundleCallable(problem, lambda x: x[:1], OutputStyle.RETURN)
             with self.assertRaisesRegex(ValueError, "shape"):
                 bad(torch.tensor([2.0, 3.0]))
 
@@ -84,13 +84,13 @@ class EvalWorkerTests(unittest.TestCase):
         )
         with (
             patch.object(
-                launch, "require_tensor", side_effect=lambda value, *args: value
+                tensor, "require_tensor", side_effect=lambda value, *args: value
             ),
             patch.object(torch.cuda, "device", return_value=nullcontext()),
         ):
             for container in (tuple, list):
                 with self.subTest(container=container):
-                    fn = launch.BundleCallable(
+                    fn = tensor.BundleCallable(
                         problem,
                         lambda x, container=container: container((x + 1, x + 2)),
                         OutputStyle.RETURN,
@@ -111,11 +111,11 @@ class EvalWorkerTests(unittest.TestCase):
         with (
             patch.object(torch.cuda, "current_device", return_value=0),
             patch.object(torch.cuda, "device", return_value=nullcontext()),
-            patch.object(launch, "allocate", return_value=output),
+            patch.object(tensor, "allocate", return_value=output),
         ):
             for style in OutputStyle:
                 with self.subTest(style=style):
-                    fn = launch.BundleCallable(problem, lambda *args: output, style)
+                    fn = tensor.BundleCallable(problem, lambda *args: output, style)
                     self.assertIs(fn(), output)
 
     def test_inspects_operator(self):
@@ -212,11 +212,11 @@ def torch_ref(z, a):
         layouts = worker.tensor_strides({"x": x}, expected, problem)
         with (
             patch.object(
-                launch, "require_tensor", side_effect=lambda value, *args: value
+                tensor, "require_tensor", side_effect=lambda value, *args: value
             ),
             patch.object(torch.cuda, "device", return_value=nullcontext()),
         ):
-            fn = launch.BundleCallable(
+            fn = tensor.BundleCallable(
                 problem,
                 lambda value, output: output.copy_(value + 1),
                 OutputStyle.DESTINATION,

@@ -13,15 +13,15 @@ if TORCH_AVAILABLE:
     import torch
     from safetensors import safe_open
 
-    from klineage.backend import Backend, get_backend
-    from klineage.harness import eval as worker
-    from klineage.harness.artifacts import (
+    from klineage.artifact.problem import (
         load_trace,
         trace_definition,
         trace_inputs,
         trace_module,
         trace_workload,
     )
+    from klineage.backend import Backend, get_backend
+    from klineage.harness import eval as worker
 
 
 @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is unavailable")
