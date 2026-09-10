@@ -11,13 +11,12 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 
-FUNCTION_START = "<!-- klineage:agent-functions:start -->"
-FUNCTION_END = "<!-- klineage:agent-functions:end -->"
-AGENT_FILES = ("AGENTS.md", "AGENTS.override.md")
+from klineage.constants import AGENT_FILES, FUNCTION_END, FUNCTION_START
+
 _FUNCTIONS: dict[str, Callable[..., Any]] = {}
 
 
-def agent_function[F: Callable[..., Any]](function: F) -> F:
+def agent_function[**P, R](function: Callable[P, R]) -> Callable[P, R]:
     """Register a documented function; place below @classmethod for factories."""
 
     if not inspect.isfunction(function):
@@ -41,14 +40,14 @@ def function_docs() -> str:
     ]
     for name, function in sorted(_FUNCTIONS.items()):
         # Resolve descriptors after class creation so factories omit the bound cls.
-        target = sys.modules[function.__module__]
-        for part in function.__qualname__.split("."):
+        parts = function.__qualname__.split(".")
+        target: Any = sys.modules[function.__module__]
+        for part in parts:
             target = getattr(target, part)
         signature = str(inspect.signature(target))
-        imported = function.__qualname__.split(".", 1)[0]
         sections.append(
             f"### {name}\n\n"
-            f"`from {function.__module__} import {imported}`\n\n"
+            f"`from {function.__module__} import {parts[0]}`\n\n"
             f"Signature: `{function.__qualname__}{signature}`\n\n"
             f"{inspect.getdoc(target)}"
         )
@@ -62,8 +61,6 @@ def write_agent_docs(workdir: Path):
     updates = []
     for name in AGENT_FILES:
         path = workdir / name
-        if name != AGENT_FILES[0] and not path.exists() and not path.is_symlink():
-            continue
         if path.is_symlink():
             raise ValueError(f"agent instructions must not be a symlink: {path}")
         original = path.read_bytes().decode("utf-8") if path.exists() else ""

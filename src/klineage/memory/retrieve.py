@@ -1,11 +1,11 @@
-"""Select applicable skills in memory order."""
+"""Filter skills by scope in memory order."""
 
 from collections.abc import Sequence
 
-from klineage._utils import string_tuple
 from klineage.contract import ProblemSpec
 from klineage.kernel import Kernel
 from klineage.memory.skillcard import SkillCard
+from klineage.utils import string_tuple
 
 WILDCARD = "*"
 
@@ -16,7 +16,7 @@ def retrieve(
     *,
     exclude_skills: Sequence[str] = (),
 ) -> tuple[SkillCard, ...]:
-    """Filter by scope; the retrieval agent checks source prerequisites."""
+    """Filter by scope; the caller checks source prerequisites."""
 
     if not isinstance(target, (Kernel, ProblemSpec)):
         raise TypeError("target must be a Kernel or ProblemSpec")

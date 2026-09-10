@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from klineage.harness import CodexRunner, CodexRunnerError
-from klineage.harness.codex_runner import PACKAGE_ROOT, SKILL_ROOT
+from klineage.harness.codex_runner import MEMORY_DIRECTORY, PACKAGE_ROOT, SKILL_ROOT
 
 FAKE_CODEX = '''#!/usr/bin/python3
 import json
@@ -23,6 +23,7 @@ import time
 args = sys.argv[1:]
 prompt = sys.stdin.read()
 output_path = pathlib.Path(args[args.index("--output-last-message") + 1])
+memory = pathlib.Path(".agents/skills/memory")
 
 print(
     json.dumps(
@@ -32,9 +33,13 @@ print(
             "tmpdir": os.environ.get("TMPDIR"),
             "pythonpath": os.environ.get("PYTHONPATH"),
             "agents": pathlib.Path("AGENTS.md").read_text(),
+            "memory": {
+                path.relative_to(memory).as_posix(): path.read_text()
+                for path in memory.rglob("SKILL.md")
+            },
             "skills": {
                 name: (pathlib.Path(".agents/skills") / name / "SKILL.md").read_text()
-                for name in ("bench", "cuda")
+                for name in ("bench", "cuda", "hip", "ascendc")
             },
         }
     ),
@@ -106,7 +111,7 @@ class CodexRunnerTests(unittest.TestCase):
             **kwargs,
         )
 
-    def test_success_persists_minimal_trace_bundle(self):
+    def test_persists_trace_bundle(self):
         result = self.runner()("build the thing", run_id="successful-run")
 
         self.assertEqual(result.final_message, "answer: build the thing")
@@ -121,9 +126,8 @@ class CodexRunnerTests(unittest.TestCase):
         )
         self.assertTrue((result.trace_path.parent / "final_message.txt").is_file())
         self.assertTrue((result.trace_path.parent / "stderr.log").is_file())
-        self.assertFalse((result.trace_path.parent / "metadata.json").exists())
 
-    def test_nonzero_exit_raises_with_trace_and_stderr(self):
+    def test_error_retains_trace(self):
         with self.assertRaises(CodexRunnerError) as caught:
             self.runner()("FAIL", run_id="failed-run")
 
@@ -134,7 +138,7 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertIn("exit code 7", str(error))
         self.assertIn("simulated failure", str(error))
 
-    def test_constructor_timeout_raises_with_trace(self):
+    def test_timeout_retains_trace(self):
         with self.assertRaises(CodexRunnerError) as caught:
             self.runner(timeout=0.05)("TIMEOUT", run_id="timed-out-run")
 
@@ -142,7 +146,7 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertIsNotNone(error.trace_path)
         self.assertIn("timed out", str(error))
 
-    def test_rejects_empty_prompt_and_unsafe_run_id(self):
+    def test_rejects_invalid_input(self):
         runner = self.runner()
 
         with self.assertRaises(ValueError):
@@ -150,7 +154,7 @@ class CodexRunnerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             runner("prompt", run_id="../escape")
 
-    def test_rejects_invalid_reasoning_effort(self):
+    def test_rejects_invalid_effort(self):
         with self.assertRaises(ValueError):
             self.runner(reasoning_effort="extreme")
 
@@ -163,7 +167,7 @@ class CodexRunnerTests(unittest.TestCase):
                 codex_bin=self.fake_codex,
             )
 
-    def test_timeout_kills_descendant_processes(self):
+    def test_timeout_kills_children(self):
         pid_path = self.root / "process-tree.pid"
         prompt = f"PROCESS_TREE:{pid_path}"
 
@@ -218,7 +222,7 @@ class CodexRunnerTests(unittest.TestCase):
     def test_process_skill_access(self):
         result = self.runner()("inspect", run_id="skills")
         event = self.trace_event(result.trace_path)
-        for name in ("bench", "cuda"):
+        for name in ("bench", "cuda", "hip", "ascendc"):
             self.assertEqual(
                 event["skills"][name], (SKILL_ROOT / name / "SKILL.md").read_text()
             )
@@ -232,27 +236,105 @@ class CodexRunnerTests(unittest.TestCase):
         first = runner("inspect", run_id="first")
         docs = self.trace_event(first.trace_path)["agents"]
         self.assertIn("Keep user guidance.", docs)
-        for name in ("profile", "retrieve"):
-            self.assertIn(f"from klineage.agent_tools import {name}", docs)
+        for module, name in (
+            ("klineage.agent_tools", "profile"),
+            ("klineage.harness.eval", "evaluate"),
+        ):
+            self.assertIn(f"from {module} import {name}", docs)
             self.assertIn(f"Signature: `{name}(kernel:", docs)
+        self.assertNotIn("### klineage.agent_tools.retrieve\n", docs)
 
+        path.write_text(
+            docs.replace("klineage.agent_tools.profile", "obsolete.profile")
+        )
         second = runner("inspect", run_id="second")
         self.assertEqual(self.trace_event(second.trace_path)["agents"], docs)
 
-    def test_native_skill_discovery(self):
-        self.runner()
-        for name in ("cuda", "hip", "ascendc"):
-            with self.subTest(name=name):
-                resource = self.work / ".agents/skills" / name
-                self.assertTrue(resource.is_symlink())
-                self.assertTrue((resource / "SKILL.md").is_file())
-                self.assertEqual(resource.resolve(), SKILL_ROOT / name)
+    def test_process_memory_mount(self):
+        memory = self.root / "memory"
+        card = memory / "gemm/staging/SKILL.md"
+        card.parent.mkdir(parents=True)
+        contents = "# Shared memory staging\n"
+        card.write_text(contents)
+        runner = self.runner()
+        mounted = runner.mount_memory(memory)
+        self.assertEqual(mounted, self.work / MEMORY_DIRECTORY)
+        self.assertEqual(mounted.resolve(), memory)
+        self.assertEqual(runner.mount_memory(memory), mounted)
 
-    def test_reuses_skills_across_runs(self):
-        self.runner()("first", run_id="first")
-        result = self.runner()("retry", run_id="retry")
-        self.assertEqual(result.final_message, "answer: retry")
-        self.assertTrue((self.work / ".agents/skills/bench").is_symlink())
+        for index, process in enumerate((runner, self.runner())):
+            result = process("inspect memory", run_id=f"memory-{index}")
+            self.assertEqual(
+                self.trace_event(result.trace_path)["memory"],
+                {"gemm/staging/SKILL.md": contents},
+            )
+        self.assertEqual(card.read_text(), contents)
+        self.assertEqual(
+            set(memory.rglob("*")), {card.parent.parent, card.parent, card}
+        )
+
+    def test_memory_conflict_preserved(self):
+        first, second = self.root / "first", self.root / "second"
+        first.mkdir()
+        second.mkdir()
+        card = first / "SKILL.md"
+        card.write_text("Keep existing memory")
+        runner = self.runner()
+        mounted = runner.mount_memory(first)
+        with self.assertRaisesRegex(CodexRunnerError, "already exists"):
+            runner.mount_memory(second)
+        self.assertEqual(mounted.resolve(), first)
+        self.assertEqual(card.read_text(), "Keep existing memory")
+
+    def test_memory_requires_directory(self):
+        runner = self.runner()
+        card = self.root / "SKILL.md"
+        card.write_text("A file is not a memory directory")
+        with self.assertRaises(NotADirectoryError):
+            runner.mount_memory(card)
+        with self.assertRaises(FileNotFoundError):
+            runner.mount_memory(self.root / "missing")
+        self.assertFalse((self.work / MEMORY_DIRECTORY).exists())
+
+    def test_memory_none(self):
+        runner = self.runner()
+        self.assertIsNone(runner.mount_memory(None))
+        self.assertFalse((self.work / MEMORY_DIRECTORY).exists())
+        result = runner("inspect", run_id="no-memory")
+        self.assertEqual(self.trace_event(result.trace_path)["memory"], {})
+
+    def test_rejects_stale_memory(self):
+        memory = self.root / "memory"
+        memory.mkdir()
+        card = memory / "SKILL.md"
+        card.write_text("Keep source skill")
+        runner = self.runner()
+        mounted = runner.mount_memory(memory)
+        with self.assertRaisesRegex(ValueError, "fresh workdir"):
+            runner.mount_memory(None)
+        self.assertTrue(mounted.is_symlink())
+        self.assertEqual(card.read_text(), "Keep source skill")
+
+        mounted.unlink()
+        mounted.mkdir()
+        local_card = mounted / "SKILL.md"
+        local_card.write_text("Keep local skill")
+        with self.assertRaisesRegex(ValueError, "fresh workdir"):
+            runner.mount_memory(None)
+        self.assertEqual(local_card.read_text(), "Keep local skill")
+
+    def test_rejects_recursive_memory(self):
+        runner = self.runner()
+        mounted = self.work / MEMORY_DIRECTORY
+        mounted.mkdir()
+        for source in (self.root, self.work, mounted.parent, mounted):
+            with (
+                self.subTest(source=source),
+                self.assertRaisesRegex(ValueError, "contain its workspace mount"),
+            ):
+                runner.mount_memory(source)
+        self.assertTrue(mounted.is_dir())
+        self.assertFalse(mounted.is_symlink())
 
     def test_process_runtime_access(self):
         with patch.dict(os.environ, {"PYTHONPATH": str(self.root / "existing")}):

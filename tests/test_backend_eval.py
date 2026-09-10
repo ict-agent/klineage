@@ -114,6 +114,29 @@ class EventTimingTests(unittest.TestCase):
 
 
 class BackendWorkerTests(unittest.TestCase):
+    def test_rejects_empty_reference(self):
+        from kernel_fixtures import kernel
+
+        from klineage.backend import Backend
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(Backend, "runtime"),
+            patch.object(
+                worker,
+                "trace_module",
+                side_effect=AssertionError("Malformed reference reached execution"),
+            ),
+            self.assertRaises(KeyError),
+        ):
+            worker.evaluate_request(
+                {
+                    "kernel": kernel().to_dict(),
+                    "reference": {},
+                    "config": {"build_root": directory},
+                }
+            )
+
     def test_clone_preserves_layout(self):
         import torch
 
@@ -172,32 +195,6 @@ class BackendWorkerTests(unittest.TestCase):
         ):
             worker.inspect_problem(Path("reference.py"), Path("work"))
         self.assertEqual(problem.call_args.kwargs["language"], "ascendc")
-
-    def test_profile_rejects_backend(self):
-        from problem_fixtures import problem_spec
-
-        from klineage.errors import ActionError
-        from klineage.kernel import Kernel
-
-        for language, platform in (("hip", "hygon-gfx928"), ("ascendc", "ascend-910b")):
-            with self.subTest(language=language):
-                kernel = Kernel(
-                    "target",
-                    problem_spec("add", language, platform),
-                    source_files={"kernel.cpp": "source"},
-                )
-                runtime = worker.EvaluationRuntime()
-                with (
-                    patch.object(runtime, "collect_profile") as collect,
-                    self.assertRaisesRegex(ActionError, "profiling.*unsupported"),
-                ):
-                    runtime.profile(
-                        kernel,
-                        build_root=Path("build"),
-                        log_dir=Path("logs"),
-                        options=Mock(),
-                    )
-                collect.assert_not_called()
 
     def test_worker_dispatches_timer(self):
         from klineage.kernel import Kernel

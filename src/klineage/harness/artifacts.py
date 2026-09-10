@@ -19,14 +19,12 @@ from enum import StrEnum
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeGuard
 
-from klineage._utils import operation_id
 from klineage.agent_api import agent_function
 from klineage.backend import Backend, get_backend, platform_backend
+from klineage.constants import BUNDLE_CONFIG, BUNDLE_SOLUTION, KERNEL_FILE
 from klineage.contract import (
-    BUNDLE_CONFIG,
-    BUNDLE_SOLUTION,
     ABIValue,
     OutputStyle,
     ProblemSpec,
@@ -41,7 +39,6 @@ if TYPE_CHECKING:
     from klineage.kernel import Kernel
 
 
-_KERNEL_FILE = "kernel.json"
 _MAX_SOURCE_BYTES = 16 * 1024 * 1024
 _MAX_SOURCE_FILES = 1024
 _GRACE_SECONDS = 5
@@ -179,7 +176,7 @@ def save_kernel(kernel: Kernel, workdir: Path) -> None:
     Serializes the Kernel's sources, problem, and validation; it does not reread
     edited disk sources or compile. Reconstruct the Kernel after source edits.
     """
-    path = workdir / _KERNEL_FILE
+    path = workdir / KERNEL_FILE
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(
         json.dumps(kernel.to_dict(), ensure_ascii=False, indent=2) + "\n",
@@ -198,15 +195,8 @@ def load_kernel(workdir: Path) -> Kernel:
     from klineage.kernel import Kernel
 
     return Kernel.from_dict(
-        json.loads((workdir / _KERNEL_FILE).read_text(encoding="utf-8"))
+        json.loads((workdir / KERNEL_FILE).read_text(encoding="utf-8"))
     )
-
-
-def fresh_path(workdir: Path, name: str) -> Path:
-    path = workdir / relative_source_path(name, "artifact path")
-    if not path.exists() and not path.is_symlink():
-        return path
-    return path.with_name(f"{path.stem}-{operation_id('retry')}{path.suffix}")
 
 
 def stop_process(process: subprocess.Popen):
@@ -482,22 +472,18 @@ def source_import_scope(root: Path, modules: dict[str, ModuleType]):
 
 def local_top_level_names(root: Path) -> set[str]:
     names = {path.stem for path in root.glob("*.py") if path.name != "__init__.py"}
-    names.update(
-        path.name
-        for path in root.iterdir()
-        if path.is_dir() and (path / "__init__.py").is_file()
-    )
+    # Directories without __init__.py are importable namespace packages too.
+    names.update(path.name for path in root.iterdir() if path.is_dir())
     return names
 
 
-def module_is_under(module: ModuleType | None, root: Path) -> bool:
+def module_is_under(module: ModuleType | None, root: Path) -> TypeGuard[ModuleType]:
     if module is None:
         return False
     filename = getattr(module, "__file__", None)
-    if not filename:
-        return False
+    locations = (filename,) if filename else getattr(module, "__path__", ())
     try:
-        return Path(filename).resolve().is_relative_to(root)
+        return any(Path(path).resolve().is_relative_to(root) for path in locations)
     except (OSError, RuntimeError, ValueError):
         return False
 
@@ -794,7 +780,7 @@ def load_problem(value: str | Path) -> tuple[ModuleType, Path]:
     return module, path
 
 
-def resolve_path(path: Path) -> Path:
+def resolve_path(path: str | Path) -> Path:
     return Path(path).expanduser().resolve(strict=True)
 
 

@@ -10,24 +10,27 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, get_args
 
-from klineage._utils import operation_id
 from klineage.agent_api import write_agent_docs
 from klineage.backend import BACKENDS
+from klineage.constants import (
+    MEMORY_DIRECTORY,
+    MESSAGE_DIRECTORY,
+    SKILL_DIRECTORY,
+    STATE_DIRECTORY,
+    RunKind,
+)
 from klineage.harness.artifacts import stop_process
+from klineage.utils import operation_id
 
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
-_REASONING_EFFORTS = frozenset(
-    ("none", "minimal", "low", "medium", "high", "xhigh", "max")
-)
+_REASONING_EFFORTS = frozenset(get_args(ReasoningEffort))
 _STDERR_SUMMARY_CHARS = 1000
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = PACKAGE_ROOT / "skills"
 SKILL_NAMES = ("bench", *(backend.skill_name for backend in BACKENDS))
-SKILL_DIRECTORY = Path(".agents") / "skills"
-MESSAGE_DIRECTORY = Path(".klineage") / "message"
 
 
 class CodexRunnerError(RuntimeError):
@@ -56,7 +59,7 @@ class CodexRunner:
         codex_bin: str | os.PathLike[str] = "codex",
         reasoning_effort: ReasoningEffort | None = "xhigh",
         timeout: float | None = None,
-        state_dir: str | os.PathLike[str] = ".klineage",
+        state_dir: str | os.PathLike[str] = STATE_DIRECTORY,
     ):
         if timeout is not None and timeout <= 0:
             raise ValueError("timeout must be greater than zero")
@@ -70,7 +73,7 @@ class CodexRunner:
         self.trace_root.mkdir(parents=True, exist_ok=True)
         self.timeout = timeout
         self.reasoning_effort = reasoning_effort
-        self.codex_program = resolve_executable(codex_bin, "Codex")
+        self.codex_program = resolve_executable(codex_bin)
 
         # Expose packaged instructions through Codex's workspace skill discovery.
         skill_dir = self.work_dir / SKILL_DIRECTORY
@@ -80,14 +83,26 @@ class CodexRunner:
         resources = [(SKILL_ROOT / name, skill_dir / name) for name in SKILL_NAMES]
         resources.append((PACKAGE_ROOT / "message", message_dir))
         for source, destination in resources:
-            try:
-                destination.symlink_to(source, target_is_directory=True)
-            except FileExistsError:
-                if destination.is_symlink() and destination.resolve() == source:
-                    continue
-                raise CodexRunnerError(
-                    f"workspace resource already exists: {destination}"
+            _link_resource(source, destination)
+
+    def mount_memory(self, memory: Path | None) -> Path | None:
+        """Expose skill memory; None requires no existing memory mount."""
+        destination = self.work_dir / MEMORY_DIRECTORY
+        if memory is None:
+            if destination.exists() or destination.is_symlink():
+                raise ValueError(
+                    f"memory-free execution requires a fresh workdir: {destination}"
                 )
+            return None
+
+        source = memory.expanduser().resolve(strict=True)
+        if not source.is_dir():
+            raise NotADirectoryError(f"memory must be a directory: {source}")
+        location = destination.parent.resolve() / destination.name
+        if location.is_relative_to(source):
+            raise ValueError("memory cannot contain its workspace mount")
+        _link_resource(source, destination)
+        return destination
 
     def __call__(
         self,
@@ -99,7 +114,7 @@ class CodexRunner:
 
         if not isinstance(prompt, str) or not prompt.strip():
             raise ValueError("prompt must be a non-empty string")
-        resolved_run_id = run_id or operation_id("codex")
+        resolved_run_id = run_id or operation_id(RunKind.CODEX)
         if not _RUN_ID_RE.fullmatch(resolved_run_id):
             raise ValueError(
                 "run_id must start with an alphanumeric character and contain "
@@ -211,18 +226,24 @@ class CodexRunner:
         return command
 
 
-def resolve_executable(
-    executable: str | os.PathLike[str],
-    label: str,
-) -> Path:
+def _link_resource(source: Path, destination: Path):
+    try:
+        destination.symlink_to(source, target_is_directory=True)
+    except FileExistsError:
+        if destination.is_symlink() and destination.resolve() == source:
+            return
+        raise CodexRunnerError(f"workspace resource already exists: {destination}")
+
+
+def resolve_executable(executable: str | os.PathLike[str]) -> Path:
     value = os.fspath(executable)
     if os.sep in value or (os.altsep and os.altsep in value):
         candidate = Path(value).expanduser().absolute()
     else:
         located = shutil.which(value)
         if located is None:
-            raise CodexRunnerError(f"{label} executable not found: {value}")
+            raise CodexRunnerError(f"Codex executable not found: {value}")
         candidate = Path(located)
     if not candidate.is_file() or not os.access(candidate, os.X_OK):
-        raise CodexRunnerError(f"{label} executable is not runnable: {candidate}")
+        raise CodexRunnerError(f"Codex executable is not runnable: {candidate}")
     return candidate.resolve(strict=True)

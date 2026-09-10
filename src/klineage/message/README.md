@@ -11,9 +11,11 @@ With verification enabled, success also requires `Verify` to return `true`.
 | [Action](action.md) | Prompt and workdir | Action-specific files |
 | [Init](init.md) | Problem definition and expert repository | `kernel.json` |
 | [Decompose](decompose.md) | Kernel directory | `kernel.json`, `SKILL.md` for a removal |
-| [Apply](apply.md) | Kernel and supplied card or memory | `kernel.json`; selected `SKILL.md` when applicable |
+| [Apply](apply.md) | Kernel and optional memory directory | `kernel.json`; selected `SKILL.md` when applicable |
 | [Verify](verify.md) | Producer prompt, response and artifacts | Boolean; permitted evidence updates |
-| [Workflow](workflow.md) | Problem and expert repository | Latest kernel |
+| [Workflow CLI](workflow.md) | Problem and expert repository | Latest kernel JSON on stdout |
+| [Memory CLI](workflow.md#memory-initialization) | Problem, expert repository and memory directory | Saved skill paths as JSON on stdout |
+| [Optimize CLI](workflow.md#optimization) | Starting kernel and optional memory directory | Latest kernel JSON on stdout |
 
 Paths below are relative to the action's `workdir`, unless marked absolute.
 Treat upstream directories as read-only. Preserve referenced directories and input
@@ -47,7 +49,7 @@ No separate `message.json`, `candidate.json`, or `report.md` is required.
 
 ## `kernel.json`
 
-Use the registered `save_kernel` and `load_kernel`; their APIs are in AGENTS.md.
+Use `save_kernel` and `load_kernel` for persistence.
 The file contains `Kernel.to_dict()`:
 
 | Field | Format and meaning |
@@ -80,11 +82,15 @@ evaluations/ncu-* in the calling agent's workdir and are not Kernel fields.
 CodexRunner configures PYTHONPATH for the installed package and exposes message
 contracts at `.klineage/message/`. It exposes packaged instructions at
 `.agents/skills/{cuda,hip,ascendc,bench}/` in each workdir.
-Treat these links as read-only.
+Treat these links and their source directories as read-only.
+When supplied, Apply mounts its memory directory at `.agents/skills/memory`.
+Only in that mode, enumerate and read memory SKILL.md files explicitly; custom
+SkillCard metadata need not appear in the native skill index. Keep that mount
+read-only. Packaged runtime skills are not optimization candidates.
 The function catalog in workdir/AGENTS.md supplies registered import paths,
-signatures, arguments, results, and limitations. It covers profiling/retrieval,
-problem inspection/evaluation, repository staging, backend selection, and
-Kernel/SkillCard construction, building, and persistence. Call these Python
+signatures, arguments, results, and limitations. It covers profiling,
+problem inspection/evaluation, repository staging, backend selection, source loading,
+and kernel building/persistence. Call these Python
 functions directly. The agent still checks skill applicability and ranks bottlenecks.
 CodexRunner refreshes the catalog before every call while preserving other
 instructions, including those in an active nonempty AGENTS.override.md.
@@ -97,8 +103,8 @@ their in-memory and inline JSON representations retain four metadata fields and 
 
 ## Runtime Kernel
 
-`Kernel.from_sources` builds a callable instance; see the function catalog for its
-API. `kernel(*inputs)` runs it; the callable evaluator accepts that
+`Kernel.from_sources` builds a callable instance. `kernel(*inputs)` runs it;
+the callable evaluator accepts that
 instance directly. Build language, entry_point and output_style come from config.toml.
 These derived attributes and the compiled function are not serialized.
 `load_kernel` / `Kernel.from_dict` restore source artifacts; call `build()` before

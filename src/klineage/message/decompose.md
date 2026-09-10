@@ -28,8 +28,8 @@ with no SKILL.md or submission/. Remove stale local proposals on retries. Missin
 SKILL.md is a valid stop signal for an unchanged naive input after self-checks.
 When enabled, the external verifier must also confirm this case. Without it,
 the stop is self-reported, not independently verified. A changed kernel without
-a card, or an unchanged kernel with a card, is an error. Workflow and init_memory
-reject these cases, missing kernel.json, and changed problems even with the
+a card, or an unchanged kernel with a card, is an error. Both workflow CLIs reject
+these cases, missing kernel.json, and changed problems even with the
 external verifier disabled.
 
 The final response records the removed optimization and locus, remaining
@@ -40,13 +40,13 @@ Budget exhaustion does not prove that a kernel is naive.
 
 ## SkillCard format
 
-Use the registered `save_skill` and `load_skill` for SKILL.md; see AGENTS.md for
-their APIs. YAML frontmatter contains exactly skill_id, intent, preconditions,
+Use `klineage.memory.save_skill` and `klineage.memory.load_skill` for SKILL.md.
+YAML frontmatter contains exactly skill_id, intent, preconditions,
 and scope. The independent body
 contains `# Overview`, `# Precondition`, `# Scope`, and `# Code Change Snippet`, with
 `## Before` and `## After` code blocks showing the forward optimization.
-SkillCard.to_dict() carries the four metadata fields plus body for inline handoffs
-and JSON memories. Keep SKILL.md outside submission/ and Kernel.source_files.
+SkillCard.to_dict() carries the four metadata fields plus body for inline handoffs.
+Keep SKILL.md outside submission/ and Kernel.source_files.
 
 | Field | Format |
 | --- | --- |
@@ -84,6 +84,6 @@ SKILL.md stays unchanged; measurements and source citations stay in evaluations/
 
 ## Handoff
 
-Pass this directory to the next Decompose or Apply. Retain each emitted SKILL.md
-path as Apply memory. Consume artifacts after the action succeeds and, when enabled,
+Pass this directory to the next Decompose or Apply. Collect emitted SKILL.md files
+in a memory directory for Apply. Consume artifacts after the action succeeds and, when enabled,
 its verifier succeeds. Disabled verification does not disable required self-checks.

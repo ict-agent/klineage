@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from klineage._utils import new_workdir
-from klineage.action.action import MAX_RETRIES, TIMEOUT, Action
+from klineage.action.action import Action
+from klineage.constants import MAX_RETRIES, TIMEOUT, RunKind
 from klineage.kernel import Kernel
 from klineage.prompts import render_prompt
+from klineage.utils import new_workdir
 
 
 def decompose(input_kernel: Kernel | Path):
@@ -16,7 +17,7 @@ def decompose(input_kernel: Kernel | Path):
 
 
 class Decompose(Action):
-    verify_prompt = render_prompt("verify_decompose")
+    verify_prompt = render_prompt(f"{RunKind.VERIFY}_{RunKind.DECOMPOSE}")
 
     def __init__(
         self,
@@ -27,9 +28,9 @@ class Decompose(Action):
         max_retries: int = MAX_RETRIES,
         timeout: int = TIMEOUT,
     ):
-        workdir = workdir or new_workdir("decompose")
+        workdir = workdir or new_workdir(RunKind.DECOMPOSE)
         prompt = render_prompt(
-            "decompose",
+            RunKind.DECOMPOSE,
             input_kernel=(
                 input_kernel.to_dict()
                 if isinstance(input_kernel, Kernel)

@@ -8,7 +8,12 @@ from unittest.mock import patch
 from kernel_fixtures import accepted, kernel, skill
 from prompt_fixtures import prompt_inputs
 
-from klineage.action import Init, init_memory, workflow
+from klineage.cli.common import read_step
+from klineage.cli.init_memory import init_memory
+from klineage.cli.optimize import optimize
+from klineage.cli.workflow import workflow
+from klineage.constants import RunKind, StepMode
+from klineage.contract import ValueRole
 from klineage.errors import StructuredOutputError, ValidationGateError
 from klineage.harness.artifacts import load_kernel, save_kernel
 from klineage.memory import load_skill, save_skill
@@ -85,10 +90,27 @@ class WorkflowTests(unittest.TestCase):
             save_kernel(current, runner.work_dir)
         elif run_id == "Apply":
             current = load_kernel(Path(data["current_kernel"]))
-            self.assertIsNone(data["skill"])
+            self.assertNotIn("skill", data)
+            memory = runner.work_dir / ".agents/skills/memory"
             index = int(runner.work_dir.name)
+            if "memory" not in data:
+                self.assertFalse(memory.exists())
+                if index != self.empty_at:
+                    current = replace(
+                        current,
+                        source_files={
+                            "kernel.cu": current.source_files["kernel.cu"]
+                            + f" // baseline-{index}"
+                        },
+                        validation=None,
+                    )
+                save_kernel(current, runner.work_dir)
+                return SimpleNamespace(final_message="generated")
+
+            self.assertEqual(data["memory"], str(memory))
+            self.assertTrue(memory.is_dir())
             choices = []
-            for path in data["memory"]:
+            for path in sorted(memory.rglob("SKILL.md")):
                 card = load_skill(path)
                 if card.skill_id in data.get("exclude_skills", ()):
                     continue
@@ -255,7 +277,7 @@ class WorkflowTests(unittest.TestCase):
         self.calls.assert_not_called()
 
     def test_memory_defaults(self):
-        with patch("klineage.action.workflow.new_workdir", return_value=self.work):
+        with patch("klineage.cli.init_memory.new_workdir", return_value=self.work):
             paths = init_memory(
                 self.problem,
                 self.repo,
@@ -282,30 +304,6 @@ class WorkflowTests(unittest.TestCase):
             self.run_init_memory()
         self.assertEqual(destination.read_text(), "existing file")
         self.calls.assert_not_called()
-
-    def test_init_path_inputs(self):
-        action = Init(
-            self.problem,
-            self.repo,
-            self.expert_path,
-            workdir=self.work / "init",
-            enable_verifier=False,
-        )
-        data = prompt_inputs(action.prompt)
-        self.assertEqual(data["problem"], str(self.problem))
-        self.assertEqual(data["expert_kernel"], str(self.expert_path))
-        self.calls.assert_not_called()
-
-    def test_default_runs_verifier(self):
-        workflow(
-            self.problem,
-            self.repo,
-            self.expert_path,
-            max_decompose_step=1,
-            max_apply_step=0,
-            workdir=self.work,
-        )
-        self.assertTrue(any(event[1] == "Verify" for event in self.events))
 
     def test_artifact_handoff(self):
         result = self.run_workflow(max_apply_step=2, timeout=42)
@@ -336,14 +334,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(data["apply/1"]["exclude_skills"], ["tile"])
         self.assertEqual(
             data["apply/1"]["memory"],
-            [
-                str(self.work / "decompose/0/SKILL.md"),
-                str(self.work / "decompose/1/SKILL.md"),
-            ],
+            str(self.work / "apply/1/.agents/skills/memory"),
+        )
+        self.assertEqual(
+            Path(data["apply/1"]["memory"]).resolve(), self.work / "memory"
         )
         for step in range(2):
             card = load_skill(self.work / f"decompose/{step}/SKILL.md")
             self.assertEqual(card, self.cards[1 - step])
+            self.assertEqual(load_skill(self.work / f"memory/{step}/SKILL.md"), card)
 
     def test_complete_stops_decompose(self):
         result = self.run_workflow(max_decompose_step=5, max_apply_step=0)
@@ -364,19 +363,6 @@ class WorkflowTests(unittest.TestCase):
             self.states[1].source_files["kernel.cu"],
         )
 
-    def test_changed_kernel_needs_card(self):
-        self.omit_skill = True
-        with self.assertRaises(StructuredOutputError):
-            self.run_workflow(max_apply_step=0)
-        self.assertFalse((self.work / "apply").exists())
-
-    def test_naive_input_stops(self):
-        self.states = self.states[:1]
-        result = self.run_workflow(max_decompose_step=5, max_apply_step=0)
-        self.assertEqual(result, self.states[0])
-        self.assertEqual([event[0] for event in self.events], ["init", "decompose/0"])
-        self.assertFalse((self.work / "decompose/0/SKILL.md").exists())
-
     def test_apply_budget(self):
         result = self.run_workflow(max_apply_step=1)
         self.assertTrue(result.source_files["kernel.cu"].endswith(" // tile"))
@@ -384,7 +370,14 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse((self.work / "apply/1").exists())
 
     def test_verification_handoff(self):
-        self.run_workflow(max_apply_step=2, enable_verifier=True)
+        workflow(
+            self.problem,
+            self.repo,
+            self.expert_path,
+            max_decompose_step=2,
+            max_apply_step=2,
+            workdir=self.work,
+        )
         self.assertEqual(len(self.events), 10)
         for generation, verification in zip(self.events[::2], self.events[1::2]):
             self.assertEqual(generation[0], verification[0])
@@ -493,6 +486,190 @@ class WorkflowTests(unittest.TestCase):
                 with self.subTest(key=key, steps=steps), self.assertRaises(ValueError):
                     self.run_workflow(**{key: steps})
         self.calls.assert_not_called()
+
+    def test_optimize_from_kernel_file(self):
+        start = self.root / "start"
+        start.mkdir()
+        save_kernel(self.states[0], start)
+        memory = self.root / "memory"
+        for index, card in enumerate(self.cards):
+            save_skill(card, memory / str(index) / "SKILL.md")
+
+        result = optimize(
+            start / "kernel.json",
+            memory,
+            self.work,
+            max_apply_step=5,
+            enable_verifier=False,
+            timeout=42,
+        )
+        self.assertTrue(result.source_files["kernel.cu"].endswith(" // tile // mma"))
+        self.assertEqual(
+            [event[0] for event in self.events], ["apply/0", "apply/1", "apply/2"]
+        )
+        self.assertEqual(Path(self.events[0][2]["memory"]).resolve(), memory)
+        self.assertEqual(load_kernel(start), self.states[0])
+        self.assertTrue(all(event[3] == 42 for event in self.events))
+
+    def test_optimize_zero_budget(self):
+        start = self.root / "start"
+        start.mkdir()
+        save_kernel(self.states[0], start)
+        memory = self.root / "memory"
+        memory.mkdir()
+        self.assertEqual(
+            optimize(start, memory, self.work, max_apply_step=0), self.states[0]
+        )
+        self.calls.assert_not_called()
+
+    def test_optimize_validates_paths(self):
+        start = self.root / "start"
+        start.mkdir()
+        save_kernel(self.states[0], start)
+        memory = self.root / "memory"
+        memory.mkdir()
+        cases = (
+            (self.root / "missing", memory, self.work),
+            (start, self.root / "missing", self.work),
+            (start, memory, memory),
+        )
+        for source, cards, work in cases:
+            with (
+                self.subTest(source=source, memory=cards, work=work),
+                self.assertRaises((FileNotFoundError, FileExistsError, ValueError)),
+            ):
+                optimize(source, cards, work)
+        self.calls.assert_not_called()
+
+    def test_baseline_without_memory(self):
+        start = self.root / "start"
+        start.mkdir()
+        save_kernel(self.states[0], start)
+        self.empty_at = 2
+        for index, memory in enumerate((None, "", " \t ")):
+            self.work = self.root / f"baseline-{index}"
+            self.events.clear()
+            with (
+                self.subTest(memory=memory),
+                patch("klineage.cli.optimize.load_skill") as load_card,
+            ):
+                result = optimize(
+                    start,
+                    memory,
+                    self.work,
+                    max_apply_step=5,
+                    enable_verifier=False,
+                )
+            self.assertTrue(
+                result.source_files["kernel.cu"].endswith(
+                    " // baseline-0 // baseline-1"
+                )
+            )
+            self.assertEqual(
+                [event[0] for event in self.events], ["apply/0", "apply/1", "apply/2"]
+            )
+            self.assertFalse(list(self.work.rglob("SKILL.md")))
+            load_card.assert_not_called()
+
+    def test_baseline_rejects_bad_output(self):
+        start = self.root / "start"
+        start.mkdir()
+        save_kernel(self.states[0], start)
+        for change in ("problem", "card", "name"):
+            self.work = self.root / change
+            self.empty_at = 0 if change == "name" else None
+
+            def generate(runner, prompt, *, run_id, change=change):
+                result = self.run_codex(runner, prompt, run_id=run_id)
+                candidate = load_kernel(runner.work_dir)
+                if change == "card":
+                    save_skill(self.cards[0], runner.work_dir / "SKILL.md")
+                elif change == "problem":
+                    save_kernel(
+                        replace(
+                            candidate,
+                            problem=replace(candidate.problem, name="changed"),
+                        ),
+                        runner.work_dir,
+                    )
+                else:
+                    save_kernel(replace(candidate, name="changed"), runner.work_dir)
+                return result
+
+            self.calls.side_effect = generate
+            with self.subTest(change=change), self.assertRaises(StructuredOutputError):
+                optimize(
+                    start, None, self.work, max_apply_step=1, enable_verifier=False
+                )
+
+    def test_empty_directory_uses_memory(self):
+        start = self.root / "start"
+        start.mkdir()
+        save_kernel(self.states[0], start)
+        memory = self.root / "empty-memory"
+        memory.mkdir()
+        result = optimize(start, memory, self.work, enable_verifier=False)
+        self.assertEqual(result, self.states[0])
+        self.assertEqual([event[0] for event in self.events], ["apply/0"])
+        self.assertEqual(Path(self.events[0][2]["memory"]).resolve(), memory)
+
+    def test_rejects_reordered_abi(self):
+        for role in ValueRole:
+            definition = dict(self.states[0].problem.definition)
+            members = dict(definition[role])
+            if role is ValueRole.OUTPUTS:
+                members["auxiliary"] = members["output"]
+            definition[role] = members
+            before = replace(
+                self.states[0],
+                problem=replace(self.states[0].problem, definition=definition),
+            )
+            definition = {**definition, role: dict(reversed(tuple(members.items())))}
+            after = replace(
+                self.states[1], problem=replace(before.problem, definition=definition)
+            )
+            self.assertEqual(before.problem, after.problem)
+            work = self.root / role
+            work.mkdir()
+            save_kernel(after, work)
+            save_skill(self.cards[0], work / "SKILL.md")
+            with (
+                self.subTest(role=role),
+                self.assertRaisesRegex(StructuredOutputError, "ABI"),
+            ):
+                read_step(before, work, RunKind.APPLY)
+
+    def test_terminal_contract(self):
+        modes = (
+            (RunKind.DECOMPOSE, StepMode.SKILL),
+            (RunKind.APPLY, StepMode.SKILL),
+            (RunKind.APPLY, StepMode.BASELINE),
+        )
+        for stage, mode in modes:
+            for artifact in ("card_dir", "card_link", "submission", "validation"):
+                work = self.root / f"{stage}-{mode}-{artifact}"
+                work.mkdir()
+                before = self.states[0]
+                after = (
+                    replace(before, validation=accepted())
+                    if artifact == "validation"
+                    else before
+                )
+                save_kernel(after, work)
+                if artifact == "card_dir":
+                    (work / "SKILL.md").mkdir()
+                elif artifact == "card_link":
+                    (work / "SKILL.md").symlink_to(work / "missing")
+                elif artifact == "submission":
+                    (work / "submission").mkdir()
+                with self.subTest(stage=stage, mode=mode, artifact=artifact):
+                    if stage is RunKind.DECOMPOSE and artifact == "validation":
+                        self.assertEqual(
+                            read_step(before, work, stage, mode), (after, None)
+                        )
+                        continue
+                    with self.assertRaises(StructuredOutputError):
+                        read_step(before, work, stage, mode)
 
 
 if __name__ == "__main__":

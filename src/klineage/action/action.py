@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from klineage._utils import operation_id
+from klineage.constants import MAX_RETRIES, TIMEOUT, RunKind
 from klineage.errors import StructuredOutputError, ValidationGateError
 from klineage.harness.codex_runner import CodexRunner
 from klineage.prompts import render_prompt
+from klineage.utils import operation_id
 
-MAX_RETRIES = 3
-TIMEOUT = 3600
 VERIFY_PROMPT = """Inspect actual artifacts in the working directory.
 Return true only when the requested outputs satisfy the task; uncertainty means false.
 """
@@ -83,7 +82,7 @@ class Action:
         if not isinstance(prompt, str):
             raise TypeError("prompt must be a string")
         return verify(
-            render_prompt("verify", criteria=prompt, run_id=self.run_id),
+            render_prompt(RunKind.VERIFY, criteria=prompt, run_id=self.run_id),
             self.workdir,
             timeout=self.timeout,
         )

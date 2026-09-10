@@ -55,6 +55,14 @@ class RetrievalTests(unittest.TestCase):
             with self.subTest(cards=cards, target=target), self.assertRaises(TypeError):
                 retrieve(cards, target)
 
+    def test_rejects_bad_exclusions(self):
+        for excluded in ("warp.store", b"warp.store", (None,), (1,)):
+            with (
+                self.subTest(excluded=excluded),
+                self.assertRaisesRegex((TypeError, ValueError), "exclude_skills"),
+            ):
+                retrieve((self.card,), self.target, exclude_skills=excluded)
+
 
 if __name__ == "__main__":
     unittest.main()

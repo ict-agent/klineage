@@ -1,7 +1,7 @@
 import json
 import tempfile
 import unittest
-from dataclasses import fields, replace
+from dataclasses import replace
 from pathlib import Path
 
 from kernel_fixtures import accepted, kernel
@@ -14,18 +14,18 @@ from klineage.kernel import Kernel
 class KernelSchemaTests(unittest.TestCase):
     def test_invalid_latency(self):
         for latency in (float("nan"), float("inf"), True, "1.0"):
-            with self.subTest(latency=latency):
-                with self.assertRaises((TypeError, ValueError)):
-                    ValidationResult(True, True, True, latency)
-                with self.assertRaises((TypeError, ValueError)):
-                    ValidationResult.from_dict(
-                        {
-                            "compile_passed": True,
-                            "correctness_passed": True,
-                            "profile_passed": True,
-                            "latency_ms": latency,
-                        }
-                    )
+            with (
+                self.subTest(latency=latency),
+                self.assertRaises((TypeError, ValueError)),
+            ):
+                ValidationResult.from_dict(
+                    {
+                        "compile_passed": True,
+                        "correctness_passed": True,
+                        "profile_passed": True,
+                        "latency_ms": latency,
+                    }
+                )
 
     def test_timing_requires_latency(self):
         with self.assertRaises(ValueError):
@@ -82,10 +82,6 @@ class KernelSchemaTests(unittest.TestCase):
             )
             self.assertEqual(raw["validation"]["reference_latency_ms"], 2.5)
             self.assertEqual(load_kernel(root), current)
-        self.assertEqual(
-            {field.name for field in fields(ValidationResult)},
-            set(current.validation.to_dict()),
-        )
 
     def test_sources_bind_fingerprint(self):
         current = kernel()

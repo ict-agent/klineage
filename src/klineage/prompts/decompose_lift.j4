@@ -110,8 +110,8 @@ Put implementation details and Before/After code only in body.
   Keep snippets focused on that change and explain any required shared context.
 
 Construct SkillCard with these four metadata fields and body containing all four
-Markdown sections. Use the registered save_skill and load_skill functions to write
-SKILL.md and check its roundtrip; consult AGENTS.md for their APIs. Metadata and body
+Markdown sections. Use klineage.memory.save_skill and klineage.memory.load_skill
+to write SKILL.md and check its roundtrip. Metadata and body
 remain separate on disk; inline dictionaries include body. Keep progress and measurements
 outside the skill. The recipe must work from the deoptimized kernel alone, without
 upstream paths or a copy of the complete optimized kernel.

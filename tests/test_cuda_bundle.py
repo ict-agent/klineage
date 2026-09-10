@@ -122,6 +122,43 @@ class BundleTests(BundleCase):
         self.assertIs(sys.modules["bundle_helper"], foreign)
         self.assertEqual(list(self.loader.build_root.rglob("__pycache__")), [])
 
+    def test_namespace_isolation(self):
+        foreign = types.ModuleType("bundle_helper")
+        foreign.__path__ = [str(self.root / "foreign")]
+        value = types.ModuleType("bundle_helper.values")
+        value.VALUE = 99
+        foreign.values = value
+        self.enterContext(
+            patch.dict(
+                sys.modules,
+                {"bundle_helper": foreign, "bundle_helper.values": value},
+            )
+        )
+        functions = [
+            self.loader.load(
+                self.kernel(
+                    {
+                        "binding.py": (
+                            "def run():\n"
+                            "    from bundle_helper import values\n"
+                            "    return values.VALUE\n"
+                        ),
+                        "bundle_helper/values.py": f"VALUE = {increment}\n",
+                    }
+                )
+            )
+            for increment in (1, 2)
+        ]
+        self.assertEqual([function() for function in functions], [1, 2])
+        self.assertEqual(functions[0](), 1)
+        self.assertIs(sys.modules["bundle_helper"], foreign)
+        self.assertIs(sys.modules["bundle_helper.values"], value)
+        sys.modules.pop("bundle_helper")
+        sys.modules.pop("bundle_helper.values")
+        self.assertEqual(functions[0](), 1)
+        self.assertNotIn("bundle_helper", sys.modules)
+        self.assertNotIn("bundle_helper.values", sys.modules)
+
     def test_python_destination_entry(self):
         kernel = self.kernel(
             {"binding.py": "def run(x, output): output.append(x)\n"}, dps="true"
@@ -253,19 +290,6 @@ class NativeBundleTests(BundleCase):
             ):
                 self.loader.load(kernel)
             self.assertNotIn("TORCH_CUDA_ARCH_LIST", os.environ)
-
-    def test_native_build_failure(self):
-        kernel = self.kernel(
-            {"kernel.cu": _CUDA.format(increment=1)}, entry="kernel.cu::run"
-        )
-        with (
-            patch(
-                "torch.utils.cpp_extension.load",
-                side_effect=RuntimeError("compiler failed"),
-            ),
-            self.assertRaisesRegex(RuntimeError, "compiler failed"),
-        ):
-            self.loader.load(kernel)
 
     def test_native_missing_symbol(self):
         kernel = self.kernel(

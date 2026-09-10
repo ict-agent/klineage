@@ -6,8 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from klineage._utils import mapping, nonempty, string_tuple
-from klineage.agent_api import agent_function
+from klineage.utils import mapping, nonempty, string_tuple
 
 
 def _strings(value: Any, label: str) -> tuple[str, ...]:
@@ -82,7 +81,6 @@ class SkillCard:
         if not self.preconditions:
             raise ValueError("a SkillCard needs at least one precondition")
 
-    @agent_function
     def to_dict(self) -> dict[str, Any]:
         """Return the four metadata fields and Markdown body for inline handoffs.
 
@@ -101,7 +99,6 @@ class SkillCard:
         }
 
     @classmethod
-    @agent_function
     def from_dict(cls, value: Mapping[str, Any]) -> SkillCard:
         """Restore skill_id, intent, preconditions, scope, and body from a dictionary.
 

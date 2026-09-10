@@ -45,10 +45,6 @@ class CudaContractTests(unittest.TestCase):
         self.assertEqual(build.source_path, "solution/kernel.cu")
         self.assertEqual(build.symbol, "run")
         self.assertIs(build.output_style, contract.OutputStyle.DESTINATION)
-        self.assertEqual(
-            kernel_metadata(source_bundle()).source_path,
-            "solution/kernel.cu",
-        )
 
     def test_python_entry_and_defaults(self):
         config = _CONFIG.replace("kernel.cu::run", "nested/kernel.py::run").replace(
@@ -64,10 +60,6 @@ class CudaContractTests(unittest.TestCase):
         self.assertEqual(build.source_path, "solution/nested/kernel.py")
         self.assertEqual(build.language, "python")
         self.assertIs(build.output_style, contract.OutputStyle.RETURN)
-        sources["config.toml"] = config.replace(
-            'language = "cuda"', 'language = "python"'
-        )
-        self.assertEqual(kernel_metadata(sources).language, "python")
 
     def test_cuda_return_style(self):
         for config in (

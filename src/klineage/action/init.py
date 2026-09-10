@@ -5,10 +5,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from klineage._utils import new_workdir
-from klineage.action.action import MAX_RETRIES, TIMEOUT, Action
+from klineage.action.action import Action
+from klineage.constants import MAX_RETRIES, TIMEOUT, RunKind
 from klineage.prompts import render_prompt
 from klineage.repository import looks_like_git_url
+from klineage.utils import new_workdir
 
 
 def init(
@@ -21,7 +22,7 @@ def init(
 
 
 class Init(Action):
-    verify_prompt = render_prompt("verify_init")
+    verify_prompt = render_prompt(f"{RunKind.VERIFY}_{RunKind.INIT}")
 
     def __init__(
         self,
@@ -35,7 +36,7 @@ class Init(Action):
         timeout: int = TIMEOUT,
     ):
 
-        workdir = Path(workdir or new_workdir("init")).expanduser().resolve()
+        workdir = Path(workdir or new_workdir(RunKind.INIT)).expanduser().resolve()
         problem_path = Path(problem).expanduser().resolve(strict=True)
         repository = (
             str(repo)
@@ -43,7 +44,7 @@ class Init(Action):
             else str(Path(repo).expanduser().resolve())
         )
         prompt = render_prompt(
-            "init",
+            RunKind.INIT,
             problem=str(problem_path),
             repository=repository,
             expert_kernel=str(expert_kernel),

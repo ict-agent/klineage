@@ -40,7 +40,7 @@ expert/                     # Adapter calling the original expert instance
 # Procedure
 
 1. Read the bench skill and the kernel.json contracts listed above.
-   Use inspect_problem from the function catalog on the supplied problem in this
+   Use inspect_problem on the supplied problem in this
    workdir; call the returned ProblemSpec problem_spec.
    Read the native skill matching problem_spec.language/platform. Derive the ABI
    from its ordered definition inputs/outputs and workload axis

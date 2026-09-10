@@ -1,4 +1,3 @@
-import json
 import tempfile
 import unittest
 from dataclasses import replace
@@ -9,9 +8,7 @@ import yaml
 from klineage.memory import (
     Scope,
     SkillCard,
-    load_memory,
     load_skill,
-    save_memory,
     save_skill,
 )
 from klineage.prompts import render_prompt
@@ -91,30 +88,6 @@ class SkillStorageTests(unittest.TestCase):
         save_skill(card, path)
         self.assertEqual(load_skill(path), card)
 
-    def test_memory_roundtrip(self):
-        path = self.root / "memory.json"
-        save_memory((self.card, self.card), path)
-        self.assertEqual(load_memory(path), (self.card,))
-        payload = json.loads(path.read_text())[0]
-        self.assertEqual(
-            set(payload), {"skill_id", "intent", "preconditions", "scope", "body"}
-        )
-        self.assertEqual(SkillCard.from_dict(payload), self.card)
-
-        with self.assertRaises(TypeError):
-            save_memory([[self.card]], path)
-        with self.assertRaisesRegex(ValueError, "conflicting duplicate"):
-            save_memory((self.card, replace(self.card, intent="conflict")), path)
-        self.assertEqual(load_memory(path), (self.card,))
-
-    def test_rejects_invalid_memory(self):
-        path = self.root / "memory.json"
-        for payload in ({}, [[self.card.to_dict()]], [{"skill_id": "incomplete"}]):
-            with self.subTest(payload=payload):
-                path.write_text(json.dumps(payload))
-                with self.assertRaises((TypeError, ValueError)):
-                    load_memory(path)
-
     def test_rejects_invalid_fields(self):
         for changes in (
             {"skill_id": 1},
@@ -157,6 +130,6 @@ class SkillStorageTests(unittest.TestCase):
 
     def test_rejects_yaml_objects(self):
         path = self.root / "SKILL.md"
-        path.write_text("---\n!!python/object:builtins.object {}\n---\n# unsafe\n")
-        with self.assertRaises(ValueError):
+        path.write_text("---\n!!python/object:builtins.object {}\n---\n\n# unsafe\n")
+        with self.assertRaisesRegex(ValueError, "invalid SKILL.md YAML"):
             load_skill(path)

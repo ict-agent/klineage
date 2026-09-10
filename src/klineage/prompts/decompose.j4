@@ -40,12 +40,13 @@ thread mapping, and instructions are not prerequisites for HIP or AscendC cards.
 # Procedure
 
 1. Read the skills and message contracts above. Load input_kernel as a Kernel
-   named input: use the registered load_kernel for a directory or Kernel.from_dict
+   named input: use load_kernel for a directory or klineage.kernel.Kernel.from_dict
    for an inline dictionary. Inspect the complete
    bundle, config, ABI, launch path, and device code. Identify computation, data
    movement, layouts, synchronization, and scheduling patterns.
    If the input is already naive, save it unchanged to kernel.json and emit no
-   SKILL.md or submission/.
+   SKILL.md or submission/; skip steps 2-5. Evaluate the unchanged input once and
+   perform the naive source audit under Progress and termination below, then finish.
 
 2. Choose one semantic transformation to undo. Remove dependent mechanisms before
    their prerequisites. Include layout/thread-mapping changes necessary to remove
@@ -82,16 +83,18 @@ thread mapping, and instructions are not prerequisites for HIP or AscendC cards.
    End body with a Code Change Snippet section showing focused Before and After code
    for the forward optimization, as specified in the SkillCard template.
 
-5. Use save_kernel to write deoptimized_kernel to kernel.json and save_skill to
-   write card to SKILL.md. Keep four top-level YAML metadata fields and the
+5. Use save_kernel to write deoptimized_kernel to kernel.json and
+   klineage.memory.save_skill to write card to SKILL.md. Keep four top-level YAML metadata fields and the
    independent Markdown body.
    Leave deoptimized_kernel.validation unset. When enabled, the external verifier
    attaches its measured validation to kernel.json.
 
 # Self-Verification
 
-Perform these checks before finishing. Do not invoke other actions or generate a
-forward roundtrip here, including when external verification is disabled.
+For a removal, perform all checks below. For an unchanged naive input, run only
+Correctness and timing once and the Progress and termination source audit.
+Do not invoke other actions or generate a forward roundtrip here, including when
+external verification is disabled.
 
 **Correctness and timing.** Use klineage.harness.evaluate(input, Path.cwd()) and
 evaluate(deoptimized_kernel, Path.cwd()) without reference. Require both results
@@ -102,7 +105,7 @@ Never relax tolerances or reduce the workload to make a naive kernel pass.
 Use this existing Kernel evaluator as the sole correctness and timing entry.
 Read its request/result/stderr records instead of building a custom checker or timer.
 
-**Atomicity and replayability.** Compare input and deoptimized_kernel at cited
+**Atomicity and replayability.** For a removal, compare input and deoptimized_kernel at cited
 source locations: exactly one optimization is absent, required adaptations
 are explained, and other mechanisms remain. Read SKILL.md as an agent given only
 deoptimized_kernel and its problem. Check that it specifies how to restore the

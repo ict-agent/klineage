@@ -1,9 +1,9 @@
 import unittest
-from dataclasses import fields, replace
+from dataclasses import replace
 
 from problem_fixtures import problem_spec
 
-from klineage.contract import ABIValue, ProblemSpec
+from klineage.contract import ProblemSpec
 from klineage.kernel import Kernel
 
 CUDA_SOURCE = "__global__ void kernel() {}"
@@ -36,15 +36,7 @@ class ContractTests(unittest.TestCase):
         value = problem()
         expected = {"name", "definition", "workload", "language", "platform"}
         self.assertEqual(set(value.to_dict()), expected)
-        self.assertEqual({item.name for item in fields(ProblemSpec)}, expected)
         self.assertEqual(ProblemSpec.from_dict(value.to_dict()), value)
-
-    def test_abi_value_fields(self):
-        value = ABIValue("x", "float32", ("N",), "Contiguous input.")
-        expected = {"name", "dtype", "shape", "description"}
-        self.assertEqual({item.name for item in fields(ABIValue)}, expected)
-        self.assertEqual(set(value.to_dict()), expected)
-        self.assertEqual(ABIValue.from_dict(value.to_dict()), value)
 
     def test_trace_data_is_detached(self):
         raw = problem().to_dict()

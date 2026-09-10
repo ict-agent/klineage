@@ -18,9 +18,9 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Protocol
 
-from klineage._utils import boolean, operation_id
 from klineage.agent_api import agent_function
 from klineage.backend import Backend, BackendKind, detect_backend, get_backend
+from klineage.constants import BUILD_DIRECTORY, EVALUATIONS_DIRECTORY, RunKind
 from klineage.contract import ProblemSpec, ValueRole
 from klineage.errors import ActionError
 from klineage.harness.artifacts import (
@@ -49,6 +49,7 @@ from klineage.harness.timing import (
     timing_policy,
     verify_performance,
 )
+from klineage.utils import boolean, operation_id
 
 if TYPE_CHECKING:
     import torch
@@ -553,7 +554,9 @@ def inspect_problem(problem: Path, work: Path) -> ProblemSpec:
     Write inspection evidence and captured inputs under work/evaluations.
     Preserve workload input files referenced by the returned contract.
     """
-    description = EvaluationRuntime().inspect(problem, log_dir=work / "evaluations")
+    description = EvaluationRuntime().inspect(
+        problem, log_dir=work / EVALUATIONS_DIRECTORY
+    )
     return ProblemSpec(
         name=description["problem_name"],
         definition=description["definition"],
@@ -583,8 +586,8 @@ def evaluate(
         kernel,
         reference=reference,
         include_paths=include_paths,
-        build_root=work / "build",
-        log_dir=work / "evaluations" / operation_id("evaluate"),
+        build_root=work / BUILD_DIRECTORY,
+        log_dir=work / EVALUATIONS_DIRECTORY / operation_id(RunKind.EVALUATE),
     )
 
 
@@ -592,8 +595,8 @@ def capture(kernel: Kernel, work: Path, options: ProfileOptions) -> dict[str, An
     return EvaluationRuntime().profile(
         kernel,
         options=options,
-        build_root=work / "build",
-        log_dir=work / "evaluations",
+        build_root=work / BUILD_DIRECTORY,
+        log_dir=work / EVALUATIONS_DIRECTORY,
     )
 
 
@@ -672,15 +675,15 @@ def evaluate_request(request: Mapping[str, Any]) -> ValidationResult:
     backend = kernel_backend(kernel)
     backend.runtime()
     config = parse_config(require_mapping(request.get("config"), "config"), backend)
-    reference = Kernel.from_dict(reference_value) if reference_value else None
+    reference = (
+        Kernel.from_dict(reference_value) if reference_value is not None else None
+    )
     if reference is not None:
         require_compatible_contracts(kernel, reference)
     module = trace_module(kernel.problem.definition, kernel.problem.workload)
     problem_inputs = load_inputs(module, config.seed, backend)
     expected = compute_reference(module, problem_inputs)
     check_problem(kernel.problem, problem_inputs, expected)
-    if reference is not None:
-        check_problem(reference.problem, problem_inputs, expected)
 
     strides = tensor_strides(problem_inputs, expected, kernel.problem)
     try:

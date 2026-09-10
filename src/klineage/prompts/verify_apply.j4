@@ -1,34 +1,48 @@
-Verify kernel.json against current_kernel, skill, memory, and exclude_skills in the
-generation record. Load the input Kernel from its directory or inline dictionary.
-Convert directory/card path strings to Path and reconstruct inline SkillCards
-before calling Python functions.
-Do not modify upstream files, candidate sources, or cards.
+{% set use_memory = memory is not none and memory | trim != "" %}
+Verify kernel.json against current_kernel in the generation record. Load the input
+Kernel from its directory or inline dictionary. Preserve upstream files and candidate
+sources.
 
-When skill is supplied, load that exact card with the registered load_skill or
-SkillCard.from_dict and verify its application. No memory selection is required.
+{% if use_memory %}
+Read memory and exclude_skills from that record. Memory is the absolute
+.agents/skills/memory mount. Enumerate and read its SKILL.md files; custom SkillCard
+metadata need not appear in the native skill index. Packaged bench/backend skills
+are not optimization candidates. Preserve the mount, its source memory, and cards.
 
-When skill is null, recompute candidates using klineage.agent_tools.retrieve with
-the original memory and exclusions. This only filters scope and excluded IDs;
-check textual prerequisites and already-present mechanisms against the input source.
-If candidates existed, inspect the generation's actual profile request, result,
-metrics, and report. Require matching kernel fingerprint/problem and source-grounded
-ranking. Missing, stale, or unsupported measurements mean false.
+Recompute candidates using klineage.agent_tools.retrieve with Path(memory) and the
+original exclusions. This filters scope and excluded IDs only; check prerequisites
+and existing mechanisms against the input source. If candidates existed, inspect the
+generation's actual profile request, result, metrics, and report. Require matching
+kernel fingerprint/problem and source-grounded ranking. Missing, stale, or unsupported
+measurements mean false.
 
 - With SKILL.md, require exactly one unchanged card from those candidates. Reject
   excluded or inapplicable cards, invented recipes, and unsupported ranking claims.
-- Without SKILL.md, require the input kernel to be preserved exactly and no
+- Without SKILL.md, require the exact unchanged input, including validation, and no
   submission/. Accept only if no candidate applies, with reasons for every rejection.
-  Finish without fabricating a new measured validation for unchanged artifacts.
+  Finish without remeasurement or new validation.
 
-For an application, require the complete problem and ABI to match the input and submission/ to match
-source_files.
+Audit the selected card's scope, preconditions, intent, and body against the input
+and final implementation: types, layout/contiguity and parallel ownership, storage
+placement, pipeline stages/ordering, and hardware features.
+{% else %}
+Reject SKILL.md. For a changed kernel, require exactly one independently chosen
+optimization. Check its stated bottleneck and dependencies against actual source
+and target hardware. Counter profiling is optional; correctness and paired
+performance measurements are required.
+
+For an unchanged result, require the exact input, including validation, and no
+submission/. Audit actual attempts and source/measurement evidence that no proposed
+optimization passed. A tool failure or exhausted budget alone is insufficient.
+Finish without remeasurement or new validation.
+{% endif %}
+
+For an application, require the complete problem and ABI to match the input and
+submission/ to match source_files. Reject additional unrelated optimizations.
 {% include "backend.j4" %}
 Audit the selected backend's bundle; for Python, check the configured callable and
-output convention. Inspect actual code for the card's scope,
-preconditions, intent, body and preserved mechanisms. Check types, layout/contiguity
-and parallel ownership, storage placement, pipeline stages/ordering, and hardware
-features on the input. Reject additional unrelated
-optimizations.
+output convention. Confirm the intended mechanism and preserved unrelated behavior
+at actual source locations.
 
 Use .agents/skills/bench/SKILL.md and klineage.harness.evaluate(candidate, workdir,
 reference=current_kernel). Require ValidationResult.accepted, including the paired

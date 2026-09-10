@@ -11,19 +11,16 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from klineage._utils import mapping, nonempty
 from klineage.agent_api import agent_function
 from klineage.backend import get_backend
+from klineage.constants import BUILD_DIRECTORY, BUNDLE_CONFIG, BUNDLE_SOLUTION
 from klineage.contract import (
-    BUNDLE_CONFIG,
-    BUNDLE_SOLUTION,
     OutputStyle,
     ProblemSpec,
     relative_source_path,
 )
 from klineage.harness.eval import ValidationResult
-
-BUILD_DIRECTORY = Path("build")
+from klineage.utils import mapping, nonempty
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,7 +175,6 @@ class Kernel:
             ).encode()
         ).hexdigest()
 
-    @agent_function
     def to_dict(self) -> dict[str, Any]:
         """Serialize sources, problem, and validation; omit compiled runtime handles."""
         return {
@@ -189,7 +185,6 @@ class Kernel:
         }
 
     @classmethod
-    @agent_function
     def from_dict(cls, value: Mapping[str, Any]) -> Kernel:
         """Restore serialized Kernel metadata without building or executing sources."""
         validation = value.get("validation")

@@ -3,12 +3,11 @@
 import json
 import re
 
-from kernel_fixtures import kernel, skill
+from kernel_fixtures import kernel
 
 
 def task_contexts():
     current = kernel().to_dict()
-    card = skill("tile").to_dict()
     return {
         "init": {
             "problem": "/problem.json",
@@ -18,8 +17,7 @@ def task_contexts():
         "decompose": {"input_kernel": current},
         "apply": {
             "current_kernel": current,
-            "skill": card,
-            "memory": [],
+            "memory": "/workdir/.agents/skills/memory",
             "exclude_skills": [],
         },
     }
@@ -33,7 +31,7 @@ def prompt_inputs(prompt):
             else label.lower().replace(" ", "_")
         ): json.loads(value)
         for label, value in re.findall(
-            r"^(Problem|Repository|Expert kernel|Current kernel|Skill|Memory|"
+            r"^(Problem|Repository|Expert kernel|Current kernel|Memory|"
             r"Input kernel|The input kernel is|Exclude skills): (.+)$",
             prompt,
             re.MULTILINE,

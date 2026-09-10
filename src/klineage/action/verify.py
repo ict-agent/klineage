@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from klineage.action.action import TIMEOUT, Action
+from klineage.action.action import Action
+from klineage.constants import TIMEOUT
 from klineage.errors import StructuredOutputError
 
 BOOLEAN_PROMPT = "\nReturn exactly true or false. No explanation or Markdown."

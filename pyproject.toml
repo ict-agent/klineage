@@ -6,6 +6,11 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = ["jinja2>=3.1,<4", "pyyaml>=6,<7", "safetensors>=0.4,<1"]
 
+[project.scripts]
+klineage-init-memory = "klineage.cli.init_memory:main"
+klineage-workflow = "klineage.cli.workflow:main"
+klineage-optimize = "klineage.cli.optimize:main"
+
 [build-system]
 requires = ["uv_build>=0.11.28,<0.12.0"]
 build-backend = "uv_build"

@@ -64,15 +64,17 @@ class ActionBaseTests(unittest.TestCase):
         self.runner.assert_called_once()
 
     def test_action_specific_criteria(self):
-        from kernel_fixtures import kernel, skill
+        from kernel_fixtures import kernel
 
-        current, cards = kernel(), (skill("tile"),)
+        current = kernel()
+        memory = self.workdir / "memory"
+        memory.mkdir()
         initial = Init.__new__(Init)
         Action.__init__(initial, "init", self.workdir)
         actions = (
             initial,
             Decompose(current, workdir=self.workdir),
-            Apply(current, cards[0], workdir=self.workdir),
+            Apply(current, memory=memory, workdir=self.workdir),
         )
         self.assertEqual(
             len({action.verify_prompt for action in actions}), len(actions)
@@ -86,16 +88,11 @@ class ActionBaseTests(unittest.TestCase):
                     self.assertIn("prompt.txt", prompt)
                     self.assertEqual(directory, self.workdir)
 
-                    for args, kwargs in (
-                        (("Custom verification",), {}),
-                        ((), {"prompt": "Custom verification"}),
-                    ):
-                        self.assertTrue(action.verify(*args, **kwargs))
-                        prompt, directory = check.call_args.args
-                        self.assertTrue(prompt.startswith("Custom verification\n"))
-
-                    with self.assertRaises(TypeError):
-                        action.verify(None)
+            self.assertTrue(initial.verify("Custom verification"))
+            prompt, directory = check.call_args.args
+            self.assertTrue(prompt.startswith("Custom verification\n"))
+            with self.assertRaises(TypeError):
+                initial.verify(None)
 
 
 class ActionRunTests(unittest.TestCase):
@@ -105,14 +102,6 @@ class ActionRunTests(unittest.TestCase):
         self.enterContext(
             patch("klineage.action.action.CodexRunner", return_value=self.runner)
         )
-
-    def test_retries_failed_verification(self):
-        action = Action("generate", self.work, max_retries=1)
-        with patch.object(action, "verify", side_effect=(False, True)):
-            action.run()
-        self.assertEqual(self.runner.call_count, 2)
-        self.assertEqual(action.attempt, 2)
-        self.assertIn("ValidationGateError", self.runner.call_args.args[0])
 
     def test_retries_execution_failure(self):
         self.runner.side_effect = (
@@ -134,44 +123,29 @@ class ActionRunTests(unittest.TestCase):
         action = Action("generate", self.work, max_retries=1)
         action.run()
         first, check_first, second, check_second = self.runner.call_args_list
+        self.assertEqual(action.attempt, 2)
+        self.assertIn("ValidationGateError", second.args[0])
+        self.assertEqual(
+            len({call.kwargs["run_id"] for call in self.runner.call_args_list}), 4
+        )
         for generation, check in ((first, check_first), (second, check_second)):
             record = f".klineage/codex-runs/{generation.kwargs['run_id']}"
             self.assertIn(f'Generation record: "{record}"', check.args[0])
         self.assertNotIn(first.kwargs["run_id"], check_second.args[0])
 
     def test_retry_budget_is_bounded(self):
-        action = Action("generate", self.work, max_retries=2)
-        with (
-            patch.object(action, "verify", return_value=False),
-            self.assertRaises(ValidationGateError),
-        ):
-            action.run()
-        self.assertEqual(self.runner.call_count, 3)
-        identifiers = [call.kwargs["run_id"] for call in self.runner.call_args_list]
-        self.assertEqual(len(set(identifiers)), 3)
-
-    def test_repeated_verify_keeps_logs(self):
-        from klineage.action import verify
-
-        def record(prompt, *, run_id):
-            directory = self.work / run_id
-            directory.mkdir()
-            (directory / "prompt.txt").write_text(prompt)
-            return SimpleNamespace(final_message="true")
-
-        self.runner.side_effect = record
-        self.assertTrue(verify("first check", self.work))
-        self.assertTrue(verify("second check", self.work))
-        self.assertEqual(len(list(self.work.glob("*/prompt.txt"))), 2)
-
-    def test_zero_means_one_attempt(self):
-        action = Action("generate", self.work, max_retries=0)
-        with (
-            patch.object(action, "verify", return_value=False),
-            self.assertRaises(ValidationGateError),
-        ):
-            action.run()
-        self.runner.assert_called_once()
+        for budget in (0, 2):
+            self.runner.reset_mock()
+            action = Action("generate", self.work, max_retries=budget)
+            with (
+                self.subTest(budget=budget),
+                patch.object(action, "verify", return_value=False),
+                self.assertRaises(ValidationGateError),
+            ):
+                action.run()
+            self.assertEqual(self.runner.call_count, budget + 1)
+            identifiers = [call.kwargs["run_id"] for call in self.runner.call_args_list]
+            self.assertEqual(len(set(identifiers)), budget + 1)
 
     def test_nonboolean_is_rejected(self):
         for value in ("true", 1, None):
@@ -231,7 +205,9 @@ class NoGpuImports:
         if fullname.split('.')[0] in {'torch', 'torch_npu', 'flashinfer', 'cupti'}:
             raise AssertionError('unexpected GPU dependency: ' + fullname)
 sys.meta_path.insert(0, NoGpuImports())
-from klineage.action import Action, Verify, init_memory, workflow
+from klineage.action import Action, Verify
+from klineage.cli.init_memory import init_memory
+from klineage.cli.workflow import workflow
 from klineage.agent_api import function_docs
 from klineage.agent_tools import profile, retrieve
 from klineage.harness import evaluate

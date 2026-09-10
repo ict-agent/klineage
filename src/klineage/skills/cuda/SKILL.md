@@ -12,8 +12,8 @@ the directory layout, build configuration, tensor ABI, and runtime constraints.
 2. Implement the requested mechanisms in raw CUDA C/C++.
 3. Export the host wrapper through pybind11 using the caller's device and stream.
 4. Save the complete bundle text in Kernel.source_files; clear changed validation.
-5. Use the `bench` skill when the action requests measurements. Generation-only
-   actions leave measurement to their external verifier.
+5. Use the `bench` skill for the action's required self-checks, including when
+   external verification is disabled.
 
 Start from [the add-one bundle](assets/add_one/config.toml) and its
 [CUDA source](assets/add_one/solution/kernel.cu). The one-shot command in cuda.md

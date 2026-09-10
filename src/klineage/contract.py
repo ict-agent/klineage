@@ -9,10 +9,8 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Any
 
-from klineage._utils import mapping, nonempty
-
-BUNDLE_CONFIG = "config.toml"
-BUNDLE_SOLUTION = "solution"
+from klineage.constants import BUNDLE_CONFIG, BUNDLE_SOLUTION
+from klineage.utils import mapping, nonempty
 
 
 class ValueRole(StrEnum):
@@ -203,28 +201,6 @@ class ABIValue:
             self,
             "description",
             description(self.description, "ABI value description"),
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "dtype": self.dtype,
-            "shape": list(self.shape),
-            "description": self.description,
-        }
-
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> ABIValue:
-        value = mapping(value, "ABI value")
-        raw_shape = value.get("shape", ())
-        if not isinstance(raw_shape, Sequence) or isinstance(raw_shape, (str, bytes)):
-            raise TypeError("ABI value shape must be an array")
-        dtype = value.get("dtype")
-        return cls(
-            name=value["name"],
-            dtype=dtype,
-            shape=tuple(raw_shape),
-            description=value.get("description", ""),
         )
 
 

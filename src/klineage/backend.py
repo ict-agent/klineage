@@ -14,8 +14,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from klineage._utils import safe_name
 from klineage.agent_api import agent_function
+from klineage.utils import safe_name
 
 CFLAGS = ("-O3", "-std=c++17")
 CUDA_FLAGS = (*CFLAGS, "--expt-relaxed-constexpr", "--expt-extended-lambda")
@@ -164,11 +164,14 @@ class Backend:
             if compiler is None:
                 raise RuntimeError("AscendC requires CANN bisheng with -x asc support")
             npu = importlib.import_module("torch_npu")
+            npu_file = npu.__file__
+            if npu_file is None:
+                raise RuntimeError("torch_npu does not expose its package location")
             return {
                 "architecture": architecture,
                 "compiler": str(Path(compiler).resolve()),
                 "toolkit": str(home),
-                "torch_npu": str(Path(npu.__file__).resolve().parent),
+                "torch_npu": str(Path(npu_file).resolve().parent),
                 "torch_version": torch.__version__,
                 "npu_version": getattr(npu, "__version__", "unknown"),
                 "abi": int(torch._C._GLIBCXX_USE_CXX11_ABI),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import secrets
 from collections.abc import Iterable, Mapping
@@ -9,8 +10,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from klineage.constants import WORKSPACE_DIR
+
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
-_WORKSPACE = "agent-workspace"
 
 
 def nonempty(value: str, label: str) -> str:
@@ -53,7 +55,18 @@ def operation_id(purpose: str) -> str:
 
 
 def new_workdir(name: str) -> Path:
-    return Path.cwd() / _WORKSPACE / operation_id(name)
+    return Path.cwd() / WORKSPACE_DIR / operation_id(name)
+
+
+def optional_directory(value: str | os.PathLike[str] | None) -> Path | None:
+    """Return None for absent/blank input; otherwise require an existing directory."""
+
+    if value is None or isinstance(value, str) and not value.strip():
+        return None
+    path = Path(value).expanduser().resolve(strict=True)
+    if not path.is_dir():
+        raise NotADirectoryError(f"not a directory: {path}")
+    return path
 
 
 __all__ = [
@@ -62,6 +75,7 @@ __all__ = [
     "new_workdir",
     "nonempty",
     "operation_id",
+    "optional_directory",
     "safe_name",
     "string_tuple",
 ]

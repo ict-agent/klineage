@@ -5,7 +5,6 @@ from klineage.action.apply import Apply, apply
 from klineage.action.decompose import Decompose, decompose
 from klineage.action.init import Init, init
 from klineage.action.verify import Verify, verify
-from klineage.action.workflow import init_memory, workflow
 
 __all__ = [
     "Action",
@@ -16,7 +15,5 @@ __all__ = [
     "apply",
     "decompose",
     "init",
-    "init_memory",
     "verify",
-    "workflow",
 ]

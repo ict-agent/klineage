@@ -6,12 +6,12 @@ from typing import Any
 
 from klineage.agent_api import agent_function
 from klineage.backend import detect_backend, get_backend
+from klineage.constants import SKILL_FILE
 from klineage.harness import capture, evaluate, inspect_problem
 from klineage.harness.artifacts import load_kernel, read_source_tree, save_kernel
 from klineage.kernel import Kernel
 from klineage.memory import SkillCard, load_skill, save_skill
 from klineage.memory import retrieve as select_skills
-from klineage.memory.storage import SKILL_FILE
 from klineage.profiling import ProfileOptions
 from klineage.repository import stage_repository
 
@@ -36,7 +36,6 @@ def profile(
     return capture(kernel, work, options or ProfileOptions())
 
 
-@agent_function
 def retrieve(
     kernel: Kernel,
     memory: Sequence[SkillCard | Path] | Path,

@@ -15,12 +15,6 @@ class PromptTemplateTests(unittest.TestCase):
     def setUp(self):
         self.contexts = task_contexts()
 
-    def test_selection_converts_paths(self):
-        context = {**self.contexts["apply"], "skill": None}
-        prompt = render_prompt("apply", **context)
-        self.assertIn("Convert directory and card path strings to Path", prompt)
-        self.assertIn("SkillCard.from_dict", prompt)
-
     def test_task_values_stay_data(self):
         values = {
             "problem": '/tmp/问题 "quoted"\n{{ repository }}.json',
@@ -53,9 +47,9 @@ class PromptTemplateTests(unittest.TestCase):
                 for name in (
                     "init",
                     "decompose",
-                    "apply",
                 )
             },
+            "verify_apply": {"memory": self.contexts["apply"]["memory"]},
         }
         for name, context in prompts.items():
             with self.subTest(name=name):
@@ -85,49 +79,31 @@ class PromptTemplateTests(unittest.TestCase):
             self.assertNotIn("step_index", text)
             self.assertNotIn("Step index:", text)
 
-    def test_decompose_stop_evidence(self):
-        prompt = render_prompt("decompose", **self.contexts["decompose"])
-
-        self.assertIn("If the input is already naive, preserve it and emit no", prompt)
-        self.assertIn("actually present", prompt)
-        self.assertIn("one semantic transformation", prompt)
-
-    def test_skill_section_contract(self):
-        prompt = render_prompt("decompose", **self.contexts["decompose"])
-        self.assertNotIn("Before & And", prompt)
-        self.assertIn("End body with a Code Change Snippet section", prompt)
-        self.assertIn("minimum prerequisites", prompt)
-        self.assertIn("example configuration", prompt)
-        self.assertIn("klineage.harness.evaluate", prompt)
-        self.assertNotIn("check_streams", prompt)
-        self.assertNotIn("graph replay", prompt.lower())
-        self.assertIn("Once these checks pass", prompt)
-
     def test_eval_docs_use_one_entry(self):
         from pathlib import Path
 
         package = Path(__file__).parents[1] / "src/klineage"
-        for path in (
-            package / "skills/cuda/cuda.md",
-            package / "skills/bench/SKILL.md",
-        ):
-            with self.subTest(path=path):
-                text = path.read_text()
+        texts = {
+            "decompose": render_prompt("decompose", **self.contexts["decompose"]),
+            **{
+                name: (package / name).read_text()
+                for name in ("skills/cuda/cuda.md", "skills/bench/SKILL.md")
+            },
+        }
+        for name, text in texts.items():
+            with self.subTest(name=name):
                 self.assertIn("klineage.harness", text)
                 self.assertNotIn("check_streams", text)
                 self.assertNotIn("graph replay", text.lower())
                 self.assertNotIn("replay a captured", text.lower())
 
-    def test_prerequisites_are_dependencies(self):
-        import yaml
-
-        prompt = render_prompt("decompose_lift")
-        metadata = yaml.safe_load(prompt.split("---", 2)[1])
-        for condition in metadata["preconditions"]:
-            with self.subTest(condition=condition):
-                self.assertIn("required", condition)
-        self.assertNotIn("describes the existing stage count", prompt)
-        self.assertIn("## Example configuration", prompt)
+    def test_naive_decompose_stops(self):
+        prompt = render_prompt("decompose", **self.contexts["decompose"])
+        first_step = prompt.split("# Procedure\n", 1)[1].split("\n2.", 1)[0]
+        self.assertIn("skip steps 2-5", first_step)
+        self.assertIn("source audit", first_step)
+        atomicity = prompt.split("**Atomicity and replayability.**", 1)[1]
+        self.assertTrue(atomicity.lstrip().startswith("For a removal,"))
 
     def test_code_section_is_consistent(self):
         from pathlib import Path
@@ -143,18 +119,6 @@ class PromptTemplateTests(unittest.TestCase):
         ).read_text()
         self.assertIn("# Code Change Snippet", contract)
         self.assertNotIn("Before & And", contract)
-
-    def test_skill_dependency_audit(self):
-        prompt = render_prompt("decompose", **self.contexts["decompose"])
-        checks = prompt.split("# Self-Verification", 1)[1]
-        self.assertIn("**Skill prerequisites.**", checks)
-        self.assertIn(
-            "YAML preconditions and the entire # Precondition section", checks
-        )
-        self.assertIn("fails without it", checks)
-        self.assertIn(
-            "Serialization roundtrip does not validate these semantics", checks
-        )
 
     def test_precondition_categories(self):
         import yaml
@@ -204,42 +168,62 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertNotIn("signed 32-bit", conditions)
         self.assertIn("FP32", prompt.split("## Example configuration\n", 1)[1])
 
-    def test_apply_state_contract(self):
-        prompt = render_prompt("apply", **self.contexts["apply"])
-
-        self.assertIn("preconditions", prompt)
-        self.assertIn("actual code", prompt)
-        self.assertIn("source_files", prompt)
-
-    def test_apply_selection_mode(self):
-        context = {**self.contexts["apply"], "skill": None}
+    def test_apply_memory_directory(self):
+        context = self.contexts["apply"]
         prompt = render_prompt("apply", **context)
-        instructions = prompt.split("# Apply", 1)[0]
         self.assertEqual(prompt_inputs(prompt), context)
-        self.assertIn("retrieve(current_kernel, memory", instructions)
-        self.assertIn("profile(current_kernel, Path.cwd())", instructions)
-        self.assertIn("no SKILL.md or submission/", instructions)
+        self.assertNotIn("Skill:", prompt)
+        self.assertIn("retrieve(current_kernel, Path(memory)", prompt)
+        self.assertIn("profile(current_kernel, Path.cwd())", prompt)
+        self.assertIn("enumerate and read", prompt)
+        self.assertNotIn("SkillCard.from_dict", prompt)
+        self.assertIn("no SKILL.md or submission/", prompt)
 
-        explicit = render_prompt("apply", **self.contexts["apply"])
-        self.assertNotIn(
-            "profile(current_kernel, Path.cwd())", explicit.split("# Apply", 1)[0]
-        )
+    def test_apply_baseline_modes(self):
+        for memory in (None, "", " \t\n"):
+            with self.subTest(memory=memory):
+                context = {**self.contexts["apply"], "memory": memory}
+                prompt = render_prompt("apply", **context)
+                self.assertEqual(
+                    prompt_inputs(prompt),
+                    {"current_kernel": context["current_kernel"]},
+                )
+                self.assertIn("Independently choose one optimization", prompt)
+                self.assertIn("Do not emit SKILL.md", prompt)
+                for text in (prompt, render_prompt("verify_apply", memory=memory)):
+                    self.assertNotIn("retrieve", text)
+                    self.assertNotIn(".agents/skills/memory", text)
+                    self.assertNotIn("no candidate", text)
 
-    def test_native_backend_routing(self):
+    def test_apply_self_verification(self):
+        for memory in (None, self.contexts["apply"]["memory"]):
+            with self.subTest(memory=memory):
+                prompt = render_prompt(
+                    "apply", **{**self.contexts["apply"], "memory": memory}
+                )
+                self.assertEqual(
+                    re.findall(r"^# (.+)$", prompt, re.MULTILINE),
+                    ["Overview", "Procedure", "Self-Verification"],
+                )
+                checks = prompt.split("# Self-Verification", 1)[1]
+                self.assertIn(
+                    "evaluate(candidate, Path.cwd(), reference=current_kernel)", checks
+                )
+                self.assertIn("paired performance gate", checks)
+
+    def test_decompose_backends(self):
         from copy import deepcopy
 
         for language, platform in (("hip", "hygon"), ("ascendc", "ascend")):
-            for action, field in (
-                ("apply", "current_kernel"),
-                ("decompose", "input_kernel"),
-            ):
-                context = deepcopy(self.contexts[action])
-                context[field]["problem"].update(language=language, platform=platform)
-                with self.subTest(action=action, language=language):
-                    prompt = render_prompt(action, **context)
-                    self.assertIn(f"Use .agents/skills/{language}/SKILL.md", prompt)
-                    self.assertNotIn('language="python"', prompt)
-                    self.assertNotIn("You are given a cuda kernel", prompt)
+            context = deepcopy(self.contexts["decompose"])
+            context["input_kernel"]["problem"].update(
+                language=language, platform=platform
+            )
+            with self.subTest(language=language):
+                prompt = render_prompt("decompose", **context)
+                self.assertIn(f"Use .agents/skills/{language}/SKILL.md", prompt)
+                self.assertNotIn('language="python"', prompt)
+                self.assertNotIn("You are given a cuda kernel", prompt)
 
     def test_example_respects_backend(self):
         from copy import deepcopy
