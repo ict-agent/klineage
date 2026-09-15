@@ -54,6 +54,10 @@ expert/                     # Adapter calling the original expert instance
    template specializations, and dispatch paths to identify one executable
    instance for this workload. Record its source, concrete type/host call,
    tensor layouts, tile/cluster shapes, stages, and launch parameters.
+   Resolve its upstream release build settings, including feature macros,
+   assertion mode, compiler options, architecture, and supported toolchain.
+   Persist required native arguments in the expert Kernel's compile_flags;
+   record the actual build command and compiler version in evaluations/.
    Identify it in the final response and keep it fixed throughout reproduction
    and measurement.
 
@@ -95,8 +99,9 @@ against the problem oracle, then evaluate the candidate with reference=expert.
 Require both results to be accepted, including the paired performance gate.
 Keep harness records under evaluations/ and report latency_ms and
 reference_latency_ms from the paired validation. Explain unexpected speed differences by
-inspecting both implementations and the adapter. After source changes, reconstruct
-the Kernel and rerun on the final files.
+inspecting both implementations, their build settings, and the adapter. Repair
+missing expert build settings before accepting the comparison. After source
+changes, reconstruct the Kernel and rerun on the final files.
 
 **Mechanism fidelity.** Judge the candidate against the instantiated expert code
 yourself. Record a concise comparison under evaluations/ with expert and candidate
@@ -107,3 +112,9 @@ source locations, the observed behavior, and a verdict for each category:
 - Pipeline: producer/consumer roles, stages, barriers, fences, and asynchronous order.
 - Layout: global/local layouts, swizzles, fragment mappings, and epilogue stores.
 - Scheduling: launch geometry, persistent work assignment, and tile traversal.
+
+Compare generated synchronization and compiler diagnostics as well as arithmetic
+instructions. Matching matrix instruction counts does not prove pipeline fidelity.
+Preserve transfer grouping and asynchronous work limits; do not regroup transfers
+or redesign scheduling to meet the performance gate. Document specialization of
+disabled paths separately from changes to mechanisms the expert actually uses.

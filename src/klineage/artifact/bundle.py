@@ -123,7 +123,9 @@ class BundleLoader:
                 "binding.cpp": backend.binding(),
             }
             native_root = Path(snapshot(self.build_root, sources))
-            module = self.load_native(native_root, sources, backend)
+            module = self.load_native(
+                native_root, sources, backend, kernel.compile_flags
+            )
             launch = getattr(module, "launch", None)
             if not callable(launch):
                 raise TypeError("native extension did not expose launch")
@@ -134,7 +136,9 @@ class BundleLoader:
 
             return run
         root = Path(snapshot(self.build_root, kernel.source_files))
-        module = self.load_native(root, kernel.source_files, backend)
+        module = self.load_native(
+            root, kernel.source_files, backend, kernel.compile_flags
+        )
         return self.entry(module, kernel.symbol)
 
     def load_python(self, root: Path, kernel: Kernel) -> Callable[..., Any]:
@@ -164,7 +168,11 @@ class BundleLoader:
         return function
 
     def load_native(
-        self, root: Path, source_files: Mapping[str, str], backend: Backend
+        self,
+        root: Path,
+        source_files: Mapping[str, str],
+        backend: Backend,
+        compile_flags: Sequence[str] = (),
     ):
         native_files = {
             path: source
@@ -181,7 +189,7 @@ class BundleLoader:
         include_paths = [str(root / BUNDLE_SOLUTION), *map(str, self.include_paths)]
 
         with IMPORT_LOCK:
-            options = backend.build_options()
+            options = backend.build_options(compile_flags=compile_flags)
             # Cache complete sources, flags, includes, and architecture together.
             digest = hashlib.sha256(
                 json.dumps(

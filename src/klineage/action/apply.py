@@ -41,6 +41,7 @@ class Apply(Action):
             raise TypeError("exclude_skills must be a sequence of strings")
 
         self.memory = optional_directory(memory)
+        self.exclude_skills = string_tuple(exclude_skills, "exclude_skills")
         workdir = Path(workdir or new_workdir(RunKind.APPLY)).expanduser().resolve()
         mounted_memory = str(workdir / MEMORY_DIRECTORY) if self.memory else None
         self.verify_prompt = render_prompt(
@@ -54,7 +55,6 @@ class Apply(Action):
                 else str(Path(current_kernel).expanduser().resolve())
             ),
             memory=mounted_memory,
-            exclude_skills=list(string_tuple(exclude_skills, "exclude_skills")),
         )
         super().__init__(
             prompt,
@@ -65,7 +65,7 @@ class Apply(Action):
         )
 
     def run(self):
-        self.runner.mount_memory(self.memory)
+        self.runner.mount_memory(self.memory, exclude_skills=self.exclude_skills)
         super().run()
 
 

@@ -57,6 +57,7 @@ The file contains `Kernel.to_dict()`:
 | `name` | Kernel name |
 | `problem` | Exactly `name`, `definition`, `workload`, `language`, `platform` |
 | `source_files` | Every relative bundle path mapped to its exact UTF-8 text |
+| `compile_flags` | Optional extra device compiler arguments; omitted when empty |
 | `validation` | `ValidationResult.to_dict()` or `null` |
 
 `problem.definition` is a FlashInfer Trace Definition, including ordered
@@ -64,10 +65,18 @@ The file contains `Kernel.to_dict()`:
 Workload object (`uuid`, `axes`, `inputs`), without its surrounding Trace record.
 Preserve order, dtypes, axis bindings and input descriptors. File-backed workload
 inputs carry absolute paths, resolved during inspection.
+The reference may also define `check_outputs(actual, expected)` for additional
+invariants such as probability normalization. It runs after the numerical gate;
+return `False` or raise to reject an output. It cannot bypass `torch.allclose`.
 `Kernel.fingerprint` is computed; it is not a serialized Kernel field.
 Compiled functions are not serialized. `load_kernel` restores sources without
 compiling; call `build()` before direct execution. The harness builds restored
 kernels in its worker.
+Native `compile_flags` travel with the Kernel through evaluation and handoff and
+affect its fingerprint and compilation cache. Pass them to `Kernel.from_sources`
+when reconstructing an implementation; preserve them unless intentionally changed.
+They are appended to nvcc/hipcc arguments or Ascend's mixed compiler arguments.
+Python bundles configure compilation in their own source code.
 
 Validation fields are `compile_passed`, `correctness_passed`, `profile_passed`,
 `latency_ms`, and `reference_latency_ms`. Latencies are measured medians in ms:

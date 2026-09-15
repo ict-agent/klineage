@@ -7,11 +7,12 @@ import os
 import re
 import shutil
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Literal, get_args
 
-from klineage.backend import BACKENDS
 from klineage.constants import (
     MEMORY_DIRECTORY,
     MESSAGE_DIRECTORY,
@@ -19,6 +20,7 @@ from klineage.constants import (
     STATE_DIRECTORY,
     RunKind,
 )
+from klineage.harness.codex_skills import render_memory
 from klineage.harness.process import stop_process
 from klineage.tools import write_agent_docs
 from klineage.utils import operation_id
@@ -27,9 +29,24 @@ ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _REASONING_EFFORTS = frozenset(get_args(ReasoningEffort))
 _STDERR_SUMMARY_CHARS = 1000
+#: Flags both `exec` and `exec resume` accept; order matches their shared usage.
+COMMON_EXEC_FLAGS = (
+    "--strict-config",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--skip-git-repo-check",
+    "--json",
+)
+#: Flags only plain `exec` accepts.
+PLAIN_EXEC_FLAGS = ("--color", "never")
+#: Sandbox flag for plain `exec`; `resume` has no `-s` and uses this instead.
+RESUME_SANDBOX_FLAGS = ("--dangerously-bypass-approvals-and-sandbox",)
+
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = PACKAGE_ROOT / "skills"
-SKILL_NAMES = ("bench", *(backend.skill_name for backend in BACKENDS))
+#: Native skills staged into every workspace. CUDA is the only backend this
+#: host can run, so the HIP and AscendC instructions would only add noise.
+SKILL_NAMES = ("bench", "cuda")
 
 
 class CodexRunnerError(RuntimeError):
@@ -58,12 +75,15 @@ class CodexRunner:
         codex_bin: str | os.PathLike[str] = "codex",
         reasoning_effort: ReasoningEffort | None = "xhigh",
         timeout: float | None = None,
+        resume_id: str | None = None,
         state_dir: str | os.PathLike[str] = STATE_DIRECTORY,
     ):
         if timeout is not None and timeout <= 0:
             raise ValueError("timeout must be greater than zero")
         if reasoning_effort not in _REASONING_EFFORTS and reasoning_effort is not None:
             raise ValueError("invalid reasoning effort")
+        if resume_id is not None and not _RUN_ID_RE.fullmatch(resume_id):
+            raise ValueError("resume_id must be a recorded session identifier")
 
         self.work_dir = Path(work_dir).expanduser().resolve()
         self.work_dir.mkdir(parents=True, exist_ok=True)
@@ -72,6 +92,7 @@ class CodexRunner:
         self.trace_root.mkdir(parents=True, exist_ok=True)
         self.timeout = timeout
         self.reasoning_effort = reasoning_effort
+        self.resume_id = resume_id
         self.codex_program = resolve_executable(codex_bin)
 
         # Expose packaged instructions through Codex's workspace skill discovery.
@@ -84,8 +105,10 @@ class CodexRunner:
         for source, destination in resources:
             _link_resource(source, destination)
 
-    def mount_memory(self, memory: Path | None) -> Path | None:
-        """Expose skill memory; None requires no existing memory mount."""
+    def mount_memory(
+        self, memory: Path | None, *, exclude_skills: Sequence[str] = ()
+    ) -> Path | None:
+        """Stage discoverable native skills; None requires a memory-free workdir."""
         destination = self.work_dir / MEMORY_DIRECTORY
         if memory is None:
             if destination.exists() or destination.is_symlink():
@@ -100,7 +123,21 @@ class CodexRunner:
         location = destination.parent.resolve() / destination.name
         if location.is_relative_to(source):
             raise ValueError("memory cannot contain its workspace mount")
-        _link_resource(source, destination)
+        files = render_memory(source, exclude_skills=exclude_skills)
+        if destination.exists() or destination.is_symlink():
+            if _matches_memory(destination, files):
+                return destination
+            raise CodexRunnerError(f"workspace resource already exists: {destination}")
+
+        # Publish all skills together on the destination filesystem.
+        with TemporaryDirectory(dir=destination.parent) as temporary:
+            staged = Path(temporary) / destination.name
+            staged.mkdir()
+            for relative, contents in files.items():
+                path = staged / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(contents, encoding="utf-8")
+            staged.rename(destination)
         return destination
 
     def __call__(
@@ -200,19 +237,20 @@ class CodexRunner:
             command.extend(
                 ("-c", f"model_reasoning_effort={json.dumps(self.reasoning_effort)}")
             )
+        command.append("exec")
+        # `exec resume` accepts neither `-s` nor `-C`, so it runs with the session's
+        # own sandbox and workspace; cwd still comes from Popen.
+        if self.resume_id is not None:
+            command.extend(("resume", self.resume_id))
+            command.extend(RESUME_SANDBOX_FLAGS)
+            command.extend(COMMON_EXEC_FLAGS)
+            command.extend(("--output-last-message", str(final_message_path), "-"))
+            return command
+        command.extend(("-s", "danger-full-access"))
+        command.extend(PLAIN_EXEC_FLAGS)
+        command.extend(COMMON_EXEC_FLAGS)
         command.extend(
             (
-                "exec",
-                "-s",
-                "danger-full-access",
-                "--strict-config",
-                "--ignore-user-config",
-                "--ignore-rules",
-                "--skip-git-repo-check",
-                "--ephemeral",
-                "--color",
-                "never",
-                "--json",
                 "--output-last-message",
                 str(final_message_path),
                 "-C",
@@ -221,6 +259,39 @@ class CodexRunner:
             )
         )
         return command
+
+
+def session_id(trace_path: Path) -> str | None:
+    """The Codex session recorded by a run, so a retry can continue its thread."""
+
+    try:
+        lines = Path(trace_path).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "thread.started":
+            thread = event.get("thread_id")
+            if isinstance(thread, str) and _RUN_ID_RE.fullmatch(thread):
+                return thread
+    return None
+
+
+def _matches_memory(directory: Path, files: dict[Path, str]) -> bool:
+    if directory.is_symlink() or not directory.is_dir():
+        return False
+    paths = tuple(directory.rglob("*"))
+    if any(path.is_symlink() for path in paths):
+        return False
+    existing = {
+        path.relative_to(directory): path.read_bytes()
+        for path in paths
+        if path.is_file()
+    }
+    return existing == {path: text.encode("utf-8") for path, text in files.items()}
 
 
 def _link_resource(source: Path, destination: Path):

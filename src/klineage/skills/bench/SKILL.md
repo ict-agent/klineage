@@ -40,8 +40,8 @@ Inspect recorded requests for the selected timer and policy:
 Compare measurements only within the same backend and policy.
 Do not construct another runtime, checker, or timer in the action.
 
-Reconstruct Kernel from final sources after edits. Building or editing disk files
-does not update an already serialized source map. Preserve the complete problem
+Reconstruct Kernel from final sources and compile_flags after edits. Building or
+editing disk files does not update an already serialized source map. Preserve the complete problem
 and referenced input files. Path arguments are `pathlib.Path` objects.
 
 ## Comparisons
@@ -60,10 +60,20 @@ candidate.problem.platform)`. Freeze an original expert adapter under
 using the candidate's problem and `{backend.raw_source: adapter.read_text()}`.
 CUDA uses a CUDA stream, HIP a HIP stream, and Ascend an ACL stream.
 Pass required repository headers through `include_paths`.
+Read the upstream release build settings and pass required native arguments as
+`Kernel(..., compile_flags=(...))`. Keep feature macros, optimization settings,
+assertion mode, and architecture consistent with that expert build. Record the
+actual compiler command and version; successful compilation alone does not
+establish that the intended expert specialization or pipeline was selected.
 First evaluate that expert alone, then evaluate the candidate with
 `reference=expert`. The adapter must call the fixed expert on the supplied stream.
 
 ## Results and evidence
+
+Numerical comparisons use `torch.allclose` with `rtol=1e-2` and `atol=1e-2`.
+Each evaluation request records these tolerances under `config.correctness`.
+Shape, dtype, and Top-K index validity checks remain required.
+Any `check_outputs` in the problem reference adds invariant checks after allclose.
 
 `ValidationResult` contains `compile_passed`, `correctness_passed`, `profile_passed`,
 `latency_ms`, and `reference_latency_ms`. `accepted` requires all three gates.
@@ -99,6 +109,3 @@ Hardware-counter profiling is unsupported on Hygon and Ascend; report that
 capability error without substituting event timings for bottleneck metrics.
 Neither replaces `evaluate` for correctness or latency.
 
-Adapted from [AKO4X bench](https://github.com/TongmingLAIC/AKO4X/tree/c8fd2777d5387fa10563c704a5beeddba53f0411/templates/skills/bench),
-MIT; see [LICENSE](LICENSE). KLineage evaluates one supplied workload through Python
-interfaces; AKO4X scripts, Modal, filters, labels, and scoring are not available here.

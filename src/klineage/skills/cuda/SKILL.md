@@ -19,6 +19,3 @@ Start from [the add-one bundle](assets/add_one/config.toml) and its
 [CUDA source](assets/add_one/solution/kernel.cu). The one-shot command in cuda.md
 compiles these exact files and calls the export from Python.
 
-Adapted from [AKO4X cuda](https://github.com/TongmingLAIC/AKO4X/tree/c8fd2777d5387fa10563c704a5beeddba53f0411/templates/skills/cuda),
-MIT; see [LICENSE](LICENSE). KLineage uses pybind11 bindings, PyTorch caller streams, and
-raw CUDA; AKO4X framework, library, and graph-cache recipes do not apply.

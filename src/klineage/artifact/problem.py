@@ -12,8 +12,14 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
-from klineage.backend import get_backend
+from klineage.backend import (
+    Backend,
+    detect_backend,
+    get_backend,
+)
 from klineage.constants import MODULE_HASH_LENGTH
+from klineage.contract import ProblemSpec
+from klineage.tools import agent_function
 
 if TYPE_CHECKING:
     import torch
@@ -214,7 +220,44 @@ def trace_workload(inputs: Mapping[str, Any], path: Path) -> dict[str, Any]:
     }
 
 
-def load_problem(value: str | Path) -> tuple[ModuleType, Path]:
+def definition_path(value: str | Path) -> Path:
+    """Resolve a problem directory or definition file to its definition JSON."""
+
+    path = Path(value).expanduser().absolute().resolve(strict=True)
+    if not path.is_dir():
+        return path
+    found = sorted((path / DEFINITIONS).glob("*.json"))
+    if len(found) != 1:
+        raise ValueError(f"problem directory must hold one definition: {path}")
+    return found[0]
+
+
+@agent_function
+def load_problem(
+    value: str | Path,
+    *,
+    backend: Backend | None = None,
+) -> ProblemSpec:
+    """Load a problem directory or Trace definition into a ProblemSpec.
+
+    Accepts `problems/` itself or the definition JSON inside it. The definition
+    supplies the contract; the detected backend supplies language and platform.
+    """
+
+    module = load_trace(definition_path(value))
+    backend = backend or detect_backend()
+    return ProblemSpec(
+        name=module.PROBLEM_NAME,
+        definition=module.definition,
+        workload=module.workload,
+        language=backend.language,
+        platform=backend.platform(),
+    )
+
+
+def load_problem_module(value: str | Path) -> tuple[ModuleType, Path]:
+    """Load a Trace definition or Python reference as an executable module."""
+
     path = Path(value).expanduser().absolute().resolve(strict=True)
     if path.is_file() and path.suffix == ".json":
         return load_trace(path), path

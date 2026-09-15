@@ -53,8 +53,11 @@ thread mapping, and instructions are not prerequisites for HIP or AscendC cards.
    that mechanism; retain independent strategies. MMA includes its required
    operand/fragment adapters. Pipeline scheduling includes its async copies,
    stages, buffer rotation, and producer/consumer ordering. Independently removable
-   swizzles and CTA/L2 ordering remain separate mechanisms. Stage counts, compiler
-   hints, and helper-loop choices belong in the recipe, not separate skills.
+   swizzles and CTA/L2 ordering remain separate mechanisms. Before removing a
+   transfer, peel off independent descriptor prefetch and nondefault cache policies
+   that depend on it. Their API disappearing with the transfer does not make them
+   part of the same optimization. Stage counts, compiler hints, and helper-loop
+   choices belong in the recipe, not separate skills.
    Do not split tile 128 -> 64 -> 32 or vector width 4 -> 2 -> 1 into repeated cards.
 
 3. Write the complete deoptimized kernel under submission/. Preserve the input problem,
@@ -112,6 +115,11 @@ deoptimized_kernel and its problem. Check that it specifies how to restore the
 optimization without reading the target source. Require that
 klineage.memory.load_skill(Path.cwd() / "SKILL.md") restores the same card,
 including its Markdown instructions, scope, and preconditions.
+When compilation can restore the removed mechanism, inspect generated code for
+that mechanism. Source changes alone do not establish removal: unrolled loops
+may fuse again, repeated loads may be eliminated, and scalar operations may pack.
+If it survives, revise the removal or choose another mechanism; explain any
+required compiler-control changes in the recipe. Do not infer this from timing.
 {% if enable_verifier is defined and enable_verifier %}
 The external verifier independently reconstructs from this card and checks the
 reconstruction against the input, including the paired performance gate.

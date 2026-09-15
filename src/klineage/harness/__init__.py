@@ -5,6 +5,7 @@ from .codex_runner import (
     CodexRunnerError,
     CodexRunResult,
     ReasoningEffort,
+    session_id,
 )
 from .eval import (
     CallableKernelEvaluator,
@@ -34,6 +35,7 @@ __all__ = [
     "KernelTimer",
     "ProblemRuntime",
     "ReasoningEffort",
+    "session_id",
     "TimingPolicy",
     "TimingResult",
     "ValidationResult",

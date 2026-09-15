@@ -46,6 +46,8 @@ Repository location is provided by the Init task.
 Retries reuse an intact staged copy; incomplete staging needs a fresh destination.
 Init measures the bundle against the original expert through the harness and
 judges mechanism fidelity from source. Self-check evidence stays in `evaluations/`.
+The expert retains its upstream release build settings; required native arguments
+are persisted in `compile_flags`. Record the actual build command and version.
 Generation leaves validation unset. The separate external gate adds measured
 validation to `kernel.json`; source comparisons remain in evaluations/.
 

@@ -13,12 +13,14 @@ from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Any
 
 from klineage.constants import (
+    AGENTS_TEMPLATE,
     AGENT_FILES,
     AGENT_MODULES,
     FUNCTION_END,
     FUNCTION_START,
     SKILL_FILE,
 )
+from klineage.logging import observed
 
 if TYPE_CHECKING:
     from klineage.artifact.kernel import Kernel
@@ -51,6 +53,7 @@ def function_docs() -> str:
 
     sections = [
         FUNCTION_START,
+        AGENTS_TEMPLATE.rstrip(),
         "## KLineage Python functions",
         "Import and call these functions from Python. Follow their documented contracts.",
     ]
@@ -117,6 +120,7 @@ def _replace_block(original: str, block: str) -> str:
 
 
 @agent_function
+@observed("profile")
 def profile(
     kernel: Kernel,
     workdir: Path | None = None,

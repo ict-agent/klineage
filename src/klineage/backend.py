@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sysconfig
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
 from pathlib import Path
@@ -142,7 +143,7 @@ class Backend:
         )
         return f"ascend-{model}"
 
-    def build_options(self) -> dict[str, Any]:
+    def build_options(self, *, compile_flags: Sequence[str] = ()) -> dict[str, Any]:
         """Freeze toolchain and architecture inputs before computing a build key."""
         torch = self.torch()
         if self.kind is BackendKind.ASCEND:
@@ -181,7 +182,7 @@ class Backend:
                     if (value := getattr(torch._C, f"_PYBIND11_{key}", None))
                     is not None
                 },
-                "cflags": CFLAGS,
+                "cflags": (*CFLAGS, *compile_flags),
             }
 
         if self.kind is BackendKind.HYGON:
@@ -212,7 +213,7 @@ class Backend:
                 "runtime_version": torch.version.hip,
                 "abi": int(torch._C._GLIBCXX_USE_CXX11_ABI),
                 "extra_cflags": (*CFLAGS, *extension.COMMON_HIP_FLAGS),
-                "extra_cuda_cflags": CFLAGS,
+                "extra_cuda_cflags": (*CFLAGS, *compile_flags),
             }
 
         if getattr(torch.version, "hip", None):
@@ -231,7 +232,7 @@ class Backend:
             "runtime_version": torch.version.cuda,
             "abi": int(torch._C._GLIBCXX_USE_CXX11_ABI),
             "extra_cflags": CFLAGS,
-            "extra_cuda_cflags": CUDA_FLAGS,
+            "extra_cuda_cflags": (*CUDA_FLAGS, *compile_flags),
         }
 
     def compile(

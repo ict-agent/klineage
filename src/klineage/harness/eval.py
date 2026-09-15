@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from klineage.artifact.kernel import ValidationResult
 from klineage.artifact.problem import (
-    load_problem,
+    load_problem_module,
     trace_definition,
     trace_inputs,
     trace_module,
@@ -27,7 +27,12 @@ from klineage.artifact.problem import (
 )
 from klineage.artifact.tensor import require_tensor, tensor_dtype, tensor_values
 from klineage.backend import Backend, BackendKind, detect_backend, get_backend
-from klineage.constants import BUILD_DIRECTORY, EVALUATIONS_DIRECTORY, RunKind
+from klineage.constants import (
+    BUILD_DIRECTORY,
+    EVALUATIONS_DIRECTORY,
+    NUMERICAL_TOLERANCE,
+    RunKind,
+)
 from klineage.contract import ProblemSpec, ValueRole
 from klineage.errors import ActionError
 from klineage.harness.process import run_process
@@ -42,6 +47,7 @@ from klineage.harness.timing import (
     timing_policy,
     verify_performance,
 )
+from klineage.logging import observed
 from klineage.tools import agent_function
 from klineage.utils import (
     existing_dir,
@@ -59,6 +65,7 @@ if TYPE_CHECKING:
 
 
 WORKER_ENTRY = "from klineage.harness.eval import main; raise SystemExit(main())"
+# Default worker deadline; enclosing action deadlines are independent.
 _TIMEOUT_SECONDS = 900.0
 _SEED = 20260903
 _MAX_JOBS = 4
@@ -292,6 +299,7 @@ class EvaluationRuntime:
         config = {
             "seed": _SEED,
             "timing": timing_policy(kernel_backend(kernel)).to_dict(),
+            "correctness": {"rtol": NUMERICAL_TOLERANCE, "atol": NUMERICAL_TOLERANCE},
             "include_paths": [str(path) for path in includes],
             "build_root": str(build),
         }
@@ -459,6 +467,7 @@ class EvaluationRuntime:
                 "finished_at": now(),
                 "returncode": result.returncode,
                 "timed_out": False,
+                "timeout_seconds": timeout,
             },
         )
         if result.returncode != 0:
@@ -497,7 +506,6 @@ def now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-@agent_function
 def inspect_problem(problem: Path, work: Path) -> ProblemSpec:
     """Inspect a Trace definition or Python reference on the available backend.
 
@@ -518,12 +526,14 @@ def inspect_problem(problem: Path, work: Path) -> ProblemSpec:
 
 
 @agent_function
+@observed("evaluate")
 def evaluate(
     kernel: Kernel,
     work: Path,
     *,
     reference: Kernel | None = None,
     include_paths: Sequence[Path] = (),
+    timeout: float | None = None,
 ) -> ValidationResult:
     """Build frozen Kernel sources, check correctness, and measure device latency.
 
@@ -532,8 +542,11 @@ def evaluate(
     performance baseline and must share the problem contract. include_paths
     supplies build headers. Return ValidationResult; accepted requires every gate.
     Rebuild Kernel.source_files after edits. Omit reference for standalone checks.
+    timeout overrides the worker deadline in seconds; it changes neither the
+    sampling policy nor the enclosing action deadline. None uses the default.
     """
-    return EvaluationRuntime().evaluate(
+    runtime = EvaluationRuntime(timeout=_TIMEOUT_SECONDS if timeout is None else timeout)
+    return runtime.evaluate(
         kernel,
         reference=reference,
         include_paths=include_paths,
@@ -570,7 +583,7 @@ def inspect_reference(
 
     backend = backend or detect_backend()
     backend.torch()
-    module, path = load_problem(problem_path)
+    module, path = load_problem_module(problem_path)
     inputs = load_inputs(module, seed, backend)
     expected = compute_reference(module, inputs)
 
@@ -677,8 +690,6 @@ def profile_request(request: Mapping[str, Any]) -> dict[str, Any]:
 def problem_runtime(
     module: ModuleType, seed: int, backend: Backend | None = None
 ) -> ProblemRuntime:
-    import torch
-
     inputs = {}
 
     def make_inputs() -> CallInputs:
@@ -693,13 +704,44 @@ def problem_runtime(
         if getattr(module, "OPERATOR", None) == "topk":
             check_topk(actual, expected, inputs["values"])
             return
-        torch.testing.assert_close(actual, expected)
+        check_close(actual, expected)
+        check = getattr(module, "check_outputs", None)
+        if check is not None:
+            return check(actual, expected)
 
     return ProblemRuntime(
         make_inputs=make_inputs,
         reference=reference,
         check_outputs=check_outputs,
     )
+
+
+def check_close(actual: Any, expected: Any):
+    """Check tensor metadata before numerical comparison; never broadcast outputs."""
+    import torch
+
+    if isinstance(expected, (tuple, list)):
+        if not isinstance(actual, type(expected)) or len(actual) != len(expected):
+            raise ValueError("Output structure differs from the reference")
+        for tensor, oracle in zip(actual, expected, strict=True):
+            check_close(tensor, oracle)
+        return
+    if actual is None and expected is None:
+        return
+    if not isinstance(actual, torch.Tensor) or not isinstance(expected, torch.Tensor):
+        raise TypeError("Outputs must be tensors")
+    if (actual.shape, actual.dtype, actual.device) != (
+        expected.shape,
+        expected.dtype,
+        expected.device,
+    ):
+        raise ValueError("Output shape, dtype or device differs from the reference")
+    if not torch.allclose(
+        actual, expected, rtol=NUMERICAL_TOLERANCE, atol=NUMERICAL_TOLERANCE
+    ):
+        raise AssertionError(
+            f"torch.allclose failed: rtol=atol={NUMERICAL_TOLERANCE:g}"
+        )
 
 
 def check_topk(actual: Any, expected: Any, inputs: torch.Tensor):
@@ -725,10 +767,8 @@ def check_topk(actual: Any, expected: Any, inputs: torch.Tensor):
     if (ordered[..., 1:] == ordered[..., :-1]).any():
         raise ValueError("Top-K contains duplicate indices")
     # Selection order and tied indices are unspecified; gathered values must agree.
-    torch.testing.assert_close(values, inputs.gather(-1, indices))
-    torch.testing.assert_close(
-        values.sort(dim=-1).values, expected[0].sort(dim=-1).values
-    )
+    check_close(values, inputs.gather(-1, indices))
+    check_close(values.sort(dim=-1).values, expected[0].sort(dim=-1).values)
 
 
 def load_inputs(
@@ -851,6 +891,9 @@ def parse_config(
 ) -> WorkerConfig:
     if "build_root" not in value:
         raise ValueError("config.build_root is required")
+    correctness = {"rtol": NUMERICAL_TOLERANCE, "atol": NUMERICAL_TOLERANCE}
+    if value.get("correctness", correctness) != correctness:
+        raise ValueError("config.correctness differs from the evaluator tolerances")
     build_root = existing_dir(value["build_root"], "config.build_root")
     include_value = value.get("include_paths", ())
     if not isinstance(include_value, Sequence) or isinstance(

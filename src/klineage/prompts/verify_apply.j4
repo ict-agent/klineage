@@ -4,13 +4,12 @@ Kernel from its directory or inline dictionary. Keep this fixed round input as t
 reference; preserve upstream files and candidate sources. Reject an output SKILL.md.
 
 {% if use_memory %}
-Read memory and exclude_skills from that record. Memory is the absolute
-.agents/skills/memory mount. Enumerate and read its SKILL.md files; custom metadata
-need not appear in the native skill index. Preserve the mount and its source memory.
+Read Skill Memory from that record. Native memory skills are discoverable
+under .agents/skills/memory; excluded IDs are omitted. Preserve these references.
 Packaged bench/backend skills are runtime instructions, not reference cards.
 
-Use klineage.tools.retrieve with Path(memory) and the exclusions to inspect
-references cited by the generation. Scope filtering does not check source prerequisites.
+Read the SKILL.md of each technique cited by the generation; its body is the recipe.
+Check original skill_id values, scope, and source prerequisites.
 Audit each referenced technique against the working state where it was introduced,
 including preceding transformations. Multiple references, adaptations, and independent
 source-guided optimizations are valid. An empty reference set does not establish that

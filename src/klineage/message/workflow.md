@@ -48,7 +48,7 @@ Module entry points are `python -m klineage.cli.workflow` and
     kernel.json                # Best validated kernel from this round
     submission/
     evaluations/               # Trial measurements and optional profiles
-    .agents/skills/memory       # Mounted memory directory
+    .agents/skills/memory/       # Generated native skills carrying the recipes
 ```
 
 Every action directory also carries the runner records described in the shared
@@ -61,7 +61,7 @@ contract. Loop indices start at zero; only executed stages exist.
 | Init | Decompose 0 | `init/` |
 | Decompose i | Decompose i+1 | `decompose/i/`; read `kernel.json` |
 | Final Decompose | Apply 0 | Final decomposition directory |
-| All Decompose steps | Each Apply | Cards collected in `<workdir>/memory/`, mounted into each Apply |
+| All Decompose steps | Each Apply | Cards in `<workdir>/memory/`, exposed as native skills in each Apply |
 | Apply j | Apply j+1 | Current kernel directory and the same optional memory |
 
 Decompose stops when an accepted invocation preserves the naive input and emits
@@ -125,10 +125,11 @@ ordered ABI; terminal results also preserve name/validation and have no submissi
 Counter profiling is optional; changed kernels require paired self-checks.
 
 With `--memory_dir`, use the same memory guidance and handoffs as workflow. Memory
-contains SKILL.md files and is mounted at each Apply workdir's `.agents/skills/memory`;
-treat it as read-only. The workdir must be outside memory. An existing empty directory
-is mounted but supplies no recipes; optimization continues from source analysis.
-`--start-kernel` and `--memory-dir` are equivalent flag spellings.
+contains SkillCards, exposed as native skills in each Apply workdir's
+`.agents/skills/memory/`. Select skills through Codex skill discovery; each SKILL.md
+body holds the recipe. Treat them as read-only. The workdir must be outside memory.
+An existing empty directory supplies no recipes; optimization continues from source
+analysis. `--start-kernel` and `--memory-dir` are equivalent flag spellings.
 
 `--max-apply-step` limits rounds, defaults to 15, and includes unchanged rounds.
 Verification defaults to on;

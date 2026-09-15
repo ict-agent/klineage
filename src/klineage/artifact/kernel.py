@@ -83,11 +83,12 @@ class ValidationResult:
 class Kernel:
     name: str
     problem: ProblemSpec
-    source_files: Mapping[str, str]
+    source_files: Mapping[str, str] | None = None
     validation: ValidationResult | None = None
-    language: str = field(init=False)
-    entry_point: str = field(init=False)
-    output_style: OutputStyle = field(init=False)
+    compile_flags: tuple[str, ...] = ()
+    language: str | None = field(init=False)
+    entry_point: str | None = field(init=False)
+    output_style: OutputStyle | None = field(init=False)
     function: Callable[..., Any] | None = field(
         default=None, init=False, repr=False, compare=False
     )
@@ -100,21 +101,27 @@ class Kernel:
             self.validation, ValidationResult
         ):
             raise TypeError("kernel validation must be a ValidationResult")
+        object.__setattr__(self, "compile_flags", tuple(self.compile_flags))
 
         sources = {}
-        for name, text in mapping(self.source_files, "kernel source_files").items():
+        for name, text in mapping(self.source_files or {}, "kernel source_files").items():
             path = relative_source_path(name, "kernel source path")
             if not isinstance(text, str):
                 raise TypeError("kernel source contents must be strings")
             if "\x00" in text:
                 raise ValueError("kernel sources must not contain NUL bytes")
             sources[path] = text
-        if not sources or not any(text.strip() for text in sources.values()):
-            raise ValueError("kernel source_files must contain source text")
         object.__setattr__(self, "source_files", sources)
         self.read_build()
 
     def read_build(self):
+        # A source-free placeholder carries only the problem contract. Its build
+        # identity stays unknown until the caller supplies sources.
+        if not self.source_files:
+            for name in ("language", "entry_point", "output_style"):
+                object.__setattr__(self, name, None)
+            return
+
         if BUNDLE_CONFIG not in self.source_files:
             backend = get_backend(self.problem.language, self.problem.platform)
             object.__setattr__(self, "language", self.problem.language)
@@ -233,12 +240,15 @@ class Kernel:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize sources, problem, and validation; omit compiled runtime handles."""
-        return {
+        payload = {
             "name": self.name,
             "problem": self.problem.to_dict(),
             "source_files": dict(sorted(self.source_files.items())),
             "validation": self.validation.to_dict() if self.validation else None,
         }
+        if self.compile_flags:
+            payload["compile_flags"] = list(self.compile_flags)
+        return payload
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> Kernel:
@@ -248,6 +258,7 @@ class Kernel:
             name=value["name"],
             problem=ProblemSpec.from_dict(mapping(value["problem"], "kernel problem")),
             source_files=mapping(value["source_files"], "kernel source_files"),
+            compile_flags=tuple(value.get("compile_flags") or ()),
             validation=ValidationResult.from_dict(
                 mapping(validation, "kernel validation")
             )

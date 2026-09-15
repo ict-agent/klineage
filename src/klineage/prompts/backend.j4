@@ -23,7 +23,8 @@ KLINEAGE_BACKEND selects cuda, hygon, or ascend explicitly when configured.
 Persist the resolved language/platform. HIP tensors also use torch's cuda device;
 that spelling does not identify NVIDIA hardware.
 {% endif %}
-For native bundles, keep computation in the target's language and preserve its memory hierarchy,
-execution units, synchronization, and numerical contract. Do not translate an
-existing kernel to another backend. Use klineage.harness.evaluate for measurements;
-it selects the backend's runtime and timer.
+For native bundles, keep computation in the target language and preserve the backend,
+ABI, numerical contract, and required memory ordering. Within the action's scope,
+memory placement, work mapping, and synchronization may change if correctness is
+preserved. Use klineage.harness.evaluate for measurements; it selects the backend's
+runtime and timer.

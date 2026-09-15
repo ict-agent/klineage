@@ -6,7 +6,7 @@ from pathlib import Path
 
 from klineage.constants import MAX_RETRIES, TIMEOUT, RunKind
 from klineage.errors import StructuredOutputError, ValidationGateError
-from klineage.harness.codex_runner import CodexRunner
+from klineage.harness.codex_runner import CodexRunner, session_id
 from klineage.prompts import render_prompt
 from klineage.utils import operation_id
 
@@ -67,6 +67,9 @@ class Action:
             except Exception as error:
                 if retry == retries:
                     raise
+                # Continue the failed attempt's own session when it left a trace,
+                # so the retry keeps the context it built instead of restarting.
+                self.resume_from(error)
                 prompt = (
                     f"Previous attempt failed: {type(error).__name__}: {error}\n"
                     "Read the prior generation and verification records in this workdir. "
@@ -74,6 +77,17 @@ class Action:
                     "rewrite all required outputs before finishing.\n\n"
                     f"{self.prompt}"
                 )
+
+    def resume_from(self, error: Exception) -> None:
+        """Point the next attempt at this session if the failure recorded one."""
+
+        trace = getattr(error, "trace_path", None)
+        if trace is None:
+            return
+        resumed = session_id(trace)
+        if resumed is None:
+            return
+        self.runner = CodexRunner(self.workdir, timeout=self.timeout, resume_id=resumed)
 
     def verify(self, prompt: str) -> bool:
         # Verify inherits Action, so load it after Action is defined.
