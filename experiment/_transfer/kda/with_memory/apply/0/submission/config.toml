@@ -1,0 +1,9 @@
+[solution]
+name = "kda-chunked-mma"
+definition = "kda"
+author = "klineage"
+
+[build]
+language = "cuda"
+entry_point = "kernel.cu::kernel"
+destination_passing_style = true

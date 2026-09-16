@@ -1,0 +1,9 @@
+[solution]
+name = "sparse_attention_wgmma"
+definition = "sparse_attention"
+author = "klineage"
+
+[build]
+language = "cuda"
+entry_point = "kernel.cu::kernel"
+destination_passing_style = true

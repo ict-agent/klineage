@@ -1,0 +1,9 @@
+[solution]
+name = "fused-add-rmsnorm-bf16"
+definition = "fused_add_rmsnorm"
+author = "klineage"
+
+[build]
+language = "cuda"
+entry_point = "kernel.cu::kernel"
+destination_passing_style = true
