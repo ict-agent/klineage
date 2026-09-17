@@ -418,6 +418,17 @@ def tasks_for(experiment: Path, pool: Path) -> list[tuple[str, str, Path, Path |
     return units
 
 
+def applied_step(output: Path, problem: str, group: str) -> Path:
+    """The round-0 step directory of one unit.
+
+    `apply_steps` names it `<workdir>/apply/<step>`, and each round runs with that
+    directory as its workspace, so the kernel and the measurement timeline both
+    live beneath it.
+    """
+
+    return output / problem / group / RunKind.APPLY / "0"
+
+
 def completed_run(run_dir: Path) -> Kernel | None:
     """The kernel a finished round left behind, or None when it never ran."""
 
@@ -432,6 +443,7 @@ def one_unit(
     timeout: int,
     device: str,
     provider: Provider,
+    effort: str,
     proxy: bool,
 ) -> tuple[str, dict]:
     """Run one problem/group pair on one pinned device and return its record.
@@ -479,14 +491,14 @@ def one_unit(
 
 
 def unit_stats(output: Path, problem: str, group: str) -> Path:
-    """Where one unit's measurement timeline lands, under its own run directory.
+    """Where one unit's measurement timeline lands.
 
-    The runner derives this from its workspace as `<workdir>/.klineage/stats` and
-    Action hands it `<run_dir>/apply` as that workspace, so the step index is part
-    of the path. `completed_run` reads the kernel from that same directory.
+    The runner derives it from its workspace as `<workdir>/.klineage/stats`, and
+    the workspace is the step directory `completed_run` reads the kernel from, so
+    both are built from the same path. Round 0 is the only step this script runs.
     """
 
-    return output / problem / group / RunKind.APPLY / STATS_DIRECTORY
+    return applied_step(output, problem, group) / STATS_DIRECTORY
 
 
 def bind_runner(provider: Provider, effort: str) -> None:
@@ -504,6 +516,7 @@ def device_worker(
     output: Path,
     timeout: int,
     provider: Provider,
+    effort: str,
     proxy: bool,
 ) -> None:
     """Consume units until the queue drains, one at a time on this device."""
@@ -520,6 +533,7 @@ def device_worker(
                 timeout=timeout,
                 device=device,
                 provider=provider,
+                effort=effort,
                 proxy=proxy,
             )
         except Exception as error:  # a crashed unit must not kill the worker
@@ -569,6 +583,7 @@ def run(args: argparse.Namespace) -> None:
                 "output": output,
                 "timeout": args.timeout,
                 "provider": provider,
+                "effort": args.reasoning_effort,
                 "proxy": not args.no_usage_proxy,
             },
         )
