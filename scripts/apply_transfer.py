@@ -25,6 +25,8 @@ import multiprocessing
 import os
 import re
 import shutil
+import subprocess
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -89,8 +91,14 @@ DEFAULT_KEY_ENV = "AIPING_API_KEY"
 DEFAULT_TIMEOUT = 7200
 #: Environment variable selecting the visible accelerator.
 CUDA_DEVICES = "CUDA_VISIBLE_DEVICES"
+#: Environment variable selecting how CUDA numbers the visible accelerators.
+CUDA_ORDER = "CUDA_DEVICE_ORDER"
+#: Number cards by PCI bus id, so an ordinal names the card nvidia-smi lists.
+#: Without it CUDA's own FASTEST_FIRST order puts L20s at 0 and 1 on this host,
+#: and a run pinned to a "H100" ordinal silently lands on an L20.
+CUDA_ORDER_PCI = "PCI_BUS_ID"
 #: Default device ordinals when --devices is omitted.
-DEFAULT_DEVICES = ("1", "2", "3")
+DEFAULT_DEVICES = ("0", "1", "2", "3")
 #: Context the model accepts. The endpoint advertises up to 1M.
 CONTEXT_WINDOW = 1000000
 #: Compact only near the window's end, well after one round's working set.
@@ -315,6 +323,7 @@ def apply_round(
 
     previous = os.environ.get(CUDA_DEVICES)
     os.environ[CUDA_DEVICES] = device
+    os.environ[CUDA_ORDER] = CUDA_ORDER_PCI
     try:
         return optimize(
             start,
@@ -429,11 +438,26 @@ def applied_step(output: Path, problem: str, group: str) -> Path:
     return output / problem / group / RunKind.APPLY / "0"
 
 
-def completed_run(run_dir: Path) -> Kernel | None:
-    """The kernel a finished round left behind, or None when it never ran."""
+def completed_record(run_dir: Path) -> dict | None:
+    """The record of a unit that already finished, or None when it must run.
 
-    kernel_path = run_dir / RunKind.APPLY / "0" / KERNEL_FILE
-    return load_kernel(kernel_path.parent) if kernel_path.is_file() else None
+    `result.json` is written once, when an attempt ends, so its presence is the
+    completion marker. A kernel on disk is not: a round cut off mid-flight can
+    leave one behind, and taking that as done would skip the round that never
+    finished. A record carrying an error is not a result either, so a unit that
+    failed reruns instead of being skipped forever.
+    """
+
+    path = run_dir / RESULT_FILE
+    if not path.is_file():
+        return None
+    try:
+        record = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or "error" in record:
+        return None
+    return record
 
 
 def one_unit(
@@ -456,8 +480,16 @@ def one_unit(
     """
 
     os.environ[CUDA_DEVICES] = device
+    os.environ[CUDA_ORDER] = CUDA_ORDER_PCI
     problem, group, start, memory_dir = unit
     run_dir = output / problem / group
+
+    # A unit that already recorded a result is left untouched.
+    done = completed_record(run_dir)
+    if done is not None:
+        done.setdefault("device", device)
+        return f"{problem}/{group}", done
+
     before = load_kernel(start)
     record = {
         "problem": problem,
@@ -466,16 +498,9 @@ def one_unit(
         "memory": str(memory_dir) if memory_dir else None,
         "own_memory": problem in CARD_SOURCES,
         "device": device,
+        "card": card_name(device),
         "stats": str(unit_stats(output, problem, group)),
     }
-
-    # A round that already produced a kernel is left untouched.
-    done = completed_run(run_dir)
-    if done is not None:
-        previous = run_dir / RESULT_FILE
-        record = json.loads(previous.read_text()) if previous.is_file() else summarize(before, done)
-        record.setdefault("device", device)
-        return f"{problem}/{group}", record
 
     stats = unit_stats(output, problem, group)
     try:
@@ -566,8 +591,12 @@ def run(args: argparse.Namespace) -> None:
         units.append((problem, group, materialize_start(experiment, problem, source_kernel(experiment, problem)), memory_dir))
 
     # One worker process per device; each takes the next free unit, so a slow
-    # problem never blocks a device that could start another.
+    # problem never blocks a device that could start another. The ordinals are
+    # resolved before any round starts, so a wrong or mixed set stops the run
+    # instead of quietly pairing two groups across different hardware.
     device_list = args.devices
+    print(f"Devices ({CUDA_ORDER}={CUDA_ORDER_PCI}):")
+    check_devices(device_list)
     queue: multiprocessing.Queue = multiprocessing.Queue()
     results_queue: multiprocessing.Queue = multiprocessing.Queue()
     for index, unit in enumerate(units):
@@ -657,6 +686,64 @@ def run(args: argparse.Namespace) -> None:
     print(f"Apply runs: {len(results) - len(failed)}/{len(results)} completed; failures: {failed or 'none'}")
 
 
+def card_name(device: str) -> str | None:
+    """The card a pinned ordinal names, or None when it cannot be identified.
+
+    Runs a child process, because CUDA_VISIBLE_DEVICES is read once at runtime
+    start and cannot be probed in-process for several ordinals at a time.
+    """
+
+    program = (
+        "import torch;"
+        "print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else '')"
+    )
+    environment = {
+        **os.environ,
+        CUDA_DEVICES: device,
+        CUDA_ORDER: CUDA_ORDER_PCI,
+    }
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", program],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=environment,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    name = result.stdout.strip()
+    return name or None
+
+
+def check_devices(device_list: tuple[str, ...]) -> dict[str, str]:
+    """Report each ordinal's card, refusing a set that spans more than one model.
+
+    Pairing a with-memory group against a without-memory one only means something
+    when both run on the same hardware, so a mixed set is rejected before any
+    round starts.
+    """
+
+    found = {}
+    for device in device_list:
+        name = card_name(device)
+        if name is None:
+            raise SystemExit(
+                f"cannot identify the card behind --devices {device}; "
+                "set CUDA_VISIBLE_DEVICES yourself to check, or pass a valid ordinal"
+            )
+        found[device] = name
+        print(f"  device {device}: {name}")
+    models = set(found.values())
+    if len(models) > 1:
+        listing = ", ".join(f"{d}={n}" for d, n in found.items())
+        raise SystemExit(
+            f"--devices spans more than one card model ({listing}); a paired "
+            "comparison across models is not comparable, so pick one model"
+        )
+    return found
+
+
 def devices(value: str) -> tuple[str, ...]:
     """Parse a comma-separated device list, rejecting blanks and duplicates."""
 
@@ -687,7 +774,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         "--devices",
         type=devices,
         default=DEFAULT_DEVICES,
-        help="Comma-separated CUDA device ordinals; one worker process each",
+        help=(
+            "Comma-separated CUDA device ordinals; one worker process each. "
+            f"Numbered by PCI bus id ({CUDA_ORDER}={CUDA_ORDER_PCI}), so an "
+            "ordinal names the card nvidia-smi lists. Every ordinal must be the "
+            "same card model."
+        ),
     )
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     parser.add_argument(
