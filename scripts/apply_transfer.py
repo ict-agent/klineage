@@ -439,13 +439,12 @@ def applied_step(output: Path, problem: str, group: str) -> Path:
 
 
 def completed_record(run_dir: Path) -> dict | None:
-    """The record of a unit that already finished, or None when it must run.
+    """The record of a unit that already ran, or None when it must run.
 
     `result.json` is written once, when an attempt ends, so its presence is the
     completion marker. A kernel on disk is not: a round cut off mid-flight can
     leave one behind, and taking that as done would skip the round that never
-    finished. A record carrying an error is not a result either, so a unit that
-    failed reruns instead of being skipped forever.
+    finished.
     """
 
     path = run_dir / RESULT_FILE
@@ -455,9 +454,7 @@ def completed_record(run_dir: Path) -> dict | None:
         record = json.loads(path.read_text())
     except (OSError, ValueError):
         return None
-    if not isinstance(record, dict) or "error" in record:
-        return None
-    return record
+    return record if isinstance(record, dict) else None
 
 
 def one_unit(
