@@ -74,22 +74,21 @@ def kernel_fields(kernel: Any) -> dict[str, Any]:
 
 
 def measurement_fields(result: Any) -> dict[str, Any]:
-    """Flatten a ValidationResult or profile result into record fields."""
+    """Flatten a ValidationResult or profile result into record fields.
+
+    Only the fields the timeline has always carried are emitted, so a record's
+    shape matches the ones already collected. A paired reference latency and its
+    ratio stay out; the comparison reports them separately.
+    """
 
     fields: dict[str, Any] = {}
     for name in ("compile_passed", "correctness_passed", "profile_passed"):
         value = getattr(result, name, None)
         if value is not None:
             fields[name] = value
-    for name in ("latency_ms", "reference_latency_ms"):
-        value = getattr(result, name, None)
-        if value is not None:
-            fields[name] = value
-    latency = fields.get("latency_ms")
-    reference = fields.get("reference_latency_ms")
-    if isinstance(latency, (int, float)) and isinstance(reference, (int, float)):
-        if latency:
-            fields["speedup"] = reference / latency
+    latency = getattr(result, "latency_ms", None)
+    if latency is not None:
+        fields["latency_ms"] = latency
     if isinstance(result, dict):
         if isinstance(result.get("metrics"), list):
             fields["metrics"] = len(result["metrics"])
