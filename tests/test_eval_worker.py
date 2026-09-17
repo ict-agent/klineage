@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import tempfile
 import unittest
 from contextlib import nullcontext
@@ -122,7 +123,9 @@ class EvalWorkerTests(unittest.TestCase):
         module = SimpleNamespace(PROBLEM_NAME="new_gemm", OPERATOR="gemm")
         with (
             patch.object(
-                worker, "load_problem", return_value=(module, Path("gemm/reference.py"))
+                worker,
+                "load_problem_module",
+                return_value=(module, Path("gemm/reference.py")),
             ),
             patch.object(worker, "load_inputs", return_value={}),
             patch.object(worker, "compute_reference", return_value=torch.ones(1)),
@@ -276,6 +279,34 @@ def torch_ref(z, a):
             problem.touch()
             with self.assertRaisesRegex(ValueError, "build_root"):
                 worker.parse_config({"problem_path": str(problem), "build": str(root)})
+
+
+    def test_reply_survives_kernel_output(self):
+        # A compiled kernel's printf reaches descriptor 1, above the worker's
+        # redirect, so its output can land ahead of the reply.
+        stdout = '[diag] cuda_dev=0 sms=92\n{"compile_passed": true}\n'
+        self.assertEqual(worker.result_payload(stdout), {"compile_passed": True})
+
+    def test_reply_must_be_the_final_line(self):
+        with self.assertRaises(ValueError):
+            worker.result_payload("[diag] only noise\n")
+        with self.assertRaises(ValueError):
+            worker.result_payload("")
+
+    def test_descriptor_stdout_diverts_native_writes(self):
+        # os.write reaches descriptor 1 directly, unlike a print statement.
+        read_fd, write_fd = os.pipe()
+        real_stdout = os.dup(1)
+        os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
+        try:
+            with worker._descriptor_stdout(os.fdopen(write_fd, "w", buffering=1)):
+                os.write(1, b"native kernel output\n")
+            captured = os.read(read_fd, 1024).decode()
+        finally:
+            os.dup2(real_stdout, 1)
+            os.close(real_stdout)
+            os.close(read_fd)
+        self.assertEqual(captured, "native kernel output\n")
 
 
 if __name__ == "__main__":

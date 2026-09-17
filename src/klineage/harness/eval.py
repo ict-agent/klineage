@@ -475,11 +475,15 @@ class EvaluationRuntime:
                 f"evaluator worker exited with status {result.returncode}: "
                 f"{result.stderr[-_ERROR_TAIL:]}"
             )
+        # The worker owns stdout, so the reply is the last line it wrote. Reading
+        # it that way tolerates a stray write from a compiled kernel while still
+        # reporting a reply that no line can parse.
         try:
-            return json.loads(result.stdout)
-        except json.JSONDecodeError as error:
+            return result_payload(result.stdout)
+        except ValueError as error:
             raise WorkerError(
-                f"evaluator worker did not emit JSON; see {stdout_path}"
+                "evaluator worker did not emit JSON; "
+                f"stdout leads with {result.stdout.strip()[:200]!r}; see {stdout_path}"
             ) from error
 
 
@@ -930,12 +934,64 @@ def request_operation(request: Mapping[str, Any]) -> str:
     return value
 
 
+def result_payload(stdout: str) -> Any:
+    """Parse the worker's reply from its stdout.
+
+    The reply is the last line written. Anything ahead of it came from the code
+    under evaluation, whose output the worker cannot fully capture. Raise
+    ValueError when no trailing line parses, so the caller can report the head.
+    """
+
+    for line in reversed(stdout.splitlines()):
+        if line.strip():
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError("no JSON reply") from error
+    raise ValueError("empty worker stdout")
+
+
+@contextlib.contextmanager
+def _descriptor_stdout(stream):
+    """Point descriptor 1 at `stream` for the block, then put it back.
+
+    `contextlib.redirect_stdout` only rebinds `sys.stdout`, so output written
+    through a file descriptor ignores it. The block restores the descriptor even
+    when the body raises, which is what lets `main` still write its reply.
+    """
+
+    saved = os.dup(1)
+    try:
+        os.dup2(stream.fileno(), 1)
+        yield
+    finally:
+        os.dup2(saved, 1)
+        os.close(saved)
+
+
+def _emit(result: Any, *, sort_keys: bool = False) -> None:
+    """Write the result frame as the final line of stdout.
+
+    Insertion order is preserved by default: a definition's input order is part
+    of its contract, and sorting it would silently reorder the ABI.
+    """
+
+    json.dump(result, sys.stdout, ensure_ascii=False, sort_keys=sort_keys)
+    sys.stdout.write("\n")
+    sys.stdout.flush()
+
+
 def main() -> int:
     operation = ""
+    # The result frame is this process's only stdout writer. Evaluating a kernel
+    # runs code it compiled, and output from that code reaches descriptor 1
+    # whatever the interpreter's stdout object is, so the descriptor goes to
+    # stderr for the duration. `sys.stdout` is restored before the reply, which
+    # therefore still lands on the descriptor the caller reads.
     try:
         request = require_mapping(json.load(sys.stdin), "worker request")
         operation = request_operation(request)
-        with contextlib.redirect_stdout(sys.stderr):
+        with _descriptor_stdout(sys.stderr), contextlib.redirect_stdout(sys.stderr):
             if operation == "inspect":
                 seed = request.get("seed", _DEFAULT_SEED)
                 if isinstance(seed, bool) or not isinstance(seed, int):
@@ -955,13 +1011,9 @@ def main() -> int:
         if operation == "evaluate":
             result = ValidationResult(False, False, False).to_dict()
         else:
-            result = {"error_type": type(exc).__name__, "error": message}
-            json.dump(result, sys.stdout, ensure_ascii=False, sort_keys=True)
-            sys.stdout.write("\n")
+            _emit({"error_type": type(exc).__name__, "error": message}, sort_keys=True)
             return 1
-    json.dump(result, sys.stdout, ensure_ascii=False)
-    sys.stdout.write("\n")
-    sys.stdout.flush()
+    _emit(result)
     return 0
 
 
