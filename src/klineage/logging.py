@@ -41,16 +41,20 @@ def log_dir() -> Path | None:
     return Path(value).expanduser() if value else None
 
 
-def record(event: str, /, **fields: Any) -> None:
-    """Append one event. Never raises: collection is best effort."""
+def record(event: str, /, *, directory: Path | None = None, **fields: Any) -> None:
+    """Append one event. Never raises: collection is best effort.
 
-    directory = log_dir()
-    if directory is None:
+    `directory` names the target explicitly, for a writer that serves a workspace
+    other than this process's own; None falls back to the configured directory.
+    """
+
+    target = log_dir() if directory is None else directory
+    if target is None:
         return
     entry = {"event": event, "at": now(), **fields}
     try:
-        directory.mkdir(parents=True, exist_ok=True)
-        with (directory / LOG_FILE).open("a", encoding="utf-8") as stream:
+        target.mkdir(parents=True, exist_ok=True)
+        with (target / LOG_FILE).open("a", encoding="utf-8") as stream:
             stream.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
     except Exception:  # noqa: BLE001 - collection must not fail the caller
         pass
@@ -193,7 +197,7 @@ def complete_events(buffer: bytes) -> tuple[list[bytes], bytes]:
     return frames, buffer
 
 
-def record_usage(frames: Iterator[bytes]) -> None:
+def record_usage(frames: Iterator[bytes], directory: Path | None = None) -> None:
     """Record one api_response event per completed response frame."""
 
     for frame in frames:
@@ -201,10 +205,16 @@ def record_usage(frames: Iterator[bytes]) -> None:
             if payload and payload != b"[DONE]":
                 usage = usage_from_event(payload)
                 if usage is not None:
-                    record("api_response", **usage)
+                    record("api_response", directory=directory, **usage)
 
 
-def relay(source, sink, *, chunked: bool = True) -> None:
+def relay(
+    source,
+    sink,
+    *,
+    chunked: bool = True,
+    directory: Path | None = None,
+) -> None:
     """Copy an upstream body to the client, recording usage as frames arrive.
 
     The body is re-framed when it is chunked, because only whole chunks may be
@@ -216,15 +226,15 @@ def relay(source, sink, *, chunked: bool = True) -> None:
         sink.write(chunk(data) if chunked else data)
         sink.flush()
         frames, pending = complete_events(pending + data)
-        record_usage(iter(frames))
+        record_usage(iter(frames), directory)
     if pending:
-        record_usage(iter([pending]))
+        record_usage(iter([pending]), directory)
     if chunked:
         sink.write(LAST_CHUNK)
         sink.flush()
 
 
-def handler_for(upstream: str):
+def handler_for(upstream: str, directory: Path | None = None):
     """Build a request handler forwarding to `upstream`, e.g. https://host/api/v1."""
 
     class Proxy(BaseHTTPRequestHandler):
@@ -258,7 +268,7 @@ def handler_for(upstream: str):
                             self.send_header(name, value)
                     self.send_header("Transfer-Encoding", "chunked")
                     self.end_headers()
-                    relay(response, self.wfile, chunked=True)
+                    relay(response, self.wfile, chunked=True, directory=directory)
             except HTTPError as error:
                 payload = error.read()
                 self.send_response(error.code)
@@ -267,7 +277,7 @@ def handler_for(upstream: str):
                 self.end_headers()
                 self.wfile.write(payload)
             except Exception as error:  # noqa: BLE001 - report upstream failures
-                record("api_proxy_error", error=repr(error))
+                record("api_proxy_error", directory=directory, error=repr(error))
                 payload = json.dumps({"error": {"message": str(error)}}).encode()
                 try:
                     self.send_response(502)
@@ -286,11 +296,26 @@ def handler_for(upstream: str):
 
 
 class UsageProxy:
-    """Serve `upstream` on a local port, recording each round trip's usage."""
+    """Serve `upstream` on a local port, recording each round trip's usage.
 
-    def __init__(self, upstream: str, host: str = "127.0.0.1", port: int = 0):
+    `directory` pins the target explicitly. Without it the proxy would fall back
+    to the configured directory, which only works when the caller and the process
+    serving requests share one environment; a proxy started to serve another
+    process's runs should name its directory instead.
+    """
+
+    def __init__(
+        self,
+        upstream: str,
+        host: str = "127.0.0.1",
+        port: int = 0,
+        *,
+        directory: Path | None = None,
+    ):
         self.upstream = upstream
-        self.server = ThreadingHTTPServer((host, port), handler_for(upstream))
+        self.directory = directory
+        handler = handler_for(upstream, directory)
+        self.server = ThreadingHTTPServer((host, port), handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     @property

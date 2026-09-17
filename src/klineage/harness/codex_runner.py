@@ -18,10 +18,12 @@ from klineage.constants import (
     MESSAGE_DIRECTORY,
     SKILL_DIRECTORY,
     STATE_DIRECTORY,
+    STATS_DIRECTORY,
     RunKind,
 )
 from klineage.harness.codex_skills import render_memory
 from klineage.harness.process import stop_process
+from klineage.logging import LOG_ENV
 from klineage.tools import write_agent_docs
 from klineage.utils import operation_id
 
@@ -68,6 +70,12 @@ class CodexRunResult:
 class CodexRunner:
     """Run Codex with the host's filesystem and network access."""
 
+    #: Provider name Codex is configured with; distinct from the host's own so a
+    #: run never inherits unrelated settings from the user's config.
+    PROVIDER = "klineage"
+    #: Key variable named when a caller does not supply its own.
+    DEFAULT_KEY_ENV = "AIPING_API_KEY"
+
     def __init__(
         self,
         work_dir: str | os.PathLike[str],
@@ -77,6 +85,8 @@ class CodexRunner:
         timeout: float | None = None,
         resume_id: str | None = None,
         state_dir: str | os.PathLike[str] = STATE_DIRECTORY,
+        api_base_url: str | None = None,
+        api_key_env: str | None = None,
     ):
         if timeout is not None and timeout <= 0:
             raise ValueError("timeout must be greater than zero")
@@ -84,15 +94,22 @@ class CodexRunner:
             raise ValueError("invalid reasoning effort")
         if resume_id is not None and not _RUN_ID_RE.fullmatch(resume_id):
             raise ValueError("resume_id must be a recorded session identifier")
+        if api_base_url is not None and not api_base_url.strip():
+            raise ValueError("api_base_url must be a non-empty string")
+        if api_key_env is not None and not api_key_env.isidentifier():
+            raise ValueError("api_key_env must name an environment variable")
 
         self.work_dir = Path(work_dir).expanduser().resolve()
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.state_dir = (self.work_dir / Path(state_dir).expanduser()).resolve()
         self.trace_root = self.state_dir / "codex-runs"
         self.trace_root.mkdir(parents=True, exist_ok=True)
+        self.stats_dir = self.state_dir / STATS_DIRECTORY.name
         self.timeout = timeout
         self.reasoning_effort = reasoning_effort
         self.resume_id = resume_id
+        self.api_base_url = api_base_url.strip() if api_base_url else None
+        self.api_key_env = api_key_env
         self.codex_program = resolve_executable(codex_bin)
 
         # Expose packaged instructions through Codex's workspace skill discovery.
@@ -176,6 +193,10 @@ class CodexRunner:
             if python_path
             else (str(PACKAGE_ROOT.parent),)
         )
+        # Point this run's measurements at its own workspace, so evaluate and
+        # profile records land under <work_dir>/.klineage/stats. The path travels
+        # by environment because the evaluator worker is a fresh process.
+        environment[LOG_ENV] = str(self.stats_dir)
 
         with (
             trace_path.open("w", encoding="utf-8") as trace_file,
@@ -237,6 +258,14 @@ class CodexRunner:
             command.extend(
                 ("-c", f"model_reasoning_effort={json.dumps(self.reasoning_effort)}")
             )
+        if self.api_base_url is not None:
+            command.extend(
+                _provider_flags(
+                    self.PROVIDER,
+                    self.api_base_url,
+                    self.api_key_env or self.DEFAULT_KEY_ENV,
+                )
+            )
         command.append("exec")
         # `exec resume` accepts neither `-s` nor `-C`, so it runs with the session's
         # own sandbox and workspace; cwd still comes from Popen.
@@ -259,6 +288,19 @@ class CodexRunner:
             )
         )
         return command
+
+
+def _provider_flags(name: str, base_url: str, key_env: str) -> list[str]:
+    """Pin one OpenAI-compatible provider so the endpoint stays where we point it."""
+
+    return [
+        "-c", "model_provider=" + name,
+        "-c", f"model_providers.{name}.name={name}",
+        "-c", f"model_providers.{name}.base_url={base_url}",
+        "-c", f"model_providers.{name}.env_key={key_env}",
+        "-c", f"model_providers.{name}.wire_api=responses",
+        "-c", f"model_providers.{name}.requires_openai_auth=false",
+    ]
 
 
 def session_id(trace_path: Path) -> str | None:

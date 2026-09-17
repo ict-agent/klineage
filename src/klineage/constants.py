@@ -43,6 +43,8 @@ SUBMISSION_DIRECTORY = Path("submission")
 SKILL_FILE = "SKILL.md"
 #: Internal workspace state directory.
 STATE_DIRECTORY = ".klineage"
+#: Measurement timeline relative to the workspace state directory.
+STATS_DIRECTORY = Path(STATE_DIRECTORY) / "stats"
 #: Directory name for generated or mounted skill memory.
 MEMORY_DIR = "memory"
 #: Workspace directory discovered by the agent for skills.
