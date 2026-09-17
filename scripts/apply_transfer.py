@@ -12,6 +12,11 @@ sparse_attention's with_memory group is still pending.
 
     python scripts/apply_transfer.py --compare
 
+Each run writes to its own `experiment/transfer_<UTC timestamp>` directory, so
+runs never overwrite one another. Pass --resume-from an earlier run to keep the
+units it finished and reuse its card pool; pass --output to place the run
+somewhere else entirely.
+
 Card sources mount their own extracted memory; every other problem mounts the
 pooled pool. Progress is a tqdm bar; results and evidence stay under --output.
 """
@@ -29,6 +34,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 from tqdm import tqdm
@@ -99,6 +105,8 @@ CUDA_ORDER = "CUDA_DEVICE_ORDER"
 CUDA_ORDER_PCI = "PCI_BUS_ID"
 #: Default device ordinals when --devices is omitted.
 DEFAULT_DEVICES = ("0", "1", "2", "3")
+#: Directory prefix for a run's own output, below the experiment directory.
+RUN_PREFIX = "transfer_"
 #: Context the model accepts. The endpoint advertises up to 1M.
 CONTEXT_WINDOW = 1000000
 #: Compact only near the window's end, well after one round's working set.
@@ -565,26 +573,69 @@ def device_worker(
         results.put((index, key, record))
 
 
+def timestamped_output(parent: Path) -> Path:
+    """A fresh run directory under `parent`, named for the moment it starts.
+
+    Every run gets its own directory, so a later run cannot overwrite an earlier
+    one's evidence and two runs are never confused for each other. The stamp is
+    UTC to the second; a run takes hours, so a collision would mean two started
+    in the same second.
+    """
+
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return parent / f"{RUN_PREFIX}{stamp}"
+
+
 def run(args: argparse.Namespace) -> None:
     experiment = Path(args.experiment).expanduser().resolve()
-    output = Path(args.output).expanduser().resolve()
+    output = (
+        Path(args.output).expanduser().resolve()
+        if args.output is not None
+        else timestamped_output(experiment)
+    )
     output.mkdir(parents=True, exist_ok=True)
+
+    # A resumed run takes its finished units from an earlier run's directory. The
+    # work still happens here, so this directory stays self-contained.
+    resumed = (
+        Path(args.resume_from).expanduser().resolve()
+        if args.resume_from is not None
+        else None
+    )
 
     provider = resolve_provider(args)
     os.environ[provider.key_env] = provider.key
 
     memory = output / MEMORY_DIR
-    if args.reuse_memory and memory.is_dir():
-        manifest = json.loads((output / "memory-manifest.json").read_text())
+    if resumed is not None and (resumed / MEMORY_DIR).is_dir():
+        shutil.copytree(resumed / MEMORY_DIR, memory, dirs_exist_ok=True)
+        manifest = json.loads((resumed / "memory-manifest.json").read_text())
     else:
-        if memory.exists():
-            shutil.rmtree(memory)
         manifest = pool_memory(experiment, memory, args.cards_per_source)
-        (output / "memory-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (output / "memory-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+    def carry_over(problem: str, group: str) -> None:
+        """Copy a resumed unit's result and measured kernel into this run.
+
+        The kernel is what a paired comparison reads, so a skipped unit that
+        left it behind can still be reported against its partner.
+        """
+
+        run_dir = output / problem / group
+        run_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(resumed / problem / group / RESULT_FILE, run_dir / RESULT_FILE)
+        earlier = applied_step(resumed, problem, group) / KERNEL_FILE
+        if earlier.is_file():
+            worked = applied_step(output, problem, group)
+            worked.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(earlier, worked / KERNEL_FILE)
 
     # Each problem directory needs its own kernel.json before Apply can start.
     units = []
     for problem, group, start, memory_dir in tasks_for(experiment, memory):
+        if resumed is not None and completed_record(resumed / problem / group):
+            carry_over(problem, group)
+            continue
         units.append((problem, group, materialize_start(experiment, problem, source_kernel(experiment, problem)), memory_dir))
 
     # One worker process per device; each takes the next free unit, so a slow
@@ -755,7 +806,24 @@ def devices(value: str) -> tuple[str, ...]:
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--experiment", type=Path, default="experiment")
-    parser.add_argument("--output", type=Path, default="experiment/_transfer")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help=(
+            "Where this run writes. Omit for a fresh <experiment>/transfer_<UTC "
+            "timestamp> directory, so runs never overwrite each other"
+        ),
+    )
+    parser.add_argument(
+        "--resume-from",
+        type=Path,
+        default=None,
+        help=(
+            "An earlier run's directory. Units it recorded a result for are "
+            "carried over instead of run again, along with its card pool"
+        ),
+    )
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--key-env", default=DEFAULT_KEY_ENV)
@@ -784,7 +852,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         action="store_true",
         help="Send Codex straight to --base-url instead of through a usage recorder",
     )
-    parser.add_argument("--reuse-memory", action="store_true", help="Reuse the existing pool")
     parser.add_argument(
         "--compare",
         action="store_true",
