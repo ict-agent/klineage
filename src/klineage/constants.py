@@ -45,6 +45,8 @@ SKILL_FILE = "SKILL.md"
 STATE_DIRECTORY = ".klineage"
 #: Measurement timeline relative to the workspace state directory.
 STATS_DIRECTORY = Path(STATE_DIRECTORY) / "stats"
+#: Per-evaluation kernel snapshots relative to the workspace state directory.
+VERSIONS_DIRECTORY = Path(STATE_DIRECTORY) / "versions"
 #: Directory name for generated or mounted skill memory.
 MEMORY_DIR = "memory"
 #: Workspace directory discovered by the agent for skills.

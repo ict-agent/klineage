@@ -12,7 +12,13 @@ from unittest.mock import Mock, patch
 from problem_fixtures import problem_spec
 
 from klineage.artifact.kernel import Kernel
-from klineage.harness.eval import EvaluationRuntime, ValidationResult, WorkerError
+from klineage.harness.eval import (
+    EvaluationRuntime,
+    ValidationResult,
+    WorkerError,
+    evaluate,
+    next_version,
+)
 from klineage.harness.timing import TimingPolicy
 
 
@@ -52,6 +58,7 @@ class EvalTransportTests(unittest.TestCase):
             source_files={"kernel.cu": artifact.read_text()},
             validation=validation,
         )
+        kernel = Kernel.from_dict({**kernel.to_dict(), "compile_flags": ["-DNDEBUG"]})
         with patch.object(
             self.runtime, "invoke", return_value=validation.to_dict()
         ) as invoke:
@@ -67,6 +74,7 @@ class EvalTransportTests(unittest.TestCase):
             )
         request = invoke.call_args.args[0]
         for key in ("kernel", "reference"):
+            self.assertEqual(request[key].get("compile_flags"), ["-DNDEBUG"])
             self.assertNotIn("validation", request[key])
             self.assertEqual(
                 Kernel.from_dict(request[key]).source_files,
@@ -74,6 +82,7 @@ class EvalTransportTests(unittest.TestCase):
             )
         self.assertNotIn("problem_path", request["config"])
         self.assertEqual(request["config"]["timing"], TimingPolicy().to_dict())
+        self.assertEqual(request["config"]["correctness"], {"rtol": 1e-2, "atol": 1e-2})
 
     def test_launches_local_python(self):
         result = subprocess.CompletedProcess((), 0, '{"done": true}', "")
@@ -110,6 +119,91 @@ class EvalTransportTests(unittest.TestCase):
         self.assertTrue(
             json.loads((self.logs / "timeout-process.json").read_text())["timed_out"]
         )
+
+    def test_worker_budget_override(self):
+        kernel = Kernel(
+            "kernel",
+            problem_spec("gemm", "cuda", "sm90"),
+            source_files={"kernel.cu": "__global__ void kernel() {}"},
+        )
+        validation = ValidationResult(True, True, True, 1.0)
+        extended = self.runtime.timeout * 2
+        requests = []
+
+        # Simulate a measurement longer than the default worker budget.
+        def complete(command, **options):
+            requests.append(json.loads(options["payload"]))
+            if options["timeout"] <= self.runtime.timeout:
+                raise subprocess.TimeoutExpired(command, options["timeout"])
+            return subprocess.CompletedProcess(
+                command, 0, json.dumps(validation.to_dict()), ""
+            )
+
+        with patch("klineage.harness.eval.run_process", side_effect=complete) as run:
+            with self.assertRaisesRegex(WorkerError, "timed out"):
+                evaluate(kernel, self.root)
+            self.assertEqual(
+                evaluate(kernel, self.root, timeout=extended), validation
+            )
+
+        self.assertEqual(run.call_args.kwargs["timeout"], extended)
+        self.assertEqual(requests[0], requests[1])
+        records = [
+            json.loads(path.read_text())
+            for path in (self.root / "evaluations").glob("*/eval-0001-process.json")
+        ]
+        completed = [record for record in records if not record["timed_out"]]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["timeout_seconds"], extended)
+
+    def test_evaluate_numbers_one_version_per_call(self):
+        kernel = Kernel(
+            "kernel",
+            problem_spec("gemm", "cuda", "sm90"),
+            source_files={"kernel.cu": "__global__ void kernel() {}"},
+        )
+        validation = ValidationResult(True, True, True, 1.0)
+
+        def complete(command, **options):
+            return subprocess.CompletedProcess(
+                command, 0, json.dumps(validation.to_dict()), ""
+            )
+
+        with patch("klineage.harness.eval.run_process", side_effect=complete):
+            for _ in range(3):
+                evaluate(kernel, self.root)
+
+        versions = self.root / ".klineage" / "versions"
+        self.assertEqual(sorted(p.name for p in versions.iterdir()), ["1", "2", "3"])
+        for number in ("1", "2", "3"):
+            saved = json.loads((versions / number / "kernel.json").read_text())
+            self.assertEqual(saved["name"], "kernel")
+            self.assertEqual(saved["source_files"]["kernel.cu"], kernel.source_files["kernel.cu"])
+
+    def test_version_snapshot_survives_a_failed_evaluation(self):
+        # The snapshot names what was measured, so it is taken even when the
+        # measurement then fails; a missing snapshot is evidence lost.
+        kernel = Kernel(
+            "kernel",
+            problem_spec("gemm", "cuda", "sm90"),
+            source_files={"kernel.cu": "__global__ void kernel() {}"},
+        )
+        with patch("klineage.harness.eval.run_process", side_effect=OSError("no worker")):
+            with self.assertRaises(WorkerError):
+                evaluate(kernel, self.root)
+
+        saved = self.root / ".klineage" / "versions" / "1" / "kernel.json"
+        self.assertTrue(saved.is_file())
+
+    def test_next_version_ignores_gaps_and_foreign_directories(self):
+        versions = self.root / ".klineage" / "versions"
+        (versions / "1").mkdir(parents=True)
+        (versions / "3").mkdir()
+        (versions / "notes").mkdir()
+        (versions / "7.txt").write_text("not a version")
+
+        # Highest wins, so a gap is never reused and stray entries do not number.
+        self.assertEqual(next_version(self.root), 4)
 
     def test_bad_worker_output_fails(self):
         for result in (

@@ -17,7 +17,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Protocol
 
-from klineage.artifact.kernel import ValidationResult
+from klineage.artifact.kernel import ValidationResult, save_kernel
 from klineage.artifact.problem import (
     load_problem_module,
     trace_definition,
@@ -31,6 +31,7 @@ from klineage.constants import (
     BUILD_DIRECTORY,
     EVALUATIONS_DIRECTORY,
     NUMERICAL_TOLERANCE,
+    VERSIONS_DIRECTORY,
     RunKind,
 )
 from klineage.contract import ProblemSpec, ValueRole
@@ -529,6 +530,41 @@ def inspect_problem(problem: Path, work: Path) -> ProblemSpec:
     )
 
 
+def next_version(work: Path) -> int:
+    """The number a kernel snapshot taken now would take.
+
+    Versions count evaluations: the first snapshot is 1, and the highest number
+    already present sets the next, so a directory left by an earlier run is not
+    reused and a gap is filled rather than skipped.
+    """
+
+    versions = work / VERSIONS_DIRECTORY
+    highest = 0
+    if versions.is_dir():
+        for entry in versions.iterdir():
+            if entry.is_dir() and entry.name.isdigit():
+                highest = max(highest, int(entry.name))
+    return highest + 1
+
+
+def snapshot_kernel(kernel: Kernel, work: Path) -> Path:
+    """Save one numbered copy of a kernel under work/.klineage/versions.
+
+    Evaluating a candidate is what advances the record, so the copy is taken
+    before the run: the version always names the sources that were measured,
+    whether the measurement then passes or fails. Snapshots are evidence, so a
+    failure to write one must not fail the evaluation it describes.
+    """
+
+    version = work / VERSIONS_DIRECTORY / str(next_version(work))
+    try:
+        version.mkdir(parents=True, exist_ok=True)
+        save_kernel(kernel, version)
+    except OSError:
+        pass
+    return version
+
+
 @agent_function
 @observed("evaluate")
 def evaluate(
@@ -548,7 +584,10 @@ def evaluate(
     Rebuild Kernel.source_files after edits. Omit reference for standalone checks.
     timeout overrides the worker deadline in seconds; it changes neither the
     sampling policy nor the enclosing action deadline. None uses the default.
+    Each call also saves the kernel under work/.klineage/versions/<N>, numbered
+    by call order.
     """
+    snapshot_kernel(kernel, work)
     runtime = EvaluationRuntime(timeout=_TIMEOUT_SECONDS if timeout is None else timeout)
     return runtime.evaluate(
         kernel,
