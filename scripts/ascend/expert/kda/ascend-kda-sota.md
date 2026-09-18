@@ -89,6 +89,8 @@ _kda_fwd_h_o_triton_kernel      grid=(V/BV, B*H), BV∈{32,64,128}
   `kda.chunk-decay-materialization`、`kda.recurrence-temporal-fusion`、
   `kda.cooperative-row-norm`、`kda.state-decay-register-reuse` 等。
   CUDA 专属的 TMA/warp-specialization 卡片（`kda.tma-*`）在 Ascend 上不适用。
+- 本地 910B1 上的高性能 Triton 参考（GDN 融合 Stage6+7）见 `ascend-triton-gdn.md`：
+  结构与实测结论与 KDA 的 FwdH 同构。
 - `experiment/_transfer/kda/{with,without}_memory/apply/0/` 是 CUDA 运行的完整产物，
   可用于确认真实算子的输入输出形状，但实现是 CUDA 的。
 

@@ -11,7 +11,8 @@ K=V=128, bf16 输入, fp32 状态）。本目录是 Setting B 的专家知识，
    （本地 CANN `ops-transformer` / vllm-ascend / FlagGems / FLA）。
 3. `ascend-kernel-design.md`：Ascend 上的分核、tile、状态常驻、GM 流量估算与实测经验。
 4. `ascend-constraints.md`：910B1 硬约束与性能启发式（取自本地优化库，已按框架过滤）。
-5. `triton-ascend.md`：triton-ascend 编程模型、autotune、编译选项、调试与常见退化。
+5. `ascend-triton-gdn.md`：本地 GDN 融合 Triton 实现的结构、实测与负面结论（FwdH 同构）。
+6. `triton-ascend.md`：triton-ascend 编程模型、autotune、编译选项、调试与常见退化。
 
 规模事实（用于估算）：
 
