@@ -11,7 +11,12 @@ Every path below is relative to the project root, the checkout that holds
 
 ## Artifact format
 
-- `{work_rel}/submission/config.toml` + `{work_rel}/submission/solution/*.asc` hold the kernel; read `{work_rel}/.agents/skills/ascendc/SKILL.md` for the bundle format, compiler flags, tensor ABI, and stream rules.
+- `{work_rel}/submission/config.toml` + `{work_rel}/submission/solution/` hold the kernel.
+  Two builds are supported:
+  - AscendC: `language = "ascendc"`, `.asc` sources; see `{work_rel}/.agents/skills/ascendc/SKILL.md`
+    for the bundle format, compiler flags, tensor ABI, and stream rules.
+  - triton-ascend: `language = "python"`, `entry_point = "kernel.py::kernel"`; the container has
+    `triton` plus `triton.language.extra.cann.extension` available.
 - `{work_rel}/kernel.json` is regenerated from the submission by the evaluation command; do not hand-edit it.
 - Every evaluated kernel is snapshotted to `{work_rel}/versions/version<N>/`.
 
