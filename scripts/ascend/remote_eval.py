@@ -12,7 +12,9 @@ import os
 import sys
 from pathlib import Path
 
-REPO_DEFAULT = Path("/data/home_dir/o_zhangchenqing/ascend-harness/repo")
+#: This file lives at `<project root>/scripts/ascend/`, so the checkout is two
+#: levels up; the SSH caller always runs it from there.
+REPO_DEFAULT = Path(__file__).resolve().parents[2]
 
 
 def main(argv: list[str] | None = None) -> None:

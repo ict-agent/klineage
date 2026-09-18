@@ -1,9 +1,10 @@
 Implement and optimize the `{kernel}` operator on Ascend 910B1 with AscendC.
 
-- Definition: `problems/definitions/{kernel}.json`; workload: `problems/workloads/{kernel}.jsonl`.
+- Work in `{work_rel}/`; every path is relative to the project root (`cd {root_rel}` from this workspace).
+- Definition: `{work_rel}/problems/definitions/{kernel}.json`; workload: `{work_rel}/problems/workloads/{kernel}.jsonl`.
 - Budget: {hours} hours. Work in small, measured steps.
-- Evaluate with: {eval_cmd}
+- Evaluate from the project root with: {eval_cmd}
   Make correctness pass first, then tune performance; revert changes that break it.
-- Deliverable: a correct, fast bundle at `submission/config.toml` + `submission/solution/`.
+- Deliverable: a correct, fast bundle at `{work_rel}/submission/config.toml` + `{work_rel}/submission/solution/`.
 {expert_line}
 End your last message with the final measured latency.

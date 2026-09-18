@@ -23,13 +23,29 @@ from hashlib import sha1
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-REPO_REMOTE_DEFAULT = "/data/home_dir/o_zhangchenqing/ascend-harness/repo"
-RUNS_DEFAULT = "/data/home_dir/o_zhangchenqing/ascend-harness/runs"
+#: Harness root on the host: `<root>/repo` is this project's checkout there,
+#: `<root>/runs` holds one evaluation copy per unit.
+HARNESS_ROOT_DEFAULT = "~/ascend-harness"
+REPO_NAME = "repo"
+RUNS_NAME = "runs"
 ARCH_DEFAULT = "dav-c220"
 
 
 def now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def host_path(host: str, path: str) -> str:
+    """Expand a leading `~` on the host: the container's HOME is /root."""
+
+    if not path.startswith("~"):
+        return path
+    result = subprocess.run(["ssh", host, "echo $HOME"], capture_output=True, text=True)
+    home = result.stdout.strip()
+    if result.returncode or not home:
+        detail = (result.stderr or "no $HOME").strip()[-200:]
+        raise SystemExit(f"cannot resolve {path} on {host}: {detail}")
+    return home + path[1:]
 
 
 def run_ssh(host: str, container: str, script: str, *,
@@ -110,12 +126,13 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--timeout", type=float, default=1800, help="evaluation worker seconds")
     parser.add_argument("--host", default="910b1")
     parser.add_argument("--container", default="vllm0.23.0-zcj")
-    parser.add_argument("--remote-repo", default=REPO_REMOTE_DEFAULT)
-    parser.add_argument("--remote-runs", default=RUNS_DEFAULT)
+    parser.add_argument("--remote-root", default=HARNESS_ROOT_DEFAULT,
+                        help="harness root on the host: repo/ + runs/")
     parser.add_argument("--arch", default=ARCH_DEFAULT)
     args = parser.parse_args(argv)
 
-    REPO_REMOTE, RUNS, ARCH = args.remote_repo, args.remote_runs, args.arch
+    root = host_path(args.host, args.remote_root)
+    REPO_REMOTE, RUNS, ARCH = f"{root}/{REPO_NAME}", f"{root}/{RUNS_NAME}", args.arch
     work = args.work.expanduser().resolve()
     submission = work / "submission"
     if not submission.is_dir():

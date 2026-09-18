@@ -56,6 +56,53 @@ def local_python() -> Path:
     return Path(sys.executable)
 
 
+def rooted(path: Path) -> str:
+    """Path as written from the project root; absolute if it lives outside."""
+
+    absolute = Path(os.path.abspath(path))
+    try:
+        return str(absolute.relative_to(REPO))
+    except ValueError:
+        return str(path)
+
+
+def eval_cmd(work: Path, device: str = "") -> str:
+    """The evaluation gate, with every path relative to the project root."""
+
+    command = f"{rooted(local_python())} {rooted(EVAL)} --work {rooted(work)}"
+    return f"{command} --device {device}" if device else command
+
+
+def path_fields(work: Path) -> dict[str, str]:
+    """Path tokens for the workspace templates, all relative to the root."""
+
+    return {
+        "{work_rel}": rooted(work),
+        "{root_rel}": os.path.relpath(REPO, work),
+    }
+
+
+def render(text: str, fields: dict[str, str]) -> str:
+    """Replace every `{token}` with its rendered value."""
+
+    for token, value in fields.items():
+        text = text.replace(token, value)
+    return text
+
+
+def template_fields(work: Path, kernel: str, setting: str, device: str = "") -> dict[str, str]:
+    """Tokens shared by AGENTS.md and the prompt; paths sit under the root."""
+
+    expert = setting == "with_memory"
+    return {
+        "{kernel}": kernel,
+        "{setting}": setting,
+        "{eval_cmd}": eval_cmd(work, device),
+        "{expert_line}": f"Expert knowledge: read `{rooted(work)}/expert/` first.\n" if expert else "",
+        **path_fields(work),
+    }
+
+
 def provider_settings() -> tuple[str, str]:
     """(provider name, base_url) from the user's Codex config."""
 
@@ -92,16 +139,8 @@ def prepare(work: Path, kernel: str, setting: str, template: str) -> bool:
             )
         shutil.copytree(source, work / "expert")
 
-    fields = {
-        "{kernel}": kernel,
-        "{setting}": setting,
-        "{eval_cmd}": f"{local_python()} {EVAL} --work {work}",
-        "{expert_line}": "Expert knowledge: read everything under `expert/` first.\n" if expert else "",
-    }
-    text = template
-    for token, value in fields.items():
-        text = text.replace(token, value)
-    (work / "AGENTS.md").write_text(text, encoding="utf-8")
+    (work / "AGENTS.md").write_text(render(template, template_fields(work, kernel, setting)),
+                                    encoding="utf-8")
     return expert
 
 
@@ -146,12 +185,10 @@ def run_unit(unit: tuple[str, str], device: str, options: argparse.Namespace) ->
     try:
         template = (REPO / "scripts" / "ascend" / "agents.md.tmpl").read_text(encoding="utf-8")
         prepare(work, kernel, setting, template)
-        prompt = (REPO / "scripts" / "ascend" / "prompt.md.tmpl").read_text(encoding="utf-8")
-        prompt = (prompt.replace("{kernel}", kernel)
-                        .replace("{hours}", str(options.timeout // 3600))
-                        .replace("{eval_cmd}", f"{local_python()} {EVAL} --work {work} --device {device}")
-                        .replace("{expert_line}", "Expert knowledge: read `expert/` first.\n"
-                                 if setting == "with_memory" else ""))
+        fields = template_fields(work, kernel, setting, device)
+        fields["{hours}"] = str(options.timeout // 3600)
+        prompt = render((REPO / "scripts" / "ascend" / "prompt.md.tmpl").read_text(encoding="utf-8"),
+                        fields)
 
         provider, upstream = provider_settings()
         stats = work / ".klineage" / "stats"

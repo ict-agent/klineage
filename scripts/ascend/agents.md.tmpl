@@ -2,19 +2,22 @@
 
 Kernel: **{kernel}** — Setting: **{setting}**
 
-Problem definition: `problems/definitions/{kernel}.json` (shapes, dtypes, axes, torch reference).
-Workload: `problems/workloads/{kernel}.jsonl`.
-Target: Ascend 910B1, evaluated remotely in the `vllm0.23.0-zcj` container.
+Every path below is relative to the project root, the checkout that holds
+`scripts/ascend/`. This workspace is `{work_rel}`: `cd {root_rel}` from here.
+
+- Problem definition: `{work_rel}/problems/definitions/{kernel}.json` (shapes, dtypes, axes, torch reference).
+- Workload: `{work_rel}/problems/workloads/{kernel}.jsonl`.
+- Target: Ascend 910B1, evaluated remotely in the `vllm0.23.0-zcj` container.
 
 ## Artifact format
 
-- `submission/config.toml` + `submission/solution/*.asc` hold the kernel; read `.agents/skills/ascendc/SKILL.md` for the bundle format, compiler flags, tensor ABI, and stream rules.
-- `kernel.json` is regenerated from `submission/` by the evaluation command; do not hand-edit it.
-- Every evaluated kernel is snapshotted to `versions/version<N>/`.
+- `{work_rel}/submission/config.toml` + `{work_rel}/submission/solution/*.asc` hold the kernel; read `{work_rel}/.agents/skills/ascendc/SKILL.md` for the bundle format, compiler flags, tensor ABI, and stream rules.
+- `{work_rel}/kernel.json` is regenerated from the submission by the evaluation command; do not hand-edit it.
+- Every evaluated kernel is snapshotted to `{work_rel}/versions/version<N>/`.
 
 ## Fixed evaluation interface
 
-Run exactly this command after each meaningful change:
+Run exactly this command from the project root after each meaningful change:
 
     {eval_cmd}
 

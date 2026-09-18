@@ -2,6 +2,8 @@
 
 One local Codex session per (kernel, setting); evaluation runs on 910b1 inside
 the `vllm0.23.0-zcj` container through the fixed gate `scripts/ascend/eval.py`.
+Every path below is relative to the project root; on the host the harness lives
+in `~/ascend-harness` (`repo/` checkout, `runs/` evaluation copies).
 
 ```text
 Codex (Mac) --Responses API--> UsageProxy --HTTPS--> provider
@@ -10,7 +12,9 @@ Codex (Mac) --Responses API--> UsageProxy --HTTPS--> provider
     v
 trace.jsonl
     |
-    | agent runs: .venv-ascend/bin/python scripts/ascend/eval.py --work <ws>
+    | agent runs, from the project root:
+    |   .venv-ascend/bin/python scripts/ascend/eval.py \
+    |     --work experiment/ascend/generation/<kernel>/<setting>/work
     v
 eval.py --rsync--> 910b1 --> docker exec --> evaluate --> NPU
     |                                          |

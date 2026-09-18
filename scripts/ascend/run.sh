@@ -15,7 +15,8 @@ set -euo pipefail
 
 HOST=${HOST:-910b1}
 CONTAINER=${CONTAINER:-vllm0.23.0-zcj}
-ROOT=${ROOT:-/data/home_dir/o_zhangchenqing/ascend-harness}
+# Harness root on the host: resolved there because the container's HOME is /root.
+ROOT=${ROOT:-$(ssh "$HOST" 'echo $HOME/ascend-harness')}
 REPO="$ROOT/repo"
 LOCAL=$(cd "$(dirname "$0")/../.." && pwd)
 PY="$LOCAL/.venv-ascend/bin/python"
