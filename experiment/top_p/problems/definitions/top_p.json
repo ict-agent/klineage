@@ -1,0 +1,42 @@
+{
+  "name": "top_p",
+  "op_type": "top_p_renorm_probs",
+  "axes": {
+    "B": {
+      "type": "const",
+      "value": 32
+    },
+    "V": {
+      "type": "const",
+      "value": 128256
+    }
+  },
+  "inputs": {
+    "probs": {
+      "shape": [
+        "B",
+        "V"
+      ],
+      "dtype": "float32",
+      "description": "Dense row probabilities; strides [128256, 1]."
+    },
+    "top_p": {
+      "shape": [
+        "B"
+      ],
+      "dtype": "float32",
+      "description": "Per-row threshold; stride [1]; frozen to float32(0.9)."
+    }
+  },
+  "outputs": {
+    "renorm_probs": {
+      "shape": [
+        "B",
+        "V"
+      ],
+      "dtype": "float32",
+      "description": "Filtered, normalized probabilities; strides [128256, 1]."
+    }
+  },
+  "reference": "import torch\n\nNUMERICAL_TOLERANCE = 1e-2\n\n\ndef run(probs, top_p):\n    # Include the crossing token and every token tied with it.\n    ordered = torch.sort(probs, dim=-1, descending=True, stable=True).values\n    cumulative = ordered.to(torch.float64).cumsum(dim=-1)\n    boundary = torch.searchsorted(\n        cumulative, top_p.to(torch.float64).unsqueeze(-1), right=False\n    ).clamp_max(probs.shape[-1] - 1)\n    cutoff = ordered.gather(-1, boundary)\n\n    retained = torch.where(probs >= cutoff, probs, 0).to(torch.float64)\n    return (retained / retained.sum(dim=-1, keepdim=True)).to(probs.dtype)\n\n\ndef check_outputs(actual, expected):\n    if isinstance(actual, (tuple, list)):\n        assert len(actual) == 1, \"Expected one probability tensor\"\n        actual = actual[0]\n    if isinstance(expected, (tuple, list)):\n        assert len(expected) == 1, \"Expected one probability tensor\"\n        expected = expected[0]\n\n    assert torch.isfinite(actual).all(), \"Nonfinite probabilities\"\n    assert (actual >= 0).all(), \"Negative probabilities\"\n    assert torch.equal(actual > 0, expected > 0), \"Incorrect Top-p support\"\n    sums = actual.sum(dim=-1)\n    assert torch.allclose(\n        sums, torch.ones_like(sums),\n        rtol=NUMERICAL_TOLERANCE, atol=NUMERICAL_TOLERANCE,\n    ), \"Probabilities must sum to one\"\n"
+}

@@ -1,0 +1,1 @@
+{"definition": "top_p", "workload": {"uuid": "a2af3ff6-29c8-5c49-bfd6-8d028a2ec51c", "axes": {}, "inputs": {"probs": {"type": "safetensors", "path": "inputs/top_p.safetensors", "tensor_key": "probs"}, "top_p": {"type": "safetensors", "path": "inputs/top_p.safetensors", "tensor_key": "top_p"}}}}

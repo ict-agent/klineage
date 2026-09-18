@@ -1,0 +1,1 @@
+{"definition": "gqa", "workload": {"uuid": "9cc6a7f6-1aa2-5429-9496-04cbc3dade18", "axes": {}, "inputs": {"q": {"type": "safetensors", "path": "inputs/gqa.safetensors", "tensor_key": "q"}, "k": {"type": "safetensors", "path": "inputs/gqa.safetensors", "tensor_key": "k"}, "v": {"type": "safetensors", "path": "inputs/gqa.safetensors", "tensor_key": "v"}}}}

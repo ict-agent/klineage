@@ -1,0 +1,132 @@
+{
+  "name": "kda",
+  "op_type": "kda_prefill",
+  "description": "Kimi-K3 bounded-gate KDA prefill, independent FP32 recurrence.",
+  "axes": {
+    "BATCH": {
+      "type": "const",
+      "value": 1
+    },
+    "TOKENS": {
+      "type": "const",
+      "value": 4096
+    },
+    "HEADS": {
+      "type": "const",
+      "value": 96
+    },
+    "HEAD_DIM": {
+      "type": "const",
+      "value": 128
+    }
+  },
+  "inputs": {
+    "q": {
+      "shape": [
+        "BATCH",
+        "TOKENS",
+        "HEADS",
+        "HEAD_DIM"
+      ],
+      "dtype": "bfloat16",
+      "description": "Contiguous BTHD; before normalization or activation."
+    },
+    "k": {
+      "shape": [
+        "BATCH",
+        "TOKENS",
+        "HEADS",
+        "HEAD_DIM"
+      ],
+      "dtype": "bfloat16",
+      "description": "Contiguous BTHD; before normalization or activation."
+    },
+    "v": {
+      "shape": [
+        "BATCH",
+        "TOKENS",
+        "HEADS",
+        "HEAD_DIM"
+      ],
+      "dtype": "bfloat16",
+      "description": "Contiguous BTHD; before normalization or activation."
+    },
+    "g": {
+      "shape": [
+        "BATCH",
+        "TOKENS",
+        "HEADS",
+        "HEAD_DIM"
+      ],
+      "dtype": "bfloat16",
+      "description": "Contiguous BTHD; before normalization or activation."
+    },
+    "beta": {
+      "shape": [
+        "BATCH",
+        "TOKENS",
+        "HEADS"
+      ],
+      "dtype": "float32",
+      "description": "Raw beta logits; sigmoid in operator."
+    },
+    "scale": {
+      "shape": [],
+      "dtype": "float32",
+      "description": "Fixed 1/sqrt(128)."
+    },
+    "a_log": {
+      "shape": [
+        "HEADS"
+      ],
+      "dtype": "float32",
+      "description": "Log gate gain."
+    },
+    "dt_bias": {
+      "shape": [
+        "HEADS",
+        "HEAD_DIM"
+      ],
+      "dtype": "float32",
+      "description": "Full-rank gate bias."
+    },
+    "lower_bound": {
+      "shape": [],
+      "dtype": "float32",
+      "description": "Fixed Kimi-K3 bounded gate value -5."
+    },
+    "initial_state": {
+      "shape": [
+        "BATCH",
+        "HEADS",
+        "HEAD_DIM",
+        "HEAD_DIM"
+      ],
+      "dtype": "float32",
+      "description": "Contiguous BVK state; zero for fresh prefill."
+    }
+  },
+  "outputs": {
+    "output": {
+      "shape": [
+        "BATCH",
+        "TOKENS",
+        "HEADS",
+        "HEAD_DIM"
+      ],
+      "dtype": "bfloat16",
+      "description": "Causal post-update readout before output gate/projection."
+    },
+    "final_state": {
+      "shape": [
+        "BATCH",
+        "HEADS",
+        "HEAD_DIM",
+        "HEAD_DIM"
+      ],
+      "dtype": "float32",
+      "description": "Full-precision recurrent state in [batch, head, value, key]."
+    }
+  },
+  "reference": "\"\"\"Mathematical Kimi-K3 KDA recurrence; FP32 working state.\"\"\"\n\nimport torch\n\nNORM_EPS = 1e-6\n\n\n@torch.no_grad()\ndef run(q, k, v, g, beta, scale, a_log, dt_bias, lower_bound, initial_state):\n    batch, tokens, heads, dim = q.shape\n    query = q.float()\n    key = k.float()\n    query = query / (query.square().sum(-1, keepdim=True) + NORM_EPS).sqrt()\n    key = key / (key.square().sum(-1, keepdim=True) + NORM_EPS).sqrt()\n    query = query * scale.float()\n    decay = (lower_bound.float() * torch.sigmoid(\n        a_log.float().exp()[:, None] * (g.float() + dt_bias.float())\n    )).exp()\n    gain = beta.float().sigmoid()\n    value = v.float()\n    state = initial_state.float().clone()\n    output = torch.empty_like(v)\n\n    # Each token decays, corrects, then reads the state in [value, key] layout.\n    for t in range(tokens):\n        kt = key[:, t]\n        state = state * decay[:, t, :, None, :]\n        prediction = (state * kt[:, :, None, :]).sum(-1)\n        delta = gain[:, t, :, None] * (value[:, t] - prediction)\n        state = state + delta[:, :, :, None] * kt[:, :, None, :]\n        output[:, t] = (state * query[:, t, :, None, :]).sum(-1)\n\n    return output, state.contiguous()\n"
+}
