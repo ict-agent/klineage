@@ -87,6 +87,7 @@ class CodexRunner:
         state_dir: str | os.PathLike[str] = STATE_DIRECTORY,
         api_base_url: str | None = None,
         api_key_env: str | None = None,
+        skill_names: Sequence[str] = SKILL_NAMES,
     ):
         if timeout is not None and timeout <= 0:
             raise ValueError("timeout must be greater than zero")
@@ -117,7 +118,7 @@ class CodexRunner:
         skill_dir.mkdir(parents=True, exist_ok=True)
         message_dir = self.work_dir / MESSAGE_DIRECTORY
         message_dir.parent.mkdir(parents=True, exist_ok=True)
-        resources = [(SKILL_ROOT / name, skill_dir / name) for name in SKILL_NAMES]
+        resources = [(SKILL_ROOT / name, skill_dir / name) for name in skill_names]
         resources.append((PACKAGE_ROOT / "message", message_dir))
         for source, destination in resources:
             _link_resource(source, destination)
