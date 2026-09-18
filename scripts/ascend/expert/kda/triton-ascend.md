@@ -15,7 +15,7 @@ python3 -c "import torch, torch_npu, triton; print(torch.__version__, triton.__v
   本任务容器 `vllm0.23.0-zcj` 实测：`import triton` -> 3.5.1，`triton.backends.ascend` 可导入
   （`pip show triton-ascend` 报 not found，版本以 `import triton` 为准）。
 - 新扩展 API（`triton.language.extra.cann.extension`、`sync_block_*`）先写最小 kernel 验证
-  再进主实现。
+  再进主实现；容器已确认 `sync_block_set/wait/all` 存在。
 
 ## 2. 编程模型
 
