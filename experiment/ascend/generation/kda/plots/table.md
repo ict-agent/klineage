@@ -1,4 +1,4 @@
 | Kernel | Setting | Correct | Latency (us) | vs. Baseline |
 | --- | --- | --- | --- | --- |
-| kda | with_memory | yes | 81845.8 | 19.35x |
-| kda | without_memory | yes | 43973.2 | 37.03x |
+| KDA | With Expert Knowledge | ✓ | 81845.8 us | 19.35× |
+| KDA | Without Expert Knowledge | ✓ | 43973.2 us | 37.03× |

@@ -16,6 +16,11 @@ from datetime import datetime
 from pathlib import Path
 
 SETTINGS = ("without_memory", "with_memory")
+#: The task's labels for the two settings; the directory names stay the run ids.
+SETTING_LABELS = {
+    "without_memory": "Without Expert Knowledge",
+    "with_memory": "With Expert Knowledge",
+}
 
 
 def read_unit(unit: Path) -> list[dict]:
@@ -50,15 +55,16 @@ def read_unit(unit: Path) -> list[dict]:
 def summarize(kernel: str, setting: str, rows: list[dict]) -> str:
     """One table row: the best passing measurement of a unit, or its status."""
 
+    label = SETTING_LABELS.get(setting, setting)
     passing = [row for row in rows
                if row["correctness_passed"] and row["latency_ms"]]
-    correct = "yes" if passing else "no"
+    correct = "✓" if passing else "✗"
     if not passing:
-        return f"| {kernel} | {setting} | {correct} | - | - |"
+        return f"| {kernel.upper()} | {label} | {correct} | - | - |"
     best = min(passing, key=lambda row: row["latency_ms"])
-    latency = f"{best['latency_ms'] * 1000:.1f}"
-    speedup = f"{best['speedup']:.2f}x" if best.get("speedup") else "-"
-    return f"| {kernel} | {setting} | {correct} | {latency} | {speedup} |"
+    latency = f"{best['latency_ms'] * 1000:.1f} us"
+    speedup = f"{best['speedup']:.2f}×" if best.get("speedup") else "-"
+    return f"| {kernel.upper()} | {label} | {correct} | {latency} | {speedup} |"
 
 
 def main() -> None:

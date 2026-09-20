@@ -17,8 +17,8 @@ the only difference is the expert material in `work/expert/`.
 
 | Kernel | Setting | Correct | Latency (us) | vs. Baseline |
 | --- | --- | --- | --- | --- |
-| kda | without_memory | yes | 43973.2 | 37.03x |
-| kda | with_memory | yes | 81845.8 | 19.35x |
+| KDA | Without Expert Knowledge | ✓ | 43973.2 us | 37.03× |
+| KDA | With Expert Knowledge | ✓ | 81845.8 us | 19.35× |
 
 ## Problem
 
