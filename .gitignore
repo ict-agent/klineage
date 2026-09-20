@@ -8,6 +8,7 @@ build/
 dist/
 agent-workspace/
 baseline/
+!experiment/ascend/optimization/gemm/src/baseline/
 .vscode/
 paper/
 !problems/definitions/paper/
