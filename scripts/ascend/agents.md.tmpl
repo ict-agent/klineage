@@ -2,8 +2,9 @@
 
 Kernel: **{kernel}** — Setting: **{setting}**
 
-Every path below is relative to the project root, the checkout that holds
-`scripts/ascend/`. This workspace is `{work_rel}`: `cd {root_rel}` from here.
+Every path below is relative to the project root, the directory that holds
+`scripts/ascend/` (a copy of the evaluation runner: run it, never edit it).
+This workspace is `{work_rel}`: `cd {root_rel}` from here.
 
 - Problem definition: `{work_rel}/problems/definitions/{kernel}.json` (shapes, dtypes, axes, torch reference).
 - Workload: `{work_rel}/problems/workloads/{kernel}.jsonl`.
@@ -12,11 +13,10 @@ Every path below is relative to the project root, the checkout that holds
 ## Artifact format
 
 - `{work_rel}/submission/config.toml` + `{work_rel}/submission/solution/` hold the kernel.
-  Two builds are supported:
-  - AscendC: `language = "ascendc"`, `.asc` sources; see `{work_rel}/.agents/skills/ascendc/SKILL.md`
-    for the bundle format, compiler flags, tensor ABI, and stream rules.
-  - triton-ascend: `language = "python"`, `entry_point = "kernel.py::kernel"`; the container has
-    `triton` plus `triton.language.extra.cann.extension` available.
+  This study measures **triton-ascend** only: `language = "python"`,
+  `entry_point = "kernel.py::kernel"`, sources under `solution/`. The container has
+  `triton` 3.5.1 plus `triton.language.extra.cann.extension` available.
+  The timed path must launch triton kernels; a torch-only bundle is rejected by the gate.
 - `{work_rel}/kernel.json` is regenerated from the submission by the evaluation command; do not hand-edit it.
 - Every evaluated kernel is snapshotted to `{work_rel}/versions/version<N>/`.
 
@@ -27,4 +27,7 @@ Run exactly this command from the project root after each meaningful change:
     {eval_cmd}
 
 It syncs this workspace to the Ascend host, compiles and measures inside the container, appends the call to `events.jsonl`, and prints the ValidationResult JSON. That latency is the only performance signal; never write your own timer or benchmark.
+
+The result also carries `baseline_ms` (the problem's torch reference on the NPU,
+measured once per device with the same timer) and `speedup = baseline_ms / latency_ms`.
 {expert_line}
