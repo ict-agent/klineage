@@ -29,6 +29,13 @@ HARNESS_ROOT_DEFAULT = "~/ascend-harness"
 REPO_NAME = "repo"
 RUNS_NAME = "runs"
 ARCH_DEFAULT = "dav-c220"
+#: The torch-npu baseline is 50-500x slower than a device kernel; one harness
+#: protocol for it costs minutes, so it is measured once per device and cached.
+BASELINE_FILE = "baseline.json"
+BASELINE_TIMEOUT = 3600.0
+#: Container-local: the container runs as root, and a root-owned directory under
+#: the run tree blocks the next rsync --delete.
+BASELINE_SCRATCH = "/tmp/klineage-baseline"
 
 
 def now() -> str:
@@ -67,10 +74,79 @@ def remote_script(work: str, repository: str, timeout: float, device: str | None
         environment += f" ASCEND_RT_VISIBLE_DEVICES={device}"
     # umask 022: the container runs as root, and its default 027 hides snapshots
     # from the host user that rsync runs as.
+    # The worker resolves workload inputs against its working directory and the
+    # trace convention stores them relative to `problems/`, so it runs there.
     return (
-        f"umask 022 && cd {repository} && {environment} "
-        f"python scripts/ascend/remote_eval.py --work {work} --timeout {timeout:g}"
+        f"umask 022 && cd {work}/problems && {environment} "
+        f"python {repository}/scripts/ascend/remote_eval.py --repo {repository} "
+        f"--work {work} --timeout {timeout:g}"
     )
+
+
+def baseline_script(work: str, repository: str, timeout: float, device: str | None) -> str:
+    """Time the problem's torch reference: the Baseline column of the report."""
+
+    environment = f"KLINEAGE_BACKEND=ascend ASCEND_ARCH={ARCH_DEFAULT}"
+    if device:
+        environment += f" ASCEND_RT_VISIBLE_DEVICES={device}"
+    scratch = BASELINE_SCRATCH
+    return (
+        f"umask 022 && mkdir -p {scratch} && cd {work}/problems && {environment} "
+        f"python {repository}/scripts/ascend/remote_eval.py --repo {repository} "
+        f"--baseline --problems {work}/problems --scratch {scratch} "
+        f"--timeout {timeout:g}"
+    )
+
+
+def push_work(work: Path, host: str, remote: str) -> None:
+    """Mirror the workspace to the host; the worker reads it from there."""
+
+    subprocess.run(["ssh", host, f"mkdir -p {remote}"], check=True)
+    subprocess.run(
+        ["rsync", "-az", "--delete", "--exclude", ".klineage", "--exclude", "versions",
+         "--exclude", "build", "--exclude", "evaluations", f"{work}/", f"{host}:{remote}/"],
+        check=True,
+    )
+
+
+def cached_baseline(work: Path, device: str) -> float | None:
+    path = work.parent / BASELINE_FILE
+    if not path.is_file():
+        return None
+    entry = json.loads(path.read_text(encoding="utf-8")).get(device) or {}
+    return entry.get("baseline_ms")
+
+
+def measure_baseline(work: Path, args: argparse.Namespace, remote: str,
+                     repository: str) -> float:
+    """Measure the torch-npu baseline once, then reuse it for every version."""
+
+    device = args.device or "default"
+    push_work(work, args.host, remote)
+    result = run_ssh(
+        args.host,
+        args.container,
+        baseline_script(remote, repository, BASELINE_TIMEOUT, args.device),
+        timeout=BASELINE_TIMEOUT + 600,
+    )
+    payload = None
+    for line in reversed(result.stdout.splitlines()):
+        try:
+            candidate = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(candidate, dict) and candidate.get("baseline_ms"):
+            payload = candidate
+            break
+    if payload is None:
+        detail = (result.stderr or result.stdout or "no baseline timing").strip()[-400:]
+        raise RuntimeError(f"baseline measurement failed: {detail}")
+
+    path = work.parent / BASELINE_FILE
+    cache = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    cache[device] = {"baseline_ms": payload["baseline_ms"], "measured_at": now()}
+    path.write_text(json.dumps(cache, indent=2) + "\n", encoding="utf-8")
+    return payload["baseline_ms"]
 
 
 def bundle_sources(submission: Path) -> dict[str, str]:
@@ -84,10 +160,14 @@ def bundle_sources(submission: Path) -> dict[str, str]:
 
 
 def slug(work: Path) -> str:
+    """Remote run directory name: `<kernel>-<setting>-work` when recognizable."""
+
     parts = work.resolve().parts
+    for index, name in enumerate(parts):
+        if name in ("without_memory", "with_memory"):
+            return "-".join(parts[max(index - 1, 0) :])
     if "generation" in parts:
-        index = parts.index("generation")
-        return "-".join(parts[index + 1 :])
+        return "-".join(parts[parts.index("generation") + 1 :])
     return sha1(str(work).encode()).hexdigest()[:12]
 
 
@@ -129,11 +209,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--remote-root", default=HARNESS_ROOT_DEFAULT,
                         help="harness root on the host: repo/ + runs/")
     parser.add_argument("--arch", default=ARCH_DEFAULT)
+    parser.add_argument("--baseline", action="store_true",
+                        help="measure and cache the torch-npu baseline, then exit")
     args = parser.parse_args(argv)
 
     root = host_path(args.host, args.remote_root)
     REPO_REMOTE, RUNS, ARCH = f"{root}/{REPO_NAME}", f"{root}/{RUNS_NAME}", args.arch
     work = args.work.expanduser().resolve()
+    remote = f"{RUNS}/{slug(work)}"
+    if args.baseline:
+        print(json.dumps({"work": str(work),
+                          "baseline_ms": measure_baseline(work, args, remote, REPO_REMOTE)}))
+        return
     submission = work / "submission"
     if not submission.is_dir():
         raise SystemExit(f"missing kernel bundle: {submission}")
@@ -161,13 +248,7 @@ def main(argv: list[str] | None = None) -> None:
     kernel = Kernel(definition["name"], problem, bundle_sources(submission))
     save_kernel(kernel, work)
 
-    remote = f"{RUNS}/{slug(work)}"
-    subprocess.run(["ssh", args.host, f"mkdir -p {remote}"], check=True)
-    subprocess.run(
-        ["rsync", "-az", "--delete", "--exclude", ".klineage", "--exclude", "versions",
-         "--exclude", "build", "--exclude", "evaluations", f"{work}/", f"{args.host}:{remote}/"],
-        check=True,
-    )
+    push_work(work, args.host, remote)
 
     started = now()
     result = run_ssh(
@@ -203,6 +284,30 @@ def main(argv: list[str] | None = None) -> None:
                    ("compile_passed", "correctness_passed", "profile_passed")})
     if payload.get("latency_ms") is not None:
         fields["latency_ms"] = payload["latency_ms"]
+
+    # The study pins the artifact to triton-ascend: a timed call that launched
+    # no triton kernel measured torch, and its latency is not comparable.
+    launches = None
+    for line in reversed(result.stdout.splitlines()):
+        try:
+            candidate = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(candidate, dict) and "gate" in candidate:
+            launches = candidate["gate"].get("triton_launches")
+            break
+    if launches is not None:
+        fields["triton_launches"] = launches
+        fields["device_kernel"] = launches > 0
+
+    if payload.get("latency_ms") is not None:
+        try:
+            baseline = cached_baseline(work, args.device) \
+                or measure_baseline(work, args, remote, REPO_REMOTE)
+            fields["baseline_ms"] = baseline
+            fields["speedup"] = round(baseline / payload["latency_ms"], 3)
+        except Exception as failure:  # a missing baseline must not void the run
+            fields["baseline_error"] = f"{type(failure).__name__}: {failure}"[:300]
     append_event(work, fields)
 
     # Fetch the snapshot the remote evaluation just wrote, as version<N-1>.
@@ -223,7 +328,15 @@ def main(argv: list[str] | None = None) -> None:
         except subprocess.CalledProcessError as failure:  # keep the measurement
             print(f"warning: could not fetch snapshot {numbers[-1]}: {failure}", file=sys.stderr)
 
-    print(json.dumps(payload, indent=2))
+    report = dict(payload)
+    report.update({name: fields[name] for name in
+                   ("baseline_ms", "speedup", "triton_launches", "device_kernel")
+                   if name in fields})
+    print(json.dumps(report, indent=2))
+    if fields.get("device_kernel") is False:
+        raise SystemExit(
+            "rejected: the timed path launched no triton kernel; this study "
+            "measures triton-ascend implementations only")
 
 
 if __name__ == "__main__":
