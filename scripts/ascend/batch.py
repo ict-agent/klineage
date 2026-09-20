@@ -37,7 +37,31 @@ REPO = Path(__file__).resolve().parents[2]
 KERNELS = ("kda", "sparse_attention", "top_p", "fused_add_rmsnorm", "gqa")
 SETTINGS = ("without_memory", "with_memory")
 SKILLS = ("bench", "ascendc")
-RUN_ROOT = REPO / "experiment" / "ascend" / "generation"
+#: Dropped from the unit copies of ``scripts/`` and ``src/``: the gate plus the
+#: package it imports is all the agent needs. Everything listed here is
+#: experiment metadata (settings, expert packs, CUDA transfer tooling, memory
+#: prompts) that would bias the without_memory setting or leak the design.
+PRUNE = (
+    "scripts/apply_transfer.py",
+    "scripts/ascend/README.md",
+    "scripts/ascend/agents.md.tmpl",
+    "scripts/ascend/batch.py",
+    "scripts/ascend/expert",
+    "scripts/ascend/gen_inputs.py",
+    "scripts/ascend/plot.py",
+    "scripts/ascend/prompt.md.tmpl",
+    "scripts/ascend/smoke_eval.py",
+    "src/klineage/harness",
+    "src/klineage/memory",
+    "src/klineage/prompts",
+    "src/klineage/skills/cuda",
+    "src/klineage/skills/hip",
+)
+VENV_LINK = ".venv"
+#: Unit workspaces live outside the checkout: Codex walks up from its cwd for
+#: AGENTS.md, so a root inside the repo would expose the expert packs and the
+#: CUDA transfer runs to the without_memory setting.
+RUN_ROOT = Path(os.environ.get("KLINEAGE_RUN_ROOT", Path.home() / "klineage-runs"))
 CODEX_DEFAULT = "codex"
 EVAL = REPO / "scripts" / "ascend" / "eval.py"
 
@@ -46,39 +70,109 @@ def stamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
-def local_python() -> Path:
-    """The interpreter that owns klineage in this checkout."""
+def venv_source() -> Path:
+    """The checkout's virtualenv, the interpreter that owns klineage."""
 
-    for name in (".venv-ascend/bin/python", ".venv/bin/python"):
+    for name in (".venv-ascend", ".venv"):
         candidate = REPO / name
-        if candidate.is_file():
+        if candidate.is_dir():
             return candidate
-    return Path(sys.executable)
+    return Path(sys.executable).parents[1]
 
 
-def rooted(path: Path) -> str:
-    """Path as written from the project root; absolute if it lives outside."""
+def scrub(path: Path, root: Path) -> None:
+    """Rewrite checkout paths in the unit copy to the unit's own paths.
+
+    Codex finds the checkout through absolute paths it reads, and the checkout
+    holds the expert packs and the transferred solutions the without_memory
+    setting must not see.
+    """
+
+    source = str(REPO).encode()
+    for item in path.rglob("*"):
+        if not item.is_file() or item.is_symlink():
+            continue
+        try:
+            data = item.read_bytes()
+        except OSError:
+            continue
+        if source not in data:
+            continue
+        try:
+            text = data.decode()
+        except UnicodeDecodeError:
+            item.unlink()          # bytecode embeds its build path
+            continue
+        item.write_text(text.replace(str(REPO), str(root)), encoding="utf-8")
+
+
+def install_unit(unit: Path) -> None:
+    """Give the unit root its own runner, source and interpreter copies.
+
+    Copies, never links: a symlink to the checkout is the fastest way for the
+    agent to walk into the settings it is not supposed to read.
+    """
+
+    unit.mkdir(parents=True, exist_ok=True)
+    skip = shutil.ignore_patterns("__pycache__", "*.pyc")
+    for name in ("scripts", "src"):
+        target = unit / name
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(REPO / name, target, symlinks=True, ignore=skip)
+
+    for name in PRUNE:
+        victim = unit / name
+        if victim.is_dir():
+            shutil.rmtree(victim)
+        elif victim.exists():
+            victim.unlink()
+
+    venv = unit / VENV_LINK
+    if venv.is_symlink() or venv.exists():
+        venv.unlink() if venv.is_symlink() else shutil.rmtree(venv)
+    shutil.copytree(venv_source(), venv, symlinks=True, ignore=skip)
+
+    for name in sorted(site for site in (venv / "lib").glob("python*/site-packages")):
+        editable = name / "klineage.pth"
+        if editable.is_file():
+            editable.write_text(str(unit / "src") + "\n", encoding="utf-8")
+
+    scrub(unit / "scripts", unit)
+    scrub(venv, unit)
+
+    # The gate is the only measurement: keep the copies from being rewritten.
+    for name in ("scripts", "src"):
+        for item in (unit / name).rglob("*"):
+            if item.is_file():
+                item.chmod(item.stat().st_mode & ~0o222)
+
+
+def rooted(path: Path, root: Path) -> str:
+    """Path as written from the unit root; absolute if it lives outside."""
 
     absolute = Path(os.path.abspath(path))
     try:
-        return str(absolute.relative_to(REPO))
+        return str(absolute.relative_to(root))
     except ValueError:
         return str(path)
 
 
-def eval_cmd(work: Path, device: str = "") -> str:
-    """The evaluation gate, with every path relative to the project root."""
+def eval_cmd(work: Path, unit: Path, device: str = "") -> str:
+    """The evaluation gate, with every path relative to the unit root."""
 
-    command = f"{rooted(local_python())} {rooted(EVAL)} --work {rooted(work)}"
+    python = f"{VENV_LINK}/bin/python"
+    gate = str(EVAL.relative_to(REPO))         # the unit copy, relative to its root
+    command = f"{python} {gate} --work {rooted(work, unit)}"
     return f"{command} --device {device}" if device else command
 
 
-def path_fields(work: Path) -> dict[str, str]:
-    """Path tokens for the workspace templates, all relative to the root."""
+def path_fields(work: Path, unit: Path) -> dict[str, str]:
+    """Path tokens for the workspace templates, all relative to the unit root."""
 
     return {
-        "{work_rel}": rooted(work),
-        "{root_rel}": os.path.relpath(REPO, work),
+        "{work_rel}": rooted(work, unit),
+        "{root_rel}": os.path.relpath(unit, work),
     }
 
 
@@ -90,16 +184,17 @@ def render(text: str, fields: dict[str, str]) -> str:
     return text
 
 
-def template_fields(work: Path, kernel: str, setting: str, device: str = "") -> dict[str, str]:
-    """Tokens shared by AGENTS.md and the prompt; paths sit under the root."""
+def template_fields(work: Path, kernel: str, setting: str, unit: Path,
+                    device: str = "") -> dict[str, str]:
+    """Tokens shared by AGENTS.md and the prompt; paths sit under the unit root."""
 
     expert = setting == "with_memory"
     return {
         "{kernel}": kernel,
         "{setting}": setting,
-        "{eval_cmd}": eval_cmd(work, device),
-        "{expert_line}": f"Expert knowledge: read `{rooted(work)}/expert/` first.\n" if expert else "",
-        **path_fields(work),
+        "{eval_cmd}": eval_cmd(work, unit, device),
+        "{expert_line}": f"Expert knowledge: read `{rooted(work, unit)}/expert/` first.\n" if expert else "",
+        **path_fields(work, unit),
     }
 
 
@@ -113,13 +208,19 @@ def provider_settings() -> tuple[str, str]:
     return name, data["model_providers"][name]["base_url"]
 
 
-def prepare(work: Path, kernel: str, setting: str, template: str) -> bool:
+def prepare(work: Path, kernel: str, setting: str, template: str, unit: Path) -> bool:
     """Reset the workspace: problems, skills, AGENTS.md, expert knowledge."""
 
-    for name in ("submission", "work"):
+    # baseline.json survives: it is a property of the device, not of the run.
+    for name in ("submission", "work", "versions"):
         target = work.parent / name
         if target.exists():
             shutil.rmtree(target)
+    for name in ("events.jsonl", "kernel.json", "result.json", "final_message.txt",
+                 "status.json"):
+        stale = work.parent / name
+        if stale.is_file():
+            stale.unlink()
     (work.parent / "versions").mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True)
     shutil.copytree(REPO / "experiment" / kernel / "problems", work / "problems")
@@ -127,7 +228,9 @@ def prepare(work: Path, kernel: str, setting: str, template: str) -> bool:
     skills = work / ".agents" / "skills"
     skills.mkdir(parents=True, exist_ok=True)
     for name in SKILLS:
-        (skills / name).symlink_to(REPO / "src" / "klineage" / "skills" / name)
+        # The unit's own copy, not the checkout: a symlink into the checkout is
+        # a path the agent can follow up into the expert packs.
+        (skills / name).symlink_to(unit / "src" / "klineage" / "skills" / name)
 
     expert = setting == "with_memory"
     source = REPO / "scripts" / "ascend" / "expert" / kernel
@@ -139,8 +242,8 @@ def prepare(work: Path, kernel: str, setting: str, template: str) -> bool:
             )
         shutil.copytree(source, work / "expert")
 
-    (work / "AGENTS.md").write_text(render(template, template_fields(work, kernel, setting)),
-                                    encoding="utf-8")
+    fields = template_fields(work, kernel, setting, unit)
+    (work / "AGENTS.md").write_text(render(template, fields), encoding="utf-8")
     return expert
 
 
@@ -184,8 +287,9 @@ def run_unit(unit: tuple[str, str], device: str, options: argparse.Namespace) ->
     error = None
     try:
         template = (REPO / "scripts" / "ascend" / "agents.md.tmpl").read_text(encoding="utf-8")
-        prepare(work, kernel, setting, template)
-        fields = template_fields(work, kernel, setting, device)
+        install_unit(out)
+        prepare(work, kernel, setting, template, out)
+        fields = template_fields(work, kernel, setting, out, device)
         fields["{hours}"] = str(options.timeout // 3600)
         prompt = render((REPO / "scripts" / "ascend" / "prompt.md.tmpl").read_text(encoding="utf-8"),
                         fields)
@@ -278,8 +382,12 @@ def main(argv: list[str] | None = None) -> None:
             brief = {key: record.get(key) for key in
                      ("kernel", "setting", "device", "status", "duration_s", "versions")}
             print(json.dumps(brief), flush=True)
-            (options.run_root / "status.json").write_text(
-                json.dumps(results, indent=2) + "\n", encoding="utf-8")
+            # One batch per unit in practice: the per-unit copy keeps parallel
+            # batches (setting A and B side by side) from clobbering each other.
+            payload = json.dumps(results, indent=2) + "\n"
+            name = f"status-{record['kernel']}-{record['setting']}.json"
+            for path in (options.run_root / "status.json", options.run_root / name):
+                path.write_text(payload, encoding="utf-8")
     finally:
         pool.close()
         pool.join()

@@ -21,6 +21,9 @@ REPO="$ROOT/repo"
 LOCAL=$(cd "$(dirname "$0")/../.." && pwd)
 PY="$LOCAL/.venv-ascend/bin/python"
 LOG="$LOCAL/experiment/ascend/generation/batch.log"
+# Unit workspaces live outside the checkout so Codex cannot walk up into
+# the repo (expert packs, transfer runs). Override with RUN_ROOT=...
+RUN_ROOT=${RUN_ROOT:-$HOME/klineage-runs}
 
 container() {
   local encoded
@@ -30,8 +33,18 @@ container() {
 
 sync_repo() {
   ssh "$HOST" "mkdir -p $REPO"
-  rsync -az --delete \
+  # The container runs as root and leaves root-owned bytecode behind, which
+  # blocks the next --delete; hand the tree back to the host user first.
+  local uid gid
+  uid=$(ssh "$HOST" 'id -u')
+  gid=$(ssh "$HOST" 'id -g')
+  container "chown -R $uid:$gid $REPO 2>/dev/null || true"
+  # --delete-excluded: the host copy must mirror this sanitized subset, and
+  # plain --delete keeps the excluded expert packs and transfer runs there,
+  # where an agent with ssh can read them.
+  rsync -az --delete --delete-excluded \
     --exclude .git --exclude '*.pdf' --exclude __pycache__ \
+    --exclude 'scripts/ascend/expert' --exclude 'scripts/apply_transfer.py' \
     --include 'experiment/' \
     --include 'experiment/*/' \
     --include 'experiment/*/problems/' \
@@ -51,19 +64,22 @@ smoke() { container "cd $REPO && python scripts/ascend/smoke_eval.py --repo $REP
 
 start() {
   mkdir -p "$(dirname "$LOG")"
-  nohup "$PY" "$LOCAL/scripts/ascend/batch.py" "$@" > "$LOG" 2>&1 &
-  echo "started pid $!; scripts/ascend/run.sh status"
+  # Detached: a plain nohup child dies with the shell's process group when the
+  # launching session ends.
+  "$PY" "$LOCAL/scripts/ascend/spawn.py" "$LOG" \
+    "$PY" "$LOCAL/scripts/ascend/batch.py" "$@"
+  echo "started; scripts/ascend/run.sh status"
 }
 
 status() {
-  test -f "$LOCAL/experiment/ascend/generation/status.json" \
-    && cat "$LOCAL/experiment/ascend/generation/status.json" \
+  test -f "$RUN_ROOT/status.json" \
+    && cat "$RUN_ROOT/status.json" \
     || tail -n 30 "$LOG"
 }
 
 logs() { tail -n 60 "$LOG"; }
 
-plot() { "$PY" "$LOCAL/scripts/ascend/plot.py" --root "$LOCAL/experiment/ascend/generation" --out "$LOCAL/experiment/ascend/plots"; }
+plot() { "$PY" "$LOCAL/scripts/ascend/plot.py" --root "$RUN_ROOT" --out "$RUN_ROOT/plots"; }
 
 case "${1:-}" in
   sync) shift; sync_repo "$@" ;;

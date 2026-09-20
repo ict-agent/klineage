@@ -14,7 +14,7 @@ trace.jsonl
     |
     | agent runs, from the project root:
     |   .venv-ascend/bin/python scripts/ascend/eval.py \
-    |     --work experiment/ascend/generation/<kernel>/<setting>/work
+    |     --work ~/klineage-runs/<kernel>/<setting>/work
     v
 eval.py --rsync--> 910b1 --> docker exec --> evaluate --> NPU
     |                                          |
