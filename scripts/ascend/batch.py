@@ -36,7 +36,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 KERNELS = ("kda", "sparse_attention", "top_p", "fused_add_rmsnorm", "gqa")
 SETTINGS = ("without_memory", "with_memory")
-SKILLS = ("bench", "ascendc")
+#: Only the evaluator documentation. The AscendC bundle skill describes the
+#: language this study pins away from, and its hardware notes are expert
+#: knowledge Setting A must not receive.
+SKILLS = ("bench",)
 #: Dropped from the unit copies of ``scripts/`` and ``src/``: the gate plus the
 #: package it imports is all the agent needs. Everything listed here is
 #: experiment metadata (settings, expert packs, CUDA transfer tooling, memory
@@ -54,6 +57,7 @@ PRUNE = (
     "src/klineage/harness",
     "src/klineage/memory",
     "src/klineage/prompts",
+    "src/klineage/skills/ascendc",
     "src/klineage/skills/cuda",
     "src/klineage/skills/hip",
 )
@@ -62,6 +66,10 @@ VENV_LINK = ".venv"
 #: AGENTS.md, so a root inside the repo would expose the expert packs and the
 #: CUDA transfer runs to the without_memory setting.
 RUN_ROOT = Path(os.environ.get("KLINEAGE_RUN_ROOT", Path.home() / "klineage-runs"))
+#: Expert material lives outside the checkout: the without_memory workspace must
+#: not reach it, and an agent with full disk access can read anything inside the
+#: checkout. Falls back to the in-repo layout for a fresh clone.
+EXPERT_ROOT = Path(os.environ.get("KLINEAGE_EXPERT_ROOT", Path.home() / "klineage-expert"))
 CODEX_DEFAULT = "codex"
 EVAL = REPO / "scripts" / "ascend" / "eval.py"
 
@@ -184,6 +192,15 @@ def render(text: str, fields: dict[str, str]) -> str:
     return text
 
 
+def expert_source(kernel: str) -> Path:
+    """Expert directory for a kernel, preferring the copy outside the checkout."""
+
+    for root in (EXPERT_ROOT, REPO / "scripts" / "ascend" / "expert"):
+        if (root / kernel).is_dir():
+            return root / kernel
+    return EXPERT_ROOT / kernel
+
+
 def template_fields(work: Path, kernel: str, setting: str, unit: Path,
                     device: str = "") -> dict[str, str]:
     """Tokens shared by AGENTS.md and the prompt; paths sit under the unit root."""
@@ -233,7 +250,7 @@ def prepare(work: Path, kernel: str, setting: str, template: str, unit: Path) ->
         (skills / name).symlink_to(unit / "src" / "klineage" / "skills" / name)
 
     expert = setting == "with_memory"
-    source = REPO / "scripts" / "ascend" / "expert" / kernel
+    source = expert_source(kernel)
     files = [path for path in source.rglob("*") if path.is_file() and path.name != ".keep"]
     if expert:
         if not files:

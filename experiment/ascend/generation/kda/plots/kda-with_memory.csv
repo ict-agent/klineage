@@ -1,0 +1,2 @@
+at,seconds,tokens,latency_ms,baseline_ms,speedup,correctness_passed
+2026-09-20T07:36:28.238384+00:00,2143.6,12874419,81.84579849243164,1583.8390502929688,19.352,True

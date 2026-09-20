@@ -1,0 +1,12 @@
+{
+  "kernel": "kda",
+  "setting": "with_memory",
+  "device": "3",
+  "started_at": "2026-09-20T07:00:42.920377+00:00",
+  "api_response": 101,
+  "evaluate": 1,
+  "versions": 0,
+  "duration_s": 2654.6,
+  "finished_at": "2026-09-20T07:44:57.471263+00:00",
+  "status": "ok"
+}

@@ -16,6 +16,8 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import secrets
+import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -146,6 +148,7 @@ def measure_baseline(work: Path, args: argparse.Namespace, remote: str,
     cache = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     cache[device] = {"baseline_ms": payload["baseline_ms"], "measured_at": now()}
     path.write_text(json.dumps(cache, indent=2) + "\n", encoding="utf-8")
+    drop_remote(args.host, args.container, remote, "submission")
     return payload["baseline_ms"]
 
 
@@ -160,15 +163,42 @@ def bundle_sources(submission: Path) -> dict[str, str]:
 
 
 def slug(work: Path) -> str:
-    """Remote run directory name: `<kernel>-<setting>-work` when recognizable."""
+    """Remote run directory name: `<kernel>-<setting>-<token>`.
+
+    Both settings of one kernel evaluate under the same host account, and the
+    workspace is mirrored there with every call, so the run directory has to be
+    unguessable: a predictable path lets the other setting read a submission
+    the gate has not snapshotted yet. The token is fixed per workspace, or
+    every call would leave another directory behind.
+    """
 
     parts = work.resolve().parts
+    base = sha1(str(work).encode()).hexdigest()[:12]
     for index, name in enumerate(parts):
         if name in ("without_memory", "with_memory"):
-            return "-".join(parts[max(index - 1, 0) :])
-    if "generation" in parts:
-        return "-".join(parts[parts.index("generation") + 1 :])
-    return sha1(str(work).encode()).hexdigest()[:12]
+            base = "-".join(parts[max(index - 1, 0) :])
+            break
+    else:
+        if "generation" in parts:
+            base = "-".join(parts[parts.index("generation") + 1 :])
+
+    token = work / ".klineage" / "remote-name"
+    if token.is_file():
+        return token.read_text(encoding="utf-8").strip()
+    name = f"{base}-{secrets.token_hex(4)}"
+    token.parent.mkdir(parents=True, exist_ok=True)
+    token.write_text(name + "\n", encoding="utf-8")
+    return name
+
+
+def drop_remote(host: str, container: str, remote: str, path: str = "") -> None:
+    """Remove the mirrored bundle once the call is over.
+
+    The container writes as root, so the removal runs inside it; the caller
+    re-pushes the workspace on the next call.
+    """
+
+    run_ssh(host, container, f"rm -rf {remote}/{path}")
 
 
 def platform_of(work: Path, host: str, container: str) -> str:
@@ -279,6 +309,7 @@ def main(argv: list[str] | None = None) -> None:
     if payload is None:
         fields["error"] = (result.stderr or result.stdout or "evaluation failed").strip()[-800:]
         append_event(work, fields)
+        drop_remote(args.host, args.container, remote, "submission")
         raise SystemExit(json.dumps(fields, indent=2))
     fields.update({name: payload.get(name) for name in
                    ("compile_passed", "correctness_passed", "profile_passed")})
@@ -287,18 +318,22 @@ def main(argv: list[str] | None = None) -> None:
 
     # The study pins the artifact to triton-ascend: a timed call that launched
     # no triton kernel measured torch, and its latency is not comparable.
-    launches = None
+    gate = None
     for line in reversed(result.stdout.splitlines()):
         try:
             candidate = json.loads(line)
         except ValueError:
             continue
         if isinstance(candidate, dict) and "gate" in candidate:
-            launches = candidate["gate"].get("triton_launches")
+            gate = candidate["gate"]
             break
-    if launches is not None:
-        fields["triton_launches"] = launches
-        fields["device_kernel"] = launches > 0
+    if gate is not None:
+        launches = gate.get("triton_launches")
+        if launches is not None:
+            fields["triton_launches"] = launches
+            fields["device_kernel"] = launches > 0
+        if gate.get("timing"):
+            fields["timing"] = gate["timing"]
 
     if payload.get("latency_ms") is not None:
         try:
@@ -325,9 +360,13 @@ def main(argv: list[str] | None = None) -> None:
                 ["rsync", "-az", f"{args.host}:{remote}/.klineage/versions/{numbers[-1]}/", f"{folder}/"],
                 check=True,
             )
+            # Next to the frozen kernel.json, keep the bundle as it was
+            # submitted: version<N>/ is the kernel artifact of that gate call.
+            shutil.copytree(work / "submission", folder / "submission", dirs_exist_ok=True)
         except subprocess.CalledProcessError as failure:  # keep the measurement
             print(f"warning: could not fetch snapshot {numbers[-1]}: {failure}", file=sys.stderr)
 
+    drop_remote(args.host, args.container, remote, "submission")
     report = dict(payload)
     report.update({name: fields[name] for name in
                    ("baseline_ms", "speedup", "triton_launches", "device_kernel")

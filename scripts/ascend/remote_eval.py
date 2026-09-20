@@ -172,13 +172,22 @@ def main(argv: list[str] | None = None) -> None:
 
     from klineage.artifact.kernel import load_kernel
     from klineage.harness.eval import evaluate
+    from klineage.harness.timing import timing_policy
 
     work = Path(args.work).resolve()
     count = install_probe(work)
     kernel = load_kernel(work)
     result = evaluate(kernel, work, timeout=args.timeout)
     print(json.dumps(result.to_dict()))
-    print(json.dumps({"gate": {"triton_launches": launched_kernels(count)}}))
+    # The task asks for the benchmark protocol next to the number: record the
+    # sampling policy and which timer produced it.
+    print(json.dumps({"gate": {
+        "triton_launches": launched_kernels(count),
+        "timing": {
+            "backend": backend.timing_backend,
+            "policy": timing_policy(backend).to_dict(),
+        },
+    }}))
 
 
 if __name__ == "__main__":

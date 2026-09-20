@@ -1,0 +1,18 @@
+**Result: correct and validated at 37.0x over the torch-npu baseline.**
+
+**Final artifact**
+- `work/submission/config.toml` — `language = "python"`, `entry_point = "kernel.py::kernel"`.
+- `work/submission/solution/kernel.py` — one triton program per `(head, value-block)`, FP32 state held across a sequential token loop; `decay`, query/key L2 normalisation and `sigmoid(beta)` are recomputed in-kernel so the timed path is a single launch.
+- Snapshotted to `work/versions/version0/`.
+
+**Measured (official gate, `.venv/bin/python scripts/ascend/eval.py --work work --device 2`)**
+- `latency_ms` 43.97, `baseline_ms` 1628.23, `speedup` 37.028, `correctness_passed` true, `triton_launches` 181.
+
+**What I found along the way**
+- The `Ascend910B1` reports 24 cube cores / 48 vector cores, 192MB L2. On this triton-ascend build a `tl.dot` costs ~60–90ns regardless of size, so kernel time tracks `(#programs × #chunks × #dots)`.
+- I built and validated a full chunked delta-rule kernel (in `work/dev/kernel_chunked_vp2.py`): in-chunk cumulative log-decay, `M`/`G` correlation matrices, exact 16×16 unit-lower inverse by the doubling identity, one state matmul per 16 tokens. It is numerically correct (matches the reference to `1e-4`), but its ~14 dots/chunk made it 46ms — no faster than the direct loop — and the `VP=1` (no duplicated work) variant exceeds the 192KB UB.
+- Two backend quirks worth noting for future work: module-level constants must be `tl.constexpr(...)`, and a `tl.store` that reuses the pointer tensor from an earlier load is silently dropped (recomputing the pointer fixed it).
+
+**Next steps if more budget were available**: the chunked kernel needs its per-chunk dot count cut (stack the `M`/`G` and `pred`/`out` operands, drop the cumsum dot) and a larger chunk with the banded/cross-factor decay treatment, which should land in the 5–10ms range.
+
+Final measured latency: **43.97 ms** (baseline 1628.23 ms, 37.0x speedup).

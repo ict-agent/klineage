@@ -1,0 +1,190 @@
+{
+  "name": "kda",
+  "problem": {
+    "name": "kda",
+    "definition": {
+      "name": "kda",
+      "op_type": "kda_prefill",
+      "description": "Kimi-K3 bounded-gate KDA prefill, independent FP32 recurrence.",
+      "axes": {
+        "BATCH": {
+          "type": "const",
+          "value": 1
+        },
+        "TOKENS": {
+          "type": "const",
+          "value": 4096
+        },
+        "HEADS": {
+          "type": "const",
+          "value": 96
+        },
+        "HEAD_DIM": {
+          "type": "const",
+          "value": 128
+        }
+      },
+      "inputs": {
+        "q": {
+          "shape": [
+            "BATCH",
+            "TOKENS",
+            "HEADS",
+            "HEAD_DIM"
+          ],
+          "dtype": "bfloat16",
+          "description": "Contiguous BTHD; before normalization or activation."
+        },
+        "k": {
+          "shape": [
+            "BATCH",
+            "TOKENS",
+            "HEADS",
+            "HEAD_DIM"
+          ],
+          "dtype": "bfloat16",
+          "description": "Contiguous BTHD; before normalization or activation."
+        },
+        "v": {
+          "shape": [
+            "BATCH",
+            "TOKENS",
+            "HEADS",
+            "HEAD_DIM"
+          ],
+          "dtype": "bfloat16",
+          "description": "Contiguous BTHD; before normalization or activation."
+        },
+        "g": {
+          "shape": [
+            "BATCH",
+            "TOKENS",
+            "HEADS",
+            "HEAD_DIM"
+          ],
+          "dtype": "bfloat16",
+          "description": "Contiguous BTHD; before normalization or activation."
+        },
+        "beta": {
+          "shape": [
+            "BATCH",
+            "TOKENS",
+            "HEADS"
+          ],
+          "dtype": "float32",
+          "description": "Raw beta logits; sigmoid in operator."
+        },
+        "scale": {
+          "shape": [],
+          "dtype": "float32",
+          "description": "Fixed 1/sqrt(128)."
+        },
+        "a_log": {
+          "shape": [
+            "HEADS"
+          ],
+          "dtype": "float32",
+          "description": "Log gate gain."
+        },
+        "dt_bias": {
+          "shape": [
+            "HEADS",
+            "HEAD_DIM"
+          ],
+          "dtype": "float32",
+          "description": "Full-rank gate bias."
+        },
+        "lower_bound": {
+          "shape": [],
+          "dtype": "float32",
+          "description": "Fixed Kimi-K3 bounded gate value -5."
+        },
+        "initial_state": {
+          "shape": [
+            "BATCH",
+            "HEADS",
+            "HEAD_DIM",
+            "HEAD_DIM"
+          ],
+          "dtype": "float32",
+          "description": "Contiguous BVK state; zero for fresh prefill."
+        }
+      },
+      "outputs": {
+        "output": {
+          "shape": [
+            "BATCH",
+            "TOKENS",
+            "HEADS",
+            "HEAD_DIM"
+          ],
+          "dtype": "bfloat16",
+          "description": "Causal post-update readout before output gate/projection."
+        },
+        "final_state": {
+          "shape": [
+            "BATCH",
+            "HEADS",
+            "HEAD_DIM",
+            "HEAD_DIM"
+          ],
+          "dtype": "float32",
+          "description": "Full-precision recurrent state in [batch, head, value, key]."
+        }
+      },
+      "reference": "\"\"\"Mathematical Kimi-K3 KDA recurrence; FP32 working state.\"\"\"\n\nimport torch\n\nNORM_EPS = 1e-6\n\n\n@torch.no_grad()\ndef run(q, k, v, g, beta, scale, a_log, dt_bias, lower_bound, initial_state):\n    batch, tokens, heads, dim = q.shape\n    query = q.float()\n    key = k.float()\n    query = query / (query.square().sum(-1, keepdim=True) + NORM_EPS).sqrt()\n    key = key / (key.square().sum(-1, keepdim=True) + NORM_EPS).sqrt()\n    query = query * scale.float()\n    decay = (lower_bound.float() * torch.sigmoid(\n        a_log.float().exp()[:, None] * (g.float() + dt_bias.float())\n    )).exp()\n    gain = beta.float().sigmoid()\n    value = v.float()\n    state = initial_state.float().clone()\n    output = torch.empty_like(v)\n\n    # Each token decays, corrects, then reads the state in [value, key] layout.\n    for t in range(tokens):\n        kt = key[:, t]\n        state = state * decay[:, t, :, None, :]\n        prediction = (state * kt[:, :, None, :]).sum(-1)\n        delta = gain[:, t, :, None] * (value[:, t] - prediction)\n        state = state + delta[:, :, :, None] * kt[:, :, None, :]\n        output[:, t] = (state * query[:, t, :, None, :]).sum(-1)\n\n    return output, state.contiguous()\n"
+    },
+    "workload": {
+      "uuid": "b7a070e0-48cb-5191-aab7-d01c18c38b02",
+      "axes": {
+        "BATCH": 1,
+        "TOKENS": 4096,
+        "HEADS": 96,
+        "HEAD_DIM": 128
+      },
+      "inputs": {
+        "q": {
+          "type": "random"
+        },
+        "k": {
+          "type": "random"
+        },
+        "v": {
+          "type": "random"
+        },
+        "g": {
+          "type": "random"
+        },
+        "beta": {
+          "type": "random"
+        },
+        "scale": {
+          "type": "safetensors",
+          "path": "inputs/kda.safetensors",
+          "tensor_key": "scale"
+        },
+        "a_log": {
+          "type": "random"
+        },
+        "dt_bias": {
+          "type": "random"
+        },
+        "lower_bound": {
+          "type": "safetensors",
+          "path": "inputs/kda.safetensors",
+          "tensor_key": "lower_bound"
+        },
+        "initial_state": {
+          "type": "random"
+        }
+      }
+    },
+    "language": "ascendc",
+    "platform": "ascend-Ascend910B1"
+  },
+  "source_files": {
+    "config.toml": "[solution]\nname = \"kda-triton\"\ndefinition = \"kda\"\nauthor = \"klineage\"\n\n[build]\nlanguage = \"python\"\nentry_point = \"kernel.py::kernel\"\n",
+    "solution/kernel.py": "\"\"\"kda: Kimi-K3 bounded-gate KDA prefill recurrence in triton-ascend.\n\nIndependent per-head FP32 recurrence in [value, key] layout:\n\n    state = state * decay[t]                    # decay over the key axis\n    pred  = sum_k state[v, k] * key[t, k]\n    delta = gain[t] * (value[t] - pred)\n    state = state + delta[:, None] * key[t]\n    out[t] = sum_k state[v, k] * query[t, k]\n\n``decay`` and the normalisation of ``q``/``k`` are recomputed in-kernel; the\ntimed path launches exactly one triton program per (head, value block).\n\"\"\"\n\nimport torch\nimport triton\nimport triton.language as tl\n\n_EPS = tl.constexpr(1e-6)\n_VP = 2\n\n\n@triton.jit\ndef _kda_kernel(\n    q_ptr, k_ptr, v_ptr, g_ptr, beta_ptr, scale_ptr, a_log_ptr, dt_bias_ptr,\n    lower_ptr, state_ptr, out_ptr, final_ptr,\n    T,\n    H: tl.constexpr, D: tl.constexpr, VP: tl.constexpr,\n):\n    BV: tl.constexpr = D // VP\n    pid = tl.program_id(0)\n    b = pid // (H * VP)\n    rest = pid % (H * VP)\n    h = rest // VP\n    vb = rest % VP\n\n    rk = tl.arange(0, D)\n    rv = vb * BV + tl.arange(0, BV)\n\n    gmul = tl.exp(tl.load(a_log_ptr + h))\n    lb = tl.load(lower_ptr)\n    sc = tl.load(scale_ptr)\n    bias = tl.load(dt_bias_ptr + h * D + rk)\n\n    s_ptrs = state_ptr + (b * H + h) * D * D + rv[:, None] * D + rk[None, :]\n    S = tl.load(s_ptrs)\n\n    for t in range(0, T):\n        base = ((b * T + t) * H + h) * D\n        kf = tl.load(k_ptr + base + rk).to(tl.float32)\n        kf = kf / tl.sqrt(tl.sum(kf * kf) + _EPS)\n        qf = tl.load(q_ptr + base + rk).to(tl.float32)\n        qf = qf / tl.sqrt(tl.sum(qf * qf) + _EPS) * sc\n        gf = tl.load(g_ptr + base + rk).to(tl.float32)\n        decay = tl.exp(lb * tl.sigmoid(gmul * (gf + bias)))\n        gain = tl.sigmoid(tl.load(beta_ptr + t * H + h))\n        vv = tl.load(v_ptr + base + rv).to(tl.float32)\n\n        S = S * decay[None, :]\n        delta = gain * (vv - tl.sum(S * kf[None, :], axis=1))\n        S = S + delta[:, None] * kf[None, :]\n        out = tl.sum(S * qf[None, :], axis=1)\n        tl.store(out_ptr + base + rv, out.to(tl.bfloat16))\n\n    f_ptrs = final_ptr + (b * H + h) * D * D + rv[:, None] * D + rk[None, :]\n    tl.store(f_ptrs, S)\n\n\ndef kernel(q, k, v, g, beta, scale, a_log, dt_bias, lower_bound, initial_state):\n    batch, tokens, heads, dim = q.shape\n    out = torch.empty_like(v)\n    final = torch.empty_like(initial_state)\n    grid = (batch * heads * _VP,)\n    _kda_kernel[grid](\n        q, k, v, g, beta, scale, a_log, dt_bias, lower_bound,\n        initial_state, out, final, tokens,\n        H=heads, D=dim, VP=_VP,\n    )\n    return out, final\n\n"
+  },
+  "validation": null
+}

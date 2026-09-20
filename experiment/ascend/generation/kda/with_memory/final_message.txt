@@ -1,0 +1,18 @@
+**Result: correct and measured — 81.85 ms, 19.35x over the torch-npu baseline (1583.84 ms).**
+
+**Deliverable**
+- `work/submission/config.toml` — `language = "python"`, `entry_point = "kernel.py::kernel"`.
+- `work/submission/solution/kernel.py` — two triton-ascend kernels, 362 triton launches on the timed path (gate: `device_kernel: true`).
+- Gate: `compile_passed`, `correctness_passed`, `profile_passed` all true; output error ≈0.09x tolerance, final-state ≈0.44x tolerance.
+
+**Algorithm**
+- Chunked WY/UT-transform of the bounded-gate delta rule: `_kda_prepare` (per head×16-token chunk) emits `Aqk`, `A=(I+Akk)⁻¹`, `w`, `u`, `qg`, `kg`; `_kda_fwdh` (per head×V-block, state resident in fp32 registers) walks the 256 chunks in order and writes `output` + `final_state`.
+- Gate carried in the log2 domain; verified in CPU-torch simulation that `2**gk`/`2**-gk` must be *separable per 16-token chunk* — at BT≥32 the raw factors overflow/underflow (NaN at BT=32/64), so 16 is the maximum safe chunk.
+- The last working rewrite before time ran out (batched block-diagonal 64-token groups, fewer prepare tasks) was reverted because it produced wrong `output` and then hung the BiShengHIR compiler.
+
+**Where the time went (key findings for a next round)**
+- Baseline is 1.58 s because the reference loops 4096 tokens eagerly on the NPU.
+- triton-ascend's dominant cost here is *dependent cube ops*: each cube→vector→cube round trip in a serial chain costs ~4 µs; a `[16,16]` operand derived from a dot feeding a `[16,16]×[16,128]` dot cost ~33 µs per task (~60 ms of the 61 ms prepare kernel). Independent dots are nearly free (~0.1 µs marginal).
+- So the ranking of fixes: (1) never chain dot outputs into dots — the Neumann inverse chain is the whole prepare cost; (2) use chunk-major contiguous intermediate layouts; (3) `disable_auto_inject_block_sync` gave 1.4x but produced NaN, `enable_sync_block_lock` needs the explicit `al.sync_block_set/wait` protocol from the GDN reference; (4) lattice: prepare 61 ms + fwdh 17 ms at BT=16, 24 workers each.
+
+Final measured latency: **81.85 ms** (`speedup 19.35x`).

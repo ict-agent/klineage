@@ -45,6 +45,11 @@ sync_repo() {
   rsync -az --delete --delete-excluded \
     --exclude .git --exclude '*.pdf' --exclude __pycache__ \
     --exclude 'scripts/ascend/expert' --exclude 'scripts/apply_transfer.py' \
+    --exclude 'experiment/_transfer' --exclude 'experiment/transfer_*' \
+    --exclude 'scripts/ascend/batch.py' --exclude 'scripts/ascend/collect.py' \
+    --exclude 'scripts/ascend/gen_inputs.py' --exclude 'scripts/ascend/plot.py' \
+    --exclude 'scripts/ascend/smoke_eval.py' --exclude 'scripts/ascend/README.md' \
+    --exclude 'scripts/ascend/*.tmpl' \
     --include 'experiment/' \
     --include 'experiment/*/' \
     --include 'experiment/*/problems/' \
