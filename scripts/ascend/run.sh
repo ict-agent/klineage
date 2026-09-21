@@ -8,6 +8,7 @@
 #   scripts/ascend/run.sh probe          print the remote platform string
 #   scripts/ascend/run.sh smoke [npu]    remote evaluate smoke test on one NPU
 #   scripts/ascend/run.sh start [args]   launch the local batch detached
+#   scripts/ascend/run.sh resume [args]  continue one unit's session detached
 #   scripts/ascend/run.sh status         batch progress
 #   scripts/ascend/run.sh logs           tail the batch log
 #   scripts/ascend/run.sh plot           latency curves from events.jsonl
@@ -63,7 +64,7 @@ bootstrap() {
   container "cd $REPO && pip install -q -e . && python -c 'import torch, torch_npu, klineage; print(\"torch\", torch.__version__, \"npu\", torch_npu.__version__)'"
 }
 
-probe() { container "cd $REPO && KLINEAGE_BACKEND=ascend ASCEND_ARCH=dav-c220 python scripts/ascend/remote_eval.py --probe"; }
+probe() { container "cd $REPO && KLINEAGE_BACKEND=ascend ASCEND_ARCH=Ascend910B1 python scripts/ascend/remote_eval.py --probe"; }
 
 smoke() { container "cd $REPO && python scripts/ascend/smoke_eval.py --repo $REPO --work $ROOT/smoke --device ${1:-2}"; }
 
@@ -86,12 +87,19 @@ logs() { tail -n 60 "$LOG"; }
 
 plot() { "$PY" "$LOCAL/scripts/ascend/plot.py" --root "$RUN_ROOT" --out "$RUN_ROOT/plots"; }
 
+resume() {
+  "$PY" "$LOCAL/scripts/ascend/spawn.py" "$LOG" \
+    "$PY" "$LOCAL/scripts/ascend/resume.py" "$@"
+  echo "resumed; scripts/ascend/run.sh logs"
+}
+
 case "${1:-}" in
   sync) shift; sync_repo "$@" ;;
   bootstrap) shift; bootstrap "$@" ;;
   probe) shift; probe "$@" ;;
   smoke) shift; smoke "$@" ;;
   start) shift; start "$@" ;;
+  resume) shift; resume "$@" ;;
   status) shift; status "$@" ;;
   logs) shift; logs "$@" ;;
   plot) shift; plot "$@" ;;

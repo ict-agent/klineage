@@ -36,10 +36,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 KERNELS = ("kda", "sparse_attention", "top_p", "fused_add_rmsnorm", "gqa")
 SETTINGS = ("without_memory", "with_memory")
-#: Only the evaluator documentation. The AscendC bundle skill describes the
-#: language this study pins away from, and its hardware notes are expert
-#: knowledge Setting A must not receive.
-SKILLS = ("bench",)
+#: The evaluator documentation plus the artifact spec both settings get: the
+#: task's own sample for the AscendC bundle format, which this study pins.
+SKILLS = ("bench", "ascendc")
+#: The artifact language the gate compiles; templates render it.
+LANGUAGE = "ascendc"
+ENTRY_POINT = "kernel.asc::kernel"
 #: Dropped from the unit copies of ``scripts/`` and ``src/``: the gate plus the
 #: package it imports is all the agent needs. Everything listed here is
 #: experiment metadata (settings, expert packs, CUDA transfer tooling, memory
@@ -57,7 +59,6 @@ PRUNE = (
     "src/klineage/harness",
     "src/klineage/memory",
     "src/klineage/prompts",
-    "src/klineage/skills/ascendc",
     "src/klineage/skills/cuda",
     "src/klineage/skills/hip",
 )
@@ -66,9 +67,8 @@ VENV_LINK = ".venv"
 #: AGENTS.md, so a root inside the repo would expose the expert packs and the
 #: CUDA transfer runs to the without_memory setting.
 RUN_ROOT = Path(os.environ.get("KLINEAGE_RUN_ROOT", Path.home() / "klineage-runs"))
-#: Expert material lives outside the checkout: the without_memory workspace must
-#: not reach it, and an agent with full disk access can read anything inside the
-#: checkout. Falls back to the in-repo layout for a fresh clone.
+#: The packaged expert source lives with the with_memory artifact. The external
+#: root remains a fallback for older experiment layouts.
 EXPERT_ROOT = Path(os.environ.get("KLINEAGE_EXPERT_ROOT", Path.home() / "klineage-expert"))
 CODEX_DEFAULT = "codex"
 EVAL = REPO / "scripts" / "ascend" / "eval.py"
@@ -193,22 +193,26 @@ def render(text: str, fields: dict[str, str]) -> str:
 
 
 def expert_source(kernel: str) -> Path:
-    """Expert directory for a kernel, preferring the copy outside the checkout."""
+    """Find the packaged expert source for a kernel."""
 
-    for root in (EXPERT_ROOT, REPO / "scripts" / "ascend" / "expert"):
-        if (root / kernel).is_dir():
-            return root / kernel
-    return EXPERT_ROOT / kernel
+    packaged = REPO / "experiment" / "ascend" / "generation" / kernel / "with_memory" / "expert"
+    for source in (packaged, EXPERT_ROOT / kernel, REPO / "scripts" / "ascend" / "expert" / kernel):
+        if source.is_dir():
+            return source
+    return packaged
 
 
 def template_fields(work: Path, kernel: str, setting: str, unit: Path,
-                    device: str = "") -> dict[str, str]:
+                    device: str = "", hours: int = 0) -> dict[str, str]:
     """Tokens shared by AGENTS.md and the prompt; paths sit under the unit root."""
 
     expert = setting == "with_memory"
     return {
         "{kernel}": kernel,
         "{setting}": setting,
+        "{hours}": str(hours),
+        "{language}": LANGUAGE,
+        "{entry_point}": ENTRY_POINT,
         "{eval_cmd}": eval_cmd(work, unit, device),
         "{expert_line}": f"Expert knowledge: read `{rooted(work, unit)}/expert/` first.\n" if expert else "",
         **path_fields(work, unit),
@@ -225,7 +229,8 @@ def provider_settings() -> tuple[str, str]:
     return name, data["model_providers"][name]["base_url"]
 
 
-def prepare(work: Path, kernel: str, setting: str, template: str, unit: Path) -> bool:
+def prepare(work: Path, kernel: str, setting: str, template: str, unit: Path,
+            hours: int, device: str = "") -> bool:
     """Reset the workspace: problems, skills, AGENTS.md, expert knowledge."""
 
     # baseline.json survives: it is a property of the device, not of the run.
@@ -255,11 +260,12 @@ def prepare(work: Path, kernel: str, setting: str, template: str, unit: Path) ->
     if expert:
         if not files:
             raise FileNotFoundError(
-                f"expert knowledge missing for {kernel}; fill scripts/ascend/expert/{kernel}/"
+                f"expert knowledge missing for {kernel}; fill "
+                f"experiment/ascend/generation/{kernel}/with_memory/expert/"
             )
         shutil.copytree(source, work / "expert")
 
-    fields = template_fields(work, kernel, setting, unit)
+    fields = template_fields(work, kernel, setting, unit, device, hours=hours)
     (work / "AGENTS.md").write_text(render(template, fields), encoding="utf-8")
     return expert
 
@@ -301,13 +307,13 @@ def run_unit(unit: tuple[str, str], device: str, options: argparse.Namespace) ->
     record = {"kernel": kernel, "setting": setting, "device": device,
               "started_at": datetime.now(UTC).isoformat()}
     started = time.monotonic()
+    hours = options.timeout // 3600
     error = None
     try:
         template = (REPO / "scripts" / "ascend" / "agents.md.tmpl").read_text(encoding="utf-8")
         install_unit(out)
-        prepare(work, kernel, setting, template, out)
-        fields = template_fields(work, kernel, setting, out, device)
-        fields["{hours}"] = str(options.timeout // 3600)
+        prepare(work, kernel, setting, template, out, hours, device)
+        fields = template_fields(work, kernel, setting, out, device, hours)
         prompt = render((REPO / "scripts" / "ascend" / "prompt.md.tmpl").read_text(encoding="utf-8"),
                         fields)
 

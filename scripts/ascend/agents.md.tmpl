@@ -13,10 +13,12 @@ This workspace is `{work_rel}`: `cd {root_rel}` from here.
 ## Artifact format
 
 - `{work_rel}/submission/config.toml` + `{work_rel}/submission/solution/` hold the kernel.
-  This study measures **triton-ascend** only: `language = "python"`,
-  `entry_point = "kernel.py::kernel"`, sources under `solution/`. The container has
-  `triton` 3.5.1 plus `triton.language.extra.cann.extension` available.
-  The timed path must launch triton kernels; a torch-only bundle is rejected by the gate.
+  This study measures **AscendC** only: `language = "{language}"`,
+  `entry_point = "{entry_point}"`, native sources under `solution/`. The gate compiles
+  them inside the container with CANN `bisheng` (toolkit 9.1.0, `ASCEND_ARCH=Ascend910B1`)
+  and loads the pybind11 export; a torch-only bundle is rejected.
+- Read `{work_rel}/.agents/skills/ascendc/SKILL.md` before the first version: it fixes the
+  bundle layout, the pybind11 export, the caller-stream rule and the output convention.
 - `{work_rel}/kernel.json` is regenerated from the submission by the evaluation command; do not hand-edit it.
 - Every evaluated kernel is snapshotted to `{work_rel}/versions/version<N>/`.
 
@@ -30,4 +32,7 @@ It syncs this workspace to the Ascend host, compiles and measures inside the con
 
 The result also carries `baseline_ms` (the problem's torch reference on the NPU,
 measured once per device with the same timer) and `speedup = baseline_ms / latency_ms`.
+
+One version passing the gate is the start, not the end: the session runs for
+{hours} hours, and the remaining time goes into further gated iterations.
 {expert_line}

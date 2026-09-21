@@ -39,7 +39,7 @@ Rules:
 
 - The local venv `.venv-ascend` owns klineage; create it with
   `uv venv --python 3.12 .venv-ascend && uv pip install --python .venv-ascend/bin/python -e .`.
-- `with_memory` units refuse to start unless `scripts/ascend/expert/<kernel>/`
-  holds expert files; `without_memory` must stay free of them.
+- `with_memory` units read `experiment/ascend/generation/<kernel>/with_memory/expert/`;
+  `without_memory` must stay free of those files.
 - One unit = one 2h Codex session; finished units are skipped on restart
   (`--retry-failed` reruns them).

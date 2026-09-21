@@ -1,13 +1,22 @@
-Implement and optimize the `{kernel}` operator on Ascend 910B1 in triton-ascend.
+Implement and optimize the `{kernel}` operator on Ascend 910B1 in AscendC.
+
+Two phases, one session:
+
+1. Land a correct AscendC version, as fast as possible.
+2. Spend the rest of the budget improving it, one measured change per gate call.
 
 - Work in `{work_rel}/`; every path is relative to the project root (`cd {root_rel}` from this workspace).
 - Definition: `{work_rel}/problems/definitions/{kernel}.json`; workload: `{work_rel}/problems/workloads/{kernel}.jsonl`.
-- Budget: {hours} hours. Work in small, measured steps.
 - Evaluate from the project root with: {eval_cmd}
-  Make correctness pass first, then tune performance; revert changes that break it.
-- Deliverable: a correct, fast triton-ascend bundle at `{work_rel}/submission/config.toml`
-  (`language = "python"`, `entry_point = "kernel.py::kernel"`) + `{work_rel}/submission/solution/`.
-  The timed path must launch triton kernels; a torch-only implementation is rejected.
+  Gate every change: keep it when correctness passes and latency drops, revert it otherwise.
+- Budget: {hours} hours, then the session is killed. Run `date` before each step and
+  keep iterating while more than ~10 minutes remain. Do not stop early to report;
+  only the gated `submission/` counts, and an unmeasured change scores nothing.
+- Vary one thing per step (tiling, block sizes, vector width, fusion, launch shape,
+  pipelining), and keep the best result in the bundle.
+- Deliverable: a correct, fast AscendC bundle at `{work_rel}/submission/config.toml`
+  (`language = "{language}"`, `entry_point = "{entry_point}"`) + `{work_rel}/submission/solution/`.
+  The timed path must run the kernel you compiled; a torch-only implementation is rejected.
 - Score: speedup over the torch-npu baseline. The gate prints `speedup` next to the latency.
 {expert_line}
 End your last message with the final measured latency.

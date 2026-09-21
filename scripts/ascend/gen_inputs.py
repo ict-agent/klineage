@@ -6,6 +6,8 @@ A problem is 1:1 with a workload whose reference is data independent, so the
 bulk tensors are marked ``random`` in the workload (seed 0, deterministic, the
 same for both settings) and only the values that must not be noise stay here:
 a random ``scale`` or positive ``lower_bound`` turns the decay into an overflow.
+``probs`` must be a distribution: its rows are normalized over seed-0 logits,
+since noise would break the sum-to-one the top-p reference relies on.
 
     .venv-ascend/bin/python scripts/ascend/gen_inputs.py --kernel kda
 """
@@ -21,13 +23,18 @@ import torch
 REPO = Path(__file__).resolve().parents[2]
 SAFETENSORS = "safetensors"
 STRIDES_METADATA = "klineage.strides"
+#: Frozen by the definition: "stride [1]; frozen to float32(0.9)".
+TOP_P_DEFAULT = 0.9
 
 #: Inputs whose value carries semantics, so they cannot be random.  Anything
 #: else listed as safetensors falls back to seed-0 Gaussian noise.
 SEMANTIC = {
     "scale": lambda sizes: sizes["HEAD_DIM"] ** -0.5,
     "lower_bound": lambda sizes: -5.0,
+    "top_p": lambda sizes: TOP_P_DEFAULT,
 }
+#: Inputs that hold a distribution, not an arbitrary tensor: normalized per row.
+PROBABILITY = ("probs",)
 
 
 def axis_sizes(definition: dict, workload: dict) -> dict[str, int]:
@@ -58,6 +65,10 @@ def build(definition: dict, workload: dict, names: list[str], seed: int) -> dict
         dtype = getattr(torch, spec["dtype"])
         if name in SEMANTIC:
             inputs[name] = torch.full(shape, SEMANTIC[name](sizes), dtype=dtype)
+            continue
+        if name in PROBABILITY:
+            logits = torch.randn(shape, generator=generator, dtype=torch.float32)
+            inputs[name] = torch.softmax(logits, dim=-1).to(dtype)
             continue
         inputs[name] = torch.randn(shape, generator=generator).to(dtype)
     return inputs

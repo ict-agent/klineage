@@ -30,7 +30,8 @@ REPO = Path(__file__).resolve().parents[2]
 HARNESS_ROOT_DEFAULT = "~/ascend-harness"
 REPO_NAME = "repo"
 RUNS_NAME = "runs"
-ARCH_DEFAULT = "dav-c220"
+#: The container's bisheng (CANN 9.1.0) takes the SoC name, not `dav-c220`.
+ARCH_DEFAULT = "Ascend910B1"
 #: The torch-npu baseline is 50-500x slower than a device kernel; one harness
 #: protocol for it costs minutes, so it is measured once per device and cached.
 BASELINE_FILE = "baseline.json"
@@ -316,8 +317,9 @@ def main(argv: list[str] | None = None) -> None:
     if payload.get("latency_ms") is not None:
         fields["latency_ms"] = payload["latency_ms"]
 
-    # The study pins the artifact to triton-ascend: a timed call that launched
-    # no triton kernel measured torch, and its latency is not comparable.
+    # A python bundle must launch a device kernel: one that launched no triton
+    # kernel timed torch, and its latency is not comparable. Native bundles are
+    # compiled by the loader, so a passing compile is evidence enough.
     gate = None
     for line in reversed(result.stdout.splitlines()):
         try:
@@ -329,7 +331,8 @@ def main(argv: list[str] | None = None) -> None:
             break
     if gate is not None:
         launches = gate.get("triton_launches")
-        if launches is not None:
+        # Only a python bundle times triton; a native one has no such counter.
+        if launches is not None and kernel.language == "python":
             fields["triton_launches"] = launches
             fields["device_kernel"] = launches > 0
         if gate.get("timing"):
@@ -372,10 +375,10 @@ def main(argv: list[str] | None = None) -> None:
                    ("baseline_ms", "speedup", "triton_launches", "device_kernel")
                    if name in fields})
     print(json.dumps(report, indent=2))
-    if fields.get("device_kernel") is False:
+    if kernel.language == "python" and fields.get("device_kernel") is False:
         raise SystemExit(
-            "rejected: the timed path launched no triton kernel; this study "
-            "measures triton-ascend implementations only")
+            "rejected: the timed path launched no device kernel; a torch-only "
+            "implementation does not count")
 
 
 if __name__ == "__main__":

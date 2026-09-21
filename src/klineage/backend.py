@@ -23,6 +23,8 @@ CUDA_FLAGS = (*CFLAGS, "--expt-relaxed-constexpr", "--expt-extended-lambda")
 CUDA_ARCH_ENV = "TORCH_CUDA_ARCH_LIST"
 HIP_ARCH_ENV = "PYTORCH_ROCM_ARCH"
 ASCEND_ARCH_ENV = "ASCEND_ARCH"
+#: CANN 8.x spells architectures `dav-c220`; CANN 9.x wants the SoC name.
+DAV_PREFIX = "dav-"
 BACKEND_ENV = "KLINEAGE_BACKEND"
 ASCEND_HOME = Path("/usr/local/Ascend/ascend-toolkit/latest")
 HIP_HOME = Path("/opt/dtk")
@@ -421,6 +423,17 @@ def detect_backend() -> Backend:
         ) from None
 
 
+def arch_option(architecture: str) -> str:
+    """Name the target architecture the way this bisheng expects.
+
+    CANN 8.x takes the ``dav-`` NPU architecture; 9.x takes the SoC name and
+    rejects the ``dav-`` spelling, so the shape of the value picks the flag.
+    """
+
+    prefix = "--npu-arch=" if architecture.startswith(DAV_PREFIX) else "--npu-soc="
+    return f"{prefix}{architecture}"
+
+
 def compile_ascend(
     name: str,
     sources: list[str],
@@ -433,6 +446,7 @@ def compile_ascend(
 
     toolkit = Path(options["toolkit"])
     npu = Path(options["torch_npu"])
+    arch = arch_option(options["architecture"])
     include_dirs = [
         *include_paths(),
         sysconfig.get_path("include"),
@@ -449,7 +463,7 @@ def compile_ascend(
             options["compiler"],
             "-x",
             "asc",
-            f"--npu-arch={options['architecture']}",
+            arch,
             "-shared",
             "-fPIC",
             *options["cflags"],

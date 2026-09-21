@@ -27,6 +27,8 @@ import sys
 from pathlib import Path
 
 SETTINGS = ("without_memory", "with_memory")
+#: The expert pack is this study's input, not run output: keep it across collects.
+EXPERT_DIR = "expert"
 #: Copied verbatim from the run root into the submission directory.
 UNIT_FILES = ("events.jsonl", "trace.jsonl", "result.json", "final_message.txt",
               "baseline.json")
@@ -47,8 +49,11 @@ def expand(version: Path) -> None:
 
 def copy_unit(unit: Path, target: Path) -> None:
     if target.exists():     # stale artifacts would otherwise mix with this run
-        shutil.rmtree(target)
-    target.mkdir(parents=True)
+        for item in target.iterdir():
+            if item.name == EXPERT_DIR:
+                continue
+            shutil.rmtree(item) if item.is_dir() else item.unlink()
+    target.mkdir(parents=True, exist_ok=True)
     for name in UNIT_FILES:
         if (unit / name).is_file():
             shutil.copy2(unit / name, target / name)

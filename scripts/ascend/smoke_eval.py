@@ -23,7 +23,7 @@ def main() -> None:
     if args.device:
         os.environ["ASCEND_RT_VISIBLE_DEVICES"] = args.device
     os.environ.setdefault("KLINEAGE_BACKEND", "ascend")
-    os.environ.setdefault("ASCEND_ARCH", "dav-c220")
+    os.environ.setdefault("ASCEND_ARCH", "Ascend910B1")
     sys.path.insert(0, str(args.repo / "src"))
 
     from klineage.artifact.kernel import Kernel
