@@ -1,0 +1,9 @@
+[solution]
+name = "candidate"
+definition = "top_p"
+author = "klineage"
+
+[build]
+language = "ascendc"
+entry_point = "kernel.asc::kernel"
+destination_passing_style = true

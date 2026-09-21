@@ -1,7 +1,7 @@
 [solution]
-name = "kda-triton"
+name = "kda-triton-chunked"
 definition = "kda"
-author = "klineage"
+author = "codex"
 
 [build]
 language = "python"

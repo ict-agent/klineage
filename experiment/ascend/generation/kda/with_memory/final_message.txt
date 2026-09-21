@@ -1,18 +1,21 @@
-**Result: correct and measured — 81.85 ms, 19.35x over the torch-npu baseline (1583.84 ms).**
+Final bundle confirmed and gated.
 
-**Deliverable**
-- `work/submission/config.toml` — `language = "python"`, `entry_point = "kernel.py::kernel"`.
-- `work/submission/solution/kernel.py` — two triton-ascend kernels, 362 triton launches on the timed path (gate: `device_kernel: true`).
-- Gate: `compile_passed`, `correctness_passed`, `profile_passed` all true; output error ≈0.09x tolerance, final-state ≈0.44x tolerance.
+**Result**
+- `work/submission/config.toml` + `work/submission/solution/kernel.py` — triton-ascend, `entry_point = "kernel.py::kernel"`, correctness + profile passed, device kernel.
 
-**Algorithm**
-- Chunked WY/UT-transform of the bounded-gate delta rule: `_kda_prepare` (per head×16-token chunk) emits `Aqk`, `A=(I+Akk)⁻¹`, `w`, `u`, `qg`, `kg`; `_kda_fwdh` (per head×V-block, state resident in fp32 registers) walks the 256 chunks in order and writes `output` + `final_state`.
-- Gate carried in the log2 domain; verified in CPU-torch simulation that `2**gk`/`2**-gk` must be *separable per 16-token chunk* — at BT≥32 the raw factors overflow/underflow (NaN at BT=32/64), so 16 is the maximum safe chunk.
-- The last working rewrite before time ran out (batched block-diagonal 64-token groups, fewer prepare tasks) was reverted because it produced wrong `output` and then hung the BiShengHIR compiler.
+**Kernel design**
+- Prep kernel: l2-normalises q/k, folds the query scale, builds `decay = exp(lb·sigmoid(exp(a_log)·(g+dt_bias)))` and `gain = sigmoid(beta)`, all staged head-major `[B,H,T,D]` so the recurrent kernel streams contiguous 512 B vectors per token.
+- Recurrent kernel: grid `(D/BV, H·B)` with `BV=64`, one `[D,BV]` fp32 state tile resident per program, single pass over T; both readouts contract the key axis as register-tree reductions.
 
-**Where the time went (key findings for a next round)**
-- Baseline is 1.58 s because the reference loops 4096 tokens eagerly on the NPU.
-- triton-ascend's dominant cost here is *dependent cube ops*: each cube→vector→cube round trip in a serial chain costs ~4 µs; a `[16,16]` operand derived from a dot feeding a `[16,16]×[16,128]` dot cost ~33 µs per task (~60 ms of the 61 ms prepare kernel). Independent dots are nearly free (~0.1 µs marginal).
-- So the ranking of fixes: (1) never chain dot outputs into dots — the Neumann inverse chain is the whole prepare cost; (2) use chunk-major contiguous intermediate layouts; (3) `disable_auto_inject_block_sync` gave 1.4x but produced NaN, `enable_sync_block_lock` needs the explicit `al.sync_block_set/wait` protocol from the GDN reference; (4) lattice: prepare 61 ms + fwdh 17 ms at BT=16, 24 workers each.
+**Gated progression this session**
+- 24.51 ms (62.6x) — head-major staging instead of token-major
+- 24.24 ms (63.2x) — prep tiling `_PREP_TB` 32→64, `_PREP_WARPS` 4→2
+- 23.29 ms (65.8x) — hoist all per-token loads to the top of the loop body (biggest single win: hides load latency)
+- 23.15 ms (66.2x) — `_MAIN_WARPS=1`, `_PREP_WARPS=4`
+- 23.075 ms (66.44x) — reconfirmed best bundle
 
-Final measured latency: **81.85 ms** (`speedup 19.35x`).
+**Measured and reverted** (correctness failures or slower): 2x/4x loop unroll (both `loop_unroll_factor` and manual) → miscompiles to NaN; `BV=128` and two state tiles → silent wrong results; transposed `[BV,D]` state; 6-pass pre-decay readout (with and without precomputed `k·q`); predecayed `dk`/`dq` arrays; software prefetch with loop-carried vectors (24.97 ms); `max_contiguous` hints (240 ms); head-major output staging + transpose pass; head-major `v` staging; `num_stages` 2/3/4; `disallow_acc_multi_buffer`.
+
+**Diagnostics** (remote, outside the gate): main kernel ≈ 95 % of runtime, prep ≈ 0.75 ms; `num_warps` 1/2/4/8 are indistinguishable, and ablations removing loads run *slower* — the kernel is bound by per-iteration UB round-trips/latency rather than vector throughput or bandwidth. Measured run-to-run noise is ±0.2 %.
+
+Final measured latency: **23.0753 ms** (66.44x over the 1533.144 ms torch-npu baseline).

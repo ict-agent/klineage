@@ -1,0 +1,21 @@
+**Final Result**
+
+The bundle at `work/submission/` holds the last gated AscendC build: `work/submission/config.toml` (`language = "ascendc"`, `entry_point = "kernel.asc::kernel"`) plus `work/submission/solution/kernel.asc`, snapshotted as `work/versions/version7`.
+
+**What the kernel does**
+- One AICore per row (`block_dim = rows = 32`); per row, a monotone bisection over the float32 bit pattern (`p >= 0` ⇒ key order = value order), seeded from the row max: bracket `[max/256, max/64]` turns the 30-iteration full-range search into 24 iterations, with a full-range fallback if the bracket ever proves degenerate.
+- Each evaluation streams the row in 4096-element tiles: `Compares` → `Select` → lane `Add` (3 vector ops/element, no per-element Kahan).
+- Reduction: 6 cheap plain `Add` folds (small magnitudes) → compensated Max/Min two-sum tree → 8-lane scalar fold.
+
+**Measured progression** (gate, device 2, baseline 4.5267 ms)
+- v1 Kahan bisection, 32 iters: 0.6951 ms → 6.51x
+- v2 plain lane accumulation: 0.4290 ms → 10.55x
+- v7 max-seeded bracket (24 iters): 0.3645 ms → 12.42x
+- v9 cheap tail folds: 0.3474 ms → 13.03x
+- v10 six plain folds: 0.3428 ms → 13.21x
+
+Key findings that drove the wins: the compensated per-element Kahan chain cost ~9 µs/iteration; the row max bounds the key-space search to a 2^24 range; and the reduction's instruction count (not its op-lanes) dominated, so folding the low-magnitude levels plainly paid off. Two experiments were measured and reverted because they did not beat the incumbent (prefetch-pipelined loads, 9-fold tree), and a `ReduceSum`-based reduction was rejected after it flipped one support element on row 18.
+
+Verification on the final artifact: `compile_passed=true, correctness_passed=true, profile_passed=true` (exact support match against the torch reference, rows sum to 1.0).
+
+**Final measured latency: 0.3428 ms (speedup 13.206x over the 4.5267 ms torch-npu baseline).**

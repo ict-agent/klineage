@@ -1,0 +1,71 @@
+{
+  "name": "top_p",
+  "problem": {
+    "name": "top_p",
+    "definition": {
+      "name": "top_p",
+      "op_type": "top_p_renorm_probs",
+      "axes": {
+        "B": {
+          "type": "const",
+          "value": 32
+        },
+        "V": {
+          "type": "const",
+          "value": 128256
+        }
+      },
+      "inputs": {
+        "probs": {
+          "shape": [
+            "B",
+            "V"
+          ],
+          "dtype": "float32",
+          "description": "Dense row probabilities; strides [128256, 1]."
+        },
+        "top_p": {
+          "shape": [
+            "B"
+          ],
+          "dtype": "float32",
+          "description": "Per-row threshold; stride [1]; frozen to float32(0.9)."
+        }
+      },
+      "outputs": {
+        "renorm_probs": {
+          "shape": [
+            "B",
+            "V"
+          ],
+          "dtype": "float32",
+          "description": "Filtered, normalized probabilities; strides [128256, 1]."
+        }
+      },
+      "reference": "import torch\n\nNUMERICAL_TOLERANCE = 1e-2\n\n\ndef run(probs, top_p):\n    # Include the crossing token and every token tied with it.\n    ordered = torch.sort(probs, dim=-1, descending=True, stable=True).values\n    cumulative = ordered.to(torch.float64).cumsum(dim=-1)\n    boundary = torch.searchsorted(\n        cumulative, top_p.to(torch.float64).unsqueeze(-1), right=False\n    ).clamp_max(probs.shape[-1] - 1)\n    cutoff = ordered.gather(-1, boundary)\n\n    retained = torch.where(probs >= cutoff, probs, 0).to(torch.float64)\n    return (retained / retained.sum(dim=-1, keepdim=True)).to(probs.dtype)\n\n\ndef check_outputs(actual, expected):\n    if isinstance(actual, (tuple, list)):\n        assert len(actual) == 1, \"Expected one probability tensor\"\n        actual = actual[0]\n    if isinstance(expected, (tuple, list)):\n        assert len(expected) == 1, \"Expected one probability tensor\"\n        expected = expected[0]\n\n    assert torch.isfinite(actual).all(), \"Nonfinite probabilities\"\n    assert (actual >= 0).all(), \"Negative probabilities\"\n    assert torch.equal(actual > 0, expected > 0), \"Incorrect Top-p support\"\n    sums = actual.sum(dim=-1)\n    assert torch.allclose(\n        sums, torch.ones_like(sums),\n        rtol=NUMERICAL_TOLERANCE, atol=NUMERICAL_TOLERANCE,\n    ), \"Probabilities must sum to one\"\n"
+    },
+    "workload": {
+      "uuid": "a2af3ff6-29c8-5c49-bfd6-8d028a2ec51c",
+      "axes": {},
+      "inputs": {
+        "probs": {
+          "type": "safetensors",
+          "path": "inputs/top_p.safetensors",
+          "tensor_key": "probs"
+        },
+        "top_p": {
+          "type": "safetensors",
+          "path": "inputs/top_p.safetensors",
+          "tensor_key": "top_p"
+        }
+      }
+    },
+    "language": "ascendc",
+    "platform": "ascend-Ascend910B1"
+  },
+  "source_files": {
+    "config.toml": "[solution]\nname = \"candidate\"\ndefinition = \"top_p\"\nauthor = \"klineage\"\n\n[build]\nlanguage = \"ascendc\"\nentry_point = \"kernel.asc::kernel\"\ndestination_passing_style = true\n",
+    "solution/kernel.asc": "// top_p (top_p_renorm_probs) for Ascend 910B1, AscendC.\n//\n// Per row: find the exact cutoff value with a monotone bisection over the\n// float32 bit pattern (monotone for non-negative floats), then write\n// (p >= cutoff) ? p / sum : 0.  Sums use Kahan compensation because the\n// retained set is decided by comparing a sum against top_p and the margin\n// between neighbouring candidate cutoffs can be far below fp32 epsilon.\n#include <torch/extension.h>\n#include <c10/core/DeviceGuard.h>\n#include <vector>\n#include \"torch_npu/csrc/core/npu/NPUStream.h\"\n#include \"acl/acl.h\"\n#include \"ascendc/basic_api/kernel_operator.h\"\n\nusing namespace AscendC;\n\nconstexpr int32_t kTile = 4096;\nconstexpr int32_t kLanes = 4096;\n\n__aicore__ inline void WaitVectorToScalar()\n{\n    event_t eventId = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_S));\n    SetFlag<HardEvent::V_S>(eventId);\n    WaitFlag<HardEvent::V_S>(eventId);\n}\n\n__aicore__ inline uint32_t FloatToKey(float v)\n{\n    return *reinterpret_cast<uint32_t *>(&v);\n}\n\n__aicore__ inline float KeyToFloat(uint32_t k)\n{\n    return *reinterpret_cast<float *>(&k);\n}\n\nclass TopPOp {\npublic:\n    __aicore__ inline TopPOp() {}\n\n    __aicore__ inline void Init(GM_ADDR probs, GM_ADDR topP, GM_ADDR out, uint32_t cols)\n    {\n        this->row = GetBlockIdx();\n        this->cols = cols;\n        this->nTiles = (int32_t)((cols + kTile - 1) / kTile);\n        xGm.SetGlobalBuffer((__gm__ float *)probs + (uint64_t)this->row * cols, cols);\n        oGm.SetGlobalBuffer((__gm__ float *)out + (uint64_t)this->row * cols, cols);\n        tpGm.SetGlobalBuffer((__gm__ float *)topP + this->row, 1);\n        pipe.InitBuffer(inQ, 2, kTile * sizeof(float));\n        pipe.InitBuffer(outQ, 2, kTile * sizeof(float));\n        pipe.InitBuffer(accBuf, kLanes * sizeof(float));\n        pipe.InitBuffer(cmpBuf, kLanes * sizeof(float));\n        pipe.InitBuffer(t1Buf, kLanes * sizeof(float));\n        pipe.InitBuffer(t2Buf, kLanes * sizeof(float));\n        pipe.InitBuffer(zeroBuf, kLanes * sizeof(float));\n        pipe.InitBuffer(maskBuf, kTile / 8 + 64);\n    }\n\n    __aicore__ inline void Process()\n    {\n        float threshold = tpGm.GetValue(0);\n        Duplicate(zeroBuf.Get<float>(), (float)0, kLanes);\n        PipeBarrier<PIPE_ALL>();\n\n        // Seed the search bracket from the row maximum: the cutoff of a\n        // softmax row is always far below max, and this removes the ~6\n        // iterations the plain bisection spends on the exponent decade.\n        float mx = RowMax();\n        uint32_t mk = FloatToKey(mx);\n        uint32_t bLo = 0u, bHi = 0x3F800000u;\n        if (mk > (12u << 23)) {\n            bLo = mk - (8u << 23);       // max / 256\n            bHi = mk - (6u << 23);       // max / 64\n        }\n        float loSum = 0.0f;\n        uint32_t loKey = Bisect(bLo, bHi, threshold, loSum);\n        if (loKey <= bLo || loKey + 1u >= bHi) {\n            loSum = 0.0f;\n            loKey = Bisect(0u, 0x3F800000u, threshold, loSum);\n        }\n        if (loSum <= 0.0f) {\n            loSum = SumAbove(KeyToFloat(loKey));\n        }\n        WriteOut(KeyToFloat(loKey), 1.0f / loSum);\n    }\n\nprivate:\n    __aicore__ inline uint32_t Bisect(uint32_t loKey, uint32_t hiKey, float threshold, float &loSum)\n    {\n        for (int32_t it = 0; it < 32; ++it) {\n            if (hiKey - loKey <= 1u) {\n                break;\n            }\n            uint32_t midKey = loKey + ((hiKey - loKey) >> 1);\n            float s = SumAbove(KeyToFloat(midKey));\n            if (s >= threshold) {\n                loKey = midKey;\n                loSum = s;\n            } else {\n                hiKey = midKey;\n            }\n        }\n        return loKey;\n    }\n\n    __aicore__ inline float RowMax()\n    {\n        LocalTensor<float> macc = accBuf.Get<float>();\n        LocalTensor<float> t1 = t1Buf.Get<float>();\n        Duplicate(macc, (float)0, kLanes);\n        for (int32_t tile = 0; tile < nTiles; ++tile) {\n            int32_t cnt = TileCnt(tile);\n            LocalTensor<float> x = inQ.AllocTensor<float>();\n            DataCopy(x, xGm[tile * kTile], cnt);\n            inQ.EnQue(x);\n            x = inQ.DeQue<float>();\n            Max(macc, macc, x, (uint32_t)cnt);\n            inQ.FreeTensor(x);\n        }\n        int32_t len = kLanes;\n        while (len > 8) {\n            int32_t half = len >> 1;\n            Max(macc, macc, macc[half], half);\n            len = half;\n        }\n        WaitVectorToScalar();\n        float m = 0.0f;\n        for (int32_t i = 0; i < 8; ++i) {\n            float v = macc.GetValue(i);\n            if (v > m) { m = v; }\n        }\n        return m;\n    }\n\n    __aicore__ inline int32_t TileCnt(int32_t tile)\n    {\n        int32_t c = cols - tile * kTile;\n        if (c > kTile) { c = kTile; }\n        return c > 0 ? c : 0;\n    }\n\n    __aicore__ inline float SumAbove(float t)\n    {\n        LocalTensor<float> acc = accBuf.Get<float>();\n        LocalTensor<float> cmp = cmpBuf.Get<float>();\n        LocalTensor<float> t1 = t1Buf.Get<float>();\n        LocalTensor<float> t2 = t2Buf.Get<float>();\n        LocalTensor<float> zero = zeroBuf.Get<float>();\n        LocalTensor<uint8_t> mask = maskBuf.Get<uint8_t>();\n        Duplicate(acc, (float)0, kLanes);\n        Duplicate(cmp, (float)0, kLanes);\n        for (int32_t tile = 0; tile < nTiles; ++tile) {\n            int32_t off = tile * kTile;\n            int32_t cnt = cols - off;\n            if (cnt > kTile) {\n                cnt = kTile;\n            }\n            LocalTensor<float> x = inQ.AllocTensor<float>();\n            DataCopy(x, xGm[off], cnt);\n            inQ.EnQue(x);\n            x = inQ.DeQue<float>();\n            Compares(mask, x, t, CMPMODE::GE, (uint32_t)cnt);\n            Select(t1, mask, x, zero, SELMODE::VSEL_TENSOR_TENSOR_MODE, (uint32_t)cnt);\n            Add(acc, acc, t1, (uint32_t)cnt);\n            inQ.FreeTensor(x);\n        }\n        return TreeSum(acc, cmp, t1, t2);\n    }\n\n    // Compensated pairwise reduction of the lane accumulators.  Vector ops\n    // need 32-byte aligned UB addresses, so the last 8 lanes go scalar.\n    __aicore__ inline float TreeSum(LocalTensor<float> &acc, LocalTensor<float> &cmp,\n                                    LocalTensor<float> &t1, LocalTensor<float> &t2)\n    {\n        int32_t len = kLanes;\n        for (int32_t s = 0; s < 6; ++s) {   // folds where magnitudes are tiny\n            int32_t h = len >> 1;\n            Add(acc, acc, acc[h], h);\n            len = h;\n        }\n        while (len > 8) {\n            int32_t half = len >> 1;\n            Max(t1, acc, acc[half], half);\n            Min(t2, acc, acc[half], half);\n            Add(acc, t1, t2, half);          // acc = s\n            Sub(t1, t1, acc, half);          // t1 = hi - s\n            Add(t1, t1, t2, half);           // t1 = exact rounding error\n            Add(cmp, cmp, cmp[half], half);\n            Add(cmp, cmp, t1, half);\n            len = half;\n        }\n        WaitVectorToScalar();\n        float s = 0.0f;\n        float e = 0.0f;\n        for (int32_t i = 0; i < 8; ++i) {\n            float v = acc.GetValue(i) + cmp.GetValue(i);\n            float y = v - e;\n            float t = s + y;\n            e = (t - s) - y;\n            s = t;\n        }\n        return s;\n    }\n\n    __aicore__ inline void WriteOut(float cutoff, float scale)\n    {\n        LocalTensor<float> t1 = t1Buf.Get<float>();\n        LocalTensor<float> zero = zeroBuf.Get<float>();\n        LocalTensor<uint8_t> mask = maskBuf.Get<uint8_t>();\n        for (int32_t tile = 0; tile < nTiles; ++tile) {\n            int32_t off = tile * kTile;\n            int32_t cnt = cols - off;\n            if (cnt > kTile) {\n                cnt = kTile;\n            }\n            LocalTensor<float> x = inQ.AllocTensor<float>();\n            DataCopy(x, xGm[off], cnt);\n            inQ.EnQue(x);\n            x = inQ.DeQue<float>();\n            Compares(mask, x, cutoff, CMPMODE::GE, (uint32_t)cnt);\n            Select(t1, mask, x, zero, SELMODE::VSEL_TENSOR_TENSOR_MODE, (uint32_t)cnt);\n            Muls(t1, t1, scale, (uint32_t)cnt);\n            LocalTensor<float> y = outQ.AllocTensor<float>();\n            DataCopy(y, t1, (uint32_t)cnt);\n            outQ.EnQue(y);\n            y = outQ.DeQue<float>();\n            DataCopy(oGm[off], y, (uint32_t)cnt);\n            outQ.FreeTensor(y);\n            inQ.FreeTensor(x);\n        }\n    }\n\n    TPipe pipe;\n    TQue<TPosition::VECIN, 2> inQ;\n    TQue<TPosition::VECOUT, 2> outQ;\n    TBuf<TPosition::VECCALC> accBuf, cmpBuf, t1Buf, t2Buf, zeroBuf, maskBuf;\n    GlobalTensor<float> xGm, oGm, tpGm;\n    int32_t row;\n    int32_t cols;\n    int32_t nTiles;\n};\n\n__global__ __aicore__ void top_p_kernel(GM_ADDR probs, GM_ADDR topP, GM_ADDR out, uint32_t rows, uint32_t cols)\n{\n    TopPOp op;\n    op.Init(probs, topP, out, cols);\n    op.Process();\n}\n\nvoid kernel(const torch::Tensor &probs, const torch::Tensor &topP, torch::Tensor out)\n{\n    const c10::DeviceGuard guard(probs.device());\n    aclrtStream stream = c10_npu::getCurrentNPUStream(probs.get_device()).stream(true);\n    uint32_t rows = (uint32_t)probs.size(0);\n    uint32_t cols = (uint32_t)probs.size(1);\n    top_p_kernel<<<rows, nullptr, stream>>>(\n        (uint8_t *)probs.data_ptr<float>(), (uint8_t *)topP.data_ptr<float>(),\n        (uint8_t *)out.data_ptr<float>(), rows, cols);\n}\n\nPYBIND11_MODULE(TORCH_EXTENSION_NAME, module)\n{\n    module.def(\"kernel\", &kernel);\n}\n"
+  },
+  "validation": null
+}

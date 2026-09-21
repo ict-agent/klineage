@@ -2,11 +2,11 @@
   "kernel": "kda",
   "setting": "with_memory",
   "device": "3",
-  "started_at": "2026-09-20T07:00:42.920377+00:00",
-  "api_response": 101,
-  "evaluate": 1,
-  "versions": 0,
-  "duration_s": 2654.6,
-  "finished_at": "2026-09-20T07:44:57.471263+00:00",
+  "started_at": "2026-09-20T11:22:34.304172+00:00",
+  "api_response": 194,
+  "evaluate": 35,
+  "versions": 35,
+  "duration_s": 6202.5,
+  "finished_at": "2026-09-20T13:05:56.940424+00:00",
   "status": "ok"
 }

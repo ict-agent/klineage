@@ -1,0 +1,12 @@
+{
+  "kernel": "top_p",
+  "setting": "without_memory",
+  "device": "2",
+  "started_at": "2026-09-20T14:06:56.191720+00:00",
+  "api_response": 142,
+  "evaluate": 8,
+  "versions": 8,
+  "duration_s": 6181.0,
+  "finished_at": "2026-09-20T15:49:59.068491+00:00",
+  "status": "ok"
+}

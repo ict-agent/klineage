@@ -1,5 +1,5 @@
 [solution]
-name = "kda-triton"
+name = "kda-ascend-triton"
 definition = "kda"
 author = "klineage"
 

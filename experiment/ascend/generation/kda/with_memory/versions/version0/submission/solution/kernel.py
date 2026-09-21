@@ -1,177 +1,148 @@
-"""Kimi-K3 KDA prefill (B=1, T=4096, H=96, K=V=128) on Ascend 910B1.
+"""Kimi-K3 bounded-gate KDA prefill for Ascend 910B1 (triton-ascend).
 
-Chunked WY / UT-transform form of the bounded-gate delta rule, split in two
-triton-ascend kernels:
+Reference recurrence, per (batch, head), state S in [value, key] layout:
 
-* ``_kda_prepare`` -- per (head, 16-token chunk): L2-normalises q/k, builds the
-  log2-domain gate cumsum and the chunk-local ``Aqk`` / ``A = (I + Akk)^-1``
-  matrices plus the transformed operands ``w``, ``u``, ``qg``, ``kg``.
-* ``_kda_fwdh`` -- per (head, V-block): walks the chunks in order with the fp32
-  state resident in registers, writing the output and the final state.
+    S_t   = decay_t * S_{t-1} + delta_t (x) k_t
+    delta = gain_t * (v_t - (decay_t * S_{t-1}) . k_t)
+    o_t   = S_t . q_t
 
-The per-key gate factor ``2**gk`` can span hundreds of binades inside one chunk
-(the Kimi-K3 bound is -5), so the intra-chunk matrices are formed from the
-separable per-row factors ``2**gk`` / ``2**-gk`` only for a 16-token chunk,
-where both factors stay inside the bf16 exponent range.
+``decay`` is elementwise over the key axis, so the token loop is sequential.
+The kernel splits the state on the value axis and runs one program per
+(value block, head): each program keeps its [BV, D] slice resident and walks
+the token axis once.
 """
-
-from __future__ import annotations
 
 import torch
 import triton
 import triton.language as tl
 
-#: log2(e): carrying the gate in the log2 domain turns decay into ``exp2``.
-LOG2E = tl.constexpr(1.4426950408889634)
-#: The torch reference's normalisation epsilon (inside the sqrt).
-NORM_EPS = tl.constexpr(1e-6)
+NORM_EPS = 1e-6
 
-#: Chunk length and value-block width; both divide the problem exactly.
-BT = 16
-BV = 64
-#: Persistent worker counts (910B1 exposes 24 cube cores).
-PREPARE_WORKERS = 24
-FWDH_WORKERS = 24
+#: Scalar (0-d) host values are read once and remembered per tensor object:
+#: the gate hands the same objects to every timed call, and a device->host
+#: sync inside the timed region would be paid on every sample.
+_SCALARS: dict[int, tuple[object, float]] = {}
 
 
-@triton.jit
-def _kda_prepare(
-    q_ptr, k_ptr, v_ptr, g_ptr, beta_ptr, alog_ptr, dtb_ptr, scale_ptr, lb_ptr,
-    w_ptr, u_ptr, qg_ptr, kg_ptr, aqk_ptr, gkl_ptr,
-    H, NT,
-    K: tl.constexpr, V: tl.constexpr, BT: tl.constexpr,
-):
-    pid = tl.program_id(0)
-    nprog = tl.num_programs(0)
-    o_t = tl.arange(0, BT)
-    o_k = tl.arange(0, K)
-    o_v = tl.arange(0, V)
-    m_causal = o_t[:, None] >= o_t[None, :]
-    m_strict = o_t[:, None] > o_t[None, :]
-    m_eye = o_t[:, None] == o_t[None, :]
-    i_eye = tl.where(m_eye, 1.0, 0.0)
-    scale = tl.load(scale_ptr)
-    lb = tl.load(lb_ptr)
-
-    for task in range(pid, H * NT, nprog):
-        ih = task // NT
-        it = task - ih * NT
-        rows = it * BT + o_t
-        off_k = rows[:, None] * (H * K) + ih * K + o_k[None, :]
-        off_v = rows[:, None] * (H * V) + ih * V + o_v[None, :]
-
-        qf = tl.load(q_ptr + off_k).to(tl.float32)
-        kf = tl.load(k_ptr + off_k).to(tl.float32)
-        bg = tl.load(g_ptr + off_k).to(tl.float32)
-        bv = tl.load(v_ptr + off_v).to(tl.float32)
-        bbeta = tl.load(beta_ptr + rows * H + ih)
-        alog = tl.load(alog_ptr + ih)
-        dtb = tl.load(dtb_ptr + ih * K + o_k)
-
-        qn = qf / tl.sqrt(tl.sum(qf * qf, axis=1) + NORM_EPS)[:, None]
-        kn = kf / tl.sqrt(tl.sum(kf * kf, axis=1) + NORM_EPS)[:, None]
-
-        gate = lb * tl.sigmoid(tl.exp(alog) * (bg + dtb[None, :]))
-        gk = tl.cumsum(gate * LOG2E, axis=0)
-        gkl = tl.sum(tl.where(o_t[:, None] == BT - 1, gk, 0.0), axis=0)
-
-        fq = tl.exp2(gk)
-        fk = tl.exp2(-gk)
-        bs = tl.sigmoid(bbeta)
-
-        kkf = tl.trans((kn * fk).to(tl.bfloat16))
-        Aqk = tl.dot((qn * fq).to(tl.bfloat16), kkf)
-        Akk = tl.dot((kn * fq).to(tl.bfloat16), kkf)
-        Aqk = tl.where(m_causal, Aqk, 0.0) * scale
-        L = tl.where(m_strict, Akk * bs[:, None], 0.0)
-
-        lb_ = L.to(tl.bfloat16)
-        l2 = tl.dot(lb_, lb_).to(tl.bfloat16)
-        l4 = tl.dot(l2, l2).to(tl.bfloat16)
-        l8 = tl.dot(l4, l4).to(tl.bfloat16)
-        Ai = i_eye - L
-        Ai = Ai + tl.dot(Ai.to(tl.bfloat16), l2)
-        Ai = Ai + tl.dot(Ai.to(tl.bfloat16), l4)
-        Ai = Ai + tl.dot(Ai.to(tl.bfloat16), l8)
-        aib = Ai.to(tl.bfloat16)
-
-        bu = tl.dot(aib, (bs[:, None] * bv).to(tl.bfloat16))
-        bw = tl.dot(aib, (bs[:, None] * kn * fq).to(tl.bfloat16))
-        bqg = qn * fq * scale
-        bkg = kn * tl.exp2(gkl[None, :] - gk)
-
-        tl.store(w_ptr + off_k, bw.to(tl.bfloat16))
-        tl.store(u_ptr + off_v, bu.to(tl.bfloat16))
-        tl.store(qg_ptr + off_k, bqg.to(tl.bfloat16))
-        tl.store(kg_ptr + off_k, bkg.to(tl.bfloat16))
-        blk = (it * H + ih) * (BT * BT)
-        tl.store(aqk_ptr + blk + o_t[:, None] * BT + o_t[None, :], Aqk.to(tl.bfloat16))
-        tl.store(gkl_ptr + (it * H + ih) * K + o_k, gkl)
+def _scalar(value) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    key = id(value)
+    entry = _SCALARS.get(key)
+    if entry is not None and entry[0] is value:
+        return entry[1]
+    resolved = (value, float(value))
+    if len(_SCALARS) > 8:
+        _SCALARS.clear()
+    _SCALARS[key] = resolved
+    return resolved[1]
 
 
 @triton.jit
-def _kda_fwdh(
-    w_ptr, u_ptr, qg_ptr, kg_ptr, aqk_ptr, gkl_ptr, h0_ptr, o_ptr, ht_ptr,
-    H, NT,
-    K: tl.constexpr, V: tl.constexpr, BT: tl.constexpr, BV: tl.constexpr,
+def _prepare_kernel(
+    q_ptr,
+    k_ptr,
+    g_ptr,
+    beta_ptr,
+    a_log_ptr,
+    dt_bias_ptr,
+    qn_ptr,
+    kn_ptr,
+    decay_ptr,
+    gain_ptr,
+    scale,
+    lower_bound,
+    T,
+    H: tl.constexpr,
+    D: tl.constexpr,
+    TB: tl.constexpr,
 ):
-    pid = tl.program_id(0)
-    nprog = tl.num_programs(0)
-    NV: tl.constexpr = V // BV
-    o_t = tl.arange(0, BT)
-    o_k = tl.arange(0, K)
-    o_v = tl.arange(0, BV)
+    """Normalise q/k, fold the scale into q, and build decay/gain."""
 
-    for task in range(pid, H * NV, nprog):
-        ih = task // NV
-        iv = task - ih * NV
-        off_v0 = ih * V * K + (iv * BV + o_v)[:, None] * K + o_k[None, :]
-        h = tl.trans(tl.load(h0_ptr + off_v0)).to(tl.float32)
+    pid_t = tl.program_id(0)
+    h = tl.program_id(1)
+    toffs = pid_t * TB + tl.arange(0, TB)
+    doffs = tl.arange(0, D)
+    live = (toffs < T)[:, None]
+    offs = toffs[:, None] * (H * D) + h * D + doffs[None, :]
 
-        for it in range(0, NT):
-            rows = it * BT + o_t
-            off_k = rows[:, None] * (H * K) + ih * K + o_k[None, :]
-            off_v = rows[:, None] * (H * V) + ih * V + iv * BV + o_v[None, :]
-            blk = (it * H + ih) * (BT * BT)
+    b_q = tl.load(q_ptr + offs, mask=live, other=0.0).to(tl.float32)
+    b_qn = b_q * tl.rsqrt(tl.sum(b_q * b_q, 1) + NORM_EPS)[:, None] * scale
+    tl.store(qn_ptr + offs, b_qn, mask=live)
 
-            bw = tl.load(w_ptr + off_k)
-            bqg = tl.load(qg_ptr + off_k)
-            bkg = tl.load(kg_ptr + off_k)
-            bu = tl.load(u_ptr + off_v).to(tl.float32)
-            baqk = tl.load(aqk_ptr + blk + o_t[:, None] * BT + o_t[None, :])
-            gkl = tl.load(gkl_ptr + (it * H + ih) * K + o_k)
+    b_k = tl.load(k_ptr + offs, mask=live, other=0.0).to(tl.float32)
+    b_kn = b_k * tl.rsqrt(tl.sum(b_k * b_k, 1) + NORM_EPS)[:, None]
+    tl.store(kn_ptr + offs, b_kn, mask=live)
 
-            hb = h.to(tl.bfloat16)
-            vn = bu - tl.dot(bw, hb)
-            o = tl.dot(bqg, hb) + tl.dot(baqk, vn.to(tl.bfloat16))
-            h = h * tl.exp2(gkl)[:, None] + tl.dot(tl.trans(bkg), vn.to(tl.bfloat16))
-            tl.store(o_ptr + off_v, o.to(tl.bfloat16))
+    b_g = tl.load(g_ptr + offs, mask=live, other=0.0).to(tl.float32)
+    b_dt = tl.load(dt_bias_ptr + h * D + doffs)
+    a_exp = tl.exp(tl.load(a_log_ptr + h))
+    x = a_exp * (b_g + b_dt[None, :])
+    tl.store(decay_ptr + offs, tl.exp(lower_bound / (1.0 + tl.exp(-x))), mask=live)
 
-        tl.store(ht_ptr + off_v0, tl.trans(h))
+    boffs = toffs * H + h
+    flat = toffs < T
+    b_beta = tl.load(beta_ptr + boffs, mask=flat, other=0.0).to(tl.float32)
+    tl.store(gain_ptr + boffs, 1.0 / (1.0 + tl.exp(-b_beta)), mask=flat)
 
 
-_WORKSPACE: dict = {}
+@triton.jit
+def _kda_recurrent_kernel(
+    qn_ptr,
+    kn_ptr,
+    v_ptr,
+    decay_ptr,
+    gain_ptr,
+    out_ptr,
+    init_ptr,
+    final_ptr,
+    T,
+    H: tl.constexpr,
+    D: tl.constexpr,
+    BV: tl.constexpr,
+):
+    i_v = tl.program_id(0)
+    h = tl.program_id(1)
+    voffs = i_v * BV + tl.arange(0, BV)
+    doffs = tl.arange(0, D)
+    hd = H * D
+
+    b_state = tl.load(init_ptr + h * D * D + voffs[:, None] * D + doffs[None, :])
+
+    p_q = qn_ptr + h * D + doffs
+    p_k = kn_ptr + h * D + doffs
+    p_v = v_ptr + h * D + voffs
+    p_decay = decay_ptr + h * D + doffs
+    p_gain = gain_ptr + h
+    p_out = out_ptr + h * D + voffs
+
+    for t in range(T):
+        b_k = tl.load(p_k)
+        b_state = b_state * tl.load(p_decay)[None, :]
+        b_pred = tl.sum(b_state * b_k[None, :], 1)
+        b_v = tl.load(p_v).to(tl.float32)
+        b_delta = tl.load(p_gain) * (b_v - b_pred)
+        b_state += b_delta[:, None] * b_k[None, :]
+        b_o = tl.sum(b_state * tl.load(p_q)[None, :], 1)
+        tl.store(p_out, b_o.to(out_ptr.dtype.element_ty))
+
+        p_q += hd
+        p_k += hd
+        p_v += hd
+        p_decay += hd
+        p_gain += H
+        p_out += hd
+
+    tl.store(final_ptr + h * D * D + voffs[:, None] * D + doffs[None, :], b_state)
 
 
-def _workspace(T, H, K, V, device):
-    key = (T, H, K, V, BT, str(device))
-    tensors = _WORKSPACE.get(key)
-    if tensors is None:
-        ntk = (T // BT) * H
-        tensors = (
-            torch.empty((T, H, K), dtype=torch.bfloat16, device=device),
-            torch.empty((T, H, V), dtype=torch.bfloat16, device=device),
-            torch.empty((T, H, K), dtype=torch.bfloat16, device=device),
-            torch.empty((T, H, K), dtype=torch.bfloat16, device=device),
-            torch.empty((ntk, BT, BT), dtype=torch.bfloat16, device=device),
-            torch.empty((ntk, K), dtype=torch.float32, device=device),
-        )
-        _WORKSPACE[key] = tensors
-    return tensors
+_PREP_TB = 32
+_BV = 32
+_PREP_WARPS = 4
+_MAIN_WARPS = 2
 
 
 def kernel(q, k, v, g, beta, scale, a_log, dt_bias, lower_bound, initial_state):
-    """Entry point: returns ``(output, final_state)``."""
     q = q.contiguous()
     k = k.contiguous()
     v = v.contiguous()
@@ -181,23 +152,26 @@ def kernel(q, k, v, g, beta, scale, a_log, dt_bias, lower_bound, initial_state):
     dt_bias = dt_bias.contiguous()
     initial_state = initial_state.contiguous()
 
-    B, T, H, K = q.shape
-    V = v.shape[-1]
-    NT = T // BT
+    b, t, h, d = q.shape
+    dev = q.device
+    scale_f = _scalar(scale)
+    lb = _scalar(lower_bound)
 
-    w, u, qg, kg, aqk, gkl = _workspace(T, H, K, V, q.device)
+    qn = torch.empty((b, t, h, d), dtype=torch.float32, device=dev)
+    kn = torch.empty((b, t, h, d), dtype=torch.float32, device=dev)
+    decay = torch.empty((b, t, h, d), dtype=torch.float32, device=dev)
+    gain = torch.empty((b, t, h), dtype=torch.float32, device=dev)
+    out = torch.empty((b, t, h, d), dtype=torch.bfloat16, device=dev)
+    final_state = torch.empty((b, h, d, d), dtype=torch.float32, device=dev)
 
-    _kda_prepare[(PREPARE_WORKERS,)](
-        q, k, v, g, beta, a_log, dt_bias, scale, lower_bound,
-        w, u, qg, kg, aqk, gkl,
-        H, NT,
-        K=K, V=V, BT=BT,
+    _prepare_kernel[(triton.cdiv(t, _PREP_TB), h * b)](
+        q, k, g, beta, a_log, dt_bias, qn, kn, decay, gain, scale_f, lb, t,
+        H=h, D=d, TB=_PREP_TB, num_warps=_PREP_WARPS,
     )
-    output = torch.empty((B, T, H, V), dtype=v.dtype, device=v.device)
-    final_state = torch.empty((B, H, V, K), dtype=torch.float32, device=v.device)
-    _kda_fwdh[(FWDH_WORKERS,)](
-        w, u, qg, kg, aqk, gkl, initial_state, output, final_state,
-        H, NT,
-        K=K, V=V, BT=BT, BV=BV,
+
+    _kda_recurrent_kernel[(d // _BV, h * b)](
+        qn, kn, v, decay, gain, out, initial_state, final_state, t,
+        H=h, D=d, BV=_BV, num_warps=_MAIN_WARPS,
     )
-    return output, final_state
+
+    return out, final_state

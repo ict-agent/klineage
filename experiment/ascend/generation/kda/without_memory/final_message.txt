@@ -1,18 +1,19 @@
-**Result: correct and validated at 37.0x over the torch-npu baseline.**
+Session wrapped. The artifact is unchanged from the best gated version, and I verified the final number once more.
+
+**This continuation's experiments (all measured, none beat the incumbent)**
+- Horner-form solve (same 2-dot count, matvec shapes): 21.10 ms vs 18.76 ms — rejected.
+- 2D grid `(NV, B·H)` instead of a flat grid: 18.78 ms — neutral.
+- `num_stages=1/3`: 18.76/18.78 ms — flag ignored by the backend (same as `num_warps`).
+- Lean gate block (fewer exp/reduce tiles) + m=2 solve: 18.83 ms — no gain.
+- `NV=1` with the m=2 solve, plain and lean: UB overflow at compile — confirmed infeasible (3×128×128 fp32 tiles).
+- Unroll-by-2 chunks: UB overflow — rejected.
+
+**Diagnostics that redirect further effort**
+- The gate times each call with its own event pair and `end.synchronize()`, so the reported latency includes the kernel ramp/drain; steady-state throughput in a saturated queue is 18.8 ms vs 22.3 ms reported. Host launch cost is only 0.17 ms, so there is nothing to shave on the Python side.
+- Ablations show loads are fully hidden (removing V, G or Q/K loads changes nothing) and elementwise work is nearly free; the cost is per-dot fixed latency. Per-chunk dots are already minimal for this algorithm (7: state read, output read, A, Aq, B², delta, state update), the solve is at the accuracy frontier (m=1 fails, m=2 has ~11× margin verified on three seeds), and `C=64` would not reduce the dot count per token while overflowing the UB.
 
 **Final artifact**
-- `work/submission/config.toml` — `language = "python"`, `entry_point = "kernel.py::kernel"`.
-- `work/submission/solution/kernel.py` — one triton program per `(head, value-block)`, FP32 state held across a sequential token loop; `decay`, query/key L2 normalisation and `sigmoid(beta)` are recomputed in-kernel so the timed path is a single launch.
-- Snapshotted to `work/versions/version0/`.
+- `work/submission/config.toml` + `work/submission/solution/kernel.py` (chunked C=32, NV=2, centred decay frame, `(I−B)(I+B²)` solve), snapshot `work/versions/version9/`.
+- Gate: `correctness_passed=true`, `baseline_ms=1667.08`, `speedup=74.72`.
 
-**Measured (official gate, `.venv/bin/python scripts/ascend/eval.py --work work --device 2`)**
-- `latency_ms` 43.97, `baseline_ms` 1628.23, `speedup` 37.028, `correctness_passed` true, `triton_launches` 181.
-
-**What I found along the way**
-- The `Ascend910B1` reports 24 cube cores / 48 vector cores, 192MB L2. On this triton-ascend build a `tl.dot` costs ~60–90ns regardless of size, so kernel time tracks `(#programs × #chunks × #dots)`.
-- I built and validated a full chunked delta-rule kernel (in `work/dev/kernel_chunked_vp2.py`): in-chunk cumulative log-decay, `M`/`G` correlation matrices, exact 16×16 unit-lower inverse by the doubling identity, one state matmul per 16 tokens. It is numerically correct (matches the reference to `1e-4`), but its ~14 dots/chunk made it 46ms — no faster than the direct loop — and the `VP=1` (no duplicated work) variant exceeds the 192KB UB.
-- Two backend quirks worth noting for future work: module-level constants must be `tl.constexpr(...)`, and a `tl.store` that reuses the pointer tensor from an earlier load is silently dropped (recomputing the pointer fixed it).
-
-**Next steps if more budget were available**: the chunked kernel needs its per-chunk dot count cut (stack the `M`/`G` and `pred`/`out` operands, drop the cumsum dot) and a larger chunk with the banded/cross-factor decay treatment, which should land in the 5–10ms range.
-
-Final measured latency: **43.97 ms** (baseline 1628.23 ms, 37.0x speedup).
+Final measured latency: **22.31 ms**.

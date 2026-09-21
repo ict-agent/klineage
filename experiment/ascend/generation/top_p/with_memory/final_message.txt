@@ -1,0 +1,19 @@
+All three confirmation gates on the frozen submission pass. Final state is in place.
+
+**Result**
+- Submission: `work/submission/config.toml` (`language = "ascendc"`, `entry_point = "kernel.asc::kernel"`) + `work/submission/solution/kernel.asc`, snapshotted as `work/versions/version11/`.
+- Baseline (torch-npu, same timer): `4.5922 ms`. This session took it from **0.5004 ms → 0.248–0.261 ms** (~2x over the inherited version, ~5.4x better than v1's start point).
+
+**Design that landed**
+- Pass 0: row min/max gives an exact, valid key bracket `[bits(min), bits(max)+1]` — 16x tighter than `[0, +inf)`, removing four full-row probe rounds.
+- Phase A: 6 midpoint probes in float-bit (key) space; each round streams the row in 4096-element tiles, accumulates `Σ x·[x ≥ probe]` with `Compares`/`Select`/`Add`, tree-reduces lane partials to 8 lanes, finishes with a Neumaier-compensated scalar sum, and tests `loS >= top - hiS` exactly (Sterbenz) — no fp64 is available on the aicore.
+- Phase B: one `GatherMask` pass compacts every element with key in `[lo, hi)` into an 8K-value UB band (2 compares + `And` + count-mode `GatherMask` with `{1,1,8,8}`).
+- Phase C: the remaining ~21 bits of bisection run entirely in UB on the band, merging the band sum with `S(hi)` as a compensated pair.
+- Phase D: mask with the exact cutoff key and renormalize by `1/S(cutoff)`.
+
+**Key findings**
+- `GatherMask` in `reduceMode` uses `mask` as the *element count* (`repeatTimes` must be 1) — passing repeats there corrupted UB and failed the first gate.
+- The compensated scalar finish is precision-critical: `kLanes=4` broke the exact-support match, `kLanes=8` passes with margin.
+- Remaining cost is dominated by 6 memory-bound row passes; band buffer size (UB) caps how far the coarse phase can be shortened, and each gate re-measured within ~±3% run-to-run noise.
+
+Final measured latency: **0.2540699988603592 ms** (speedup 18.08x; best gated sample on this same artifact 0.24813000112771988 ms, 18.51x).

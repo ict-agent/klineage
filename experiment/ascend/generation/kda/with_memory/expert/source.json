@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/vllm-project/vllm-ascend",
+  "revision": "v0.23.0",
+  "commit": "5cb98caaaadeff42b5b62b996e34bb2aaa29d20fd",
+  "source_path": "vllm_ascend/ops/triton/kda",
+  "files": [
+    "vllm_ascend/ops/triton/kda/__init__.py",
+    "vllm_ascend/ops/triton/kda/chunk_delta_h.py",
+    "vllm_ascend/ops/triton/kda/cumsum.py",
+    "vllm_ascend/ops/triton/kda/fused_recurrent_kda.py",
+    "vllm_ascend/ops/triton/kda/kda.py",
+    "vllm_ascend/ops/triton/kda/l2norm.py",
+    "vllm_ascend/ops/triton/kda/solve_tril.py",
+    "vllm_ascend/ops/triton/kda/utils.py"
+  ]
+}
