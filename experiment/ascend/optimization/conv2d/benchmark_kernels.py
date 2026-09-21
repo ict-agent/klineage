@@ -136,8 +136,7 @@ def main():
                         "all_kernels": "Sum all device tasks per full ABI invocation: baseline weight/output conversions and CANN internal formats; candidate padding/convolution/crop; excludes gaps/Python.",
                         "input": "Both implementations consume the same NHWC input and flattened HWCF weights and return contiguous NHWC output."}}
     args.output.write_text(json.dumps(report, indent=2) + "\n")
-    print(json.dumps({"core_speedup": report["core_speedup"],
-                      "all_device_kernels_speedup": report["all_device_kernels_speedup"]}), flush=True)
+    print(json.dumps({"core_speedup": report["core_speedup"]}), flush=True)
 
 
 if __name__ == "__main__":
