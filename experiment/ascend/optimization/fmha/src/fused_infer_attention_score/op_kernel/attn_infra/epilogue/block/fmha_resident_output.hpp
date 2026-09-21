@@ -5,7 +5,7 @@
 
 namespace NpuArch::Epilogue::Block {
 
-// Fixed-shape online-attention output state. The 128 rows owned by this AIV
+// Tile-local online-attention output state. The 128 rows owned by this AIV
 // remain in UB from the first PV tile until the final normalization/store.
 // The update is vectorized over all rows; only final FP16 stores are chunked.
 template<class ArchTag>

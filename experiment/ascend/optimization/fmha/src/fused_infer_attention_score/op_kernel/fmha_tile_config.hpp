@@ -1,26 +1,16 @@
-#ifndef FMHA_FIXED_CASE_HPP
-#define FMHA_FIXED_CASE_HPP
+#ifndef FMHA_TILE_CONFIG_HPP
+#define FMHA_TILE_CONFIG_HPP
 
 namespace KernelCommon {
-// The Python entry validates this ABI before dispatch. Keeping geometry,
-// task mapping and workspace strides together prevents independently changing
-// one tile dimension while leaving an old task count or buffer stride behind.
-struct FmhaFixedCase {
-    static constexpr uint32_t BATCH = 8;
-    static constexpr uint32_t HEADS = 64;
-    static constexpr uint32_t SEQUENCE = 2048;
+// The wrapper validates the resident-path ABI. Hardware tile geometry and
+// workspace strides stay together; batch, heads and sequence are runtime data.
+struct FmhaTileConfig {
     static constexpr uint32_t DIM = 128;
     static constexpr uint32_t Q_TILE = 256;
     static constexpr uint32_t KV_TILE = 512;
     static constexpr uint32_t AIC_COUNT = 24;
     static constexpr uint32_t LOOKAHEAD = 2;
     static constexpr uint32_t SLOTS = LOOKAHEAD + 1;
-    static constexpr uint32_t Q_BLOCKS = SEQUENCE / Q_TILE;
-    static constexpr uint32_t KV_BLOCKS = SEQUENCE / KV_TILE;
-    static constexpr uint32_t TASKS_PER_BATCH = HEADS * Q_BLOCKS;
-    static constexpr uint32_t TASKS = BATCH * TASKS_PER_BATCH;
-    static constexpr uint32_t TOKENS = BATCH * SEQUENCE;
-    static constexpr uint32_t TOKEN_STRIDE = HEADS * DIM;
     static constexpr uint64_t SCORE_SLOT_ELEMENTS = Q_TILE * KV_TILE;
     static constexpr uint64_t OUTPUT_SLOT_ELEMENTS = Q_TILE * DIM;
     static constexpr uint64_t SCORE_BYTES = AIC_COUNT * SLOTS * SCORE_SLOT_ELEMENTS * sizeof(float);
@@ -34,18 +24,14 @@ struct FmhaFixedCase {
         uint32_t queryBlock;
     };
 
-    __aicore__ static inline Task decode(uint32_t index)
+    __aicore__ static inline Task decode(uint32_t index, uint32_t heads, uint32_t tasksPerBatch)
     {
         // Preserve the accepted head-fast ordering, without scanning ragged
         // sequence boundaries or reading cumulative lengths for each task.
-        return {index / TASKS_PER_BATCH, index % HEADS,
-                (index % TASKS_PER_BATCH) / HEADS};
+        return {index / tasksPerBatch, index % heads,
+                (index % tasksPerBatch) / heads};
     }
 
-    static_assert(SEQUENCE % Q_TILE == 0 && SEQUENCE % KV_TILE == 0,
-                  "This specialization has no tail blocks");
-    static_assert(LOOKAHEAD > 0 && LOOKAHEAD < KV_BLOCKS,
-                  "The fixed pipeline must have a nonempty steady state");
     static_assert(WORKSPACE_BYTES <= 88ULL * 1024 * 1024,
                   "Must fit the official host-allocated workspace");
 };

@@ -17,7 +17,7 @@
 #define KERNEL_COMMON
 
 #include "attn_infra/fused_base_defs.hpp"
-#include "fmha_fixed_case.hpp"
+#include "fmha_tile_config.hpp"
 #include "attn_infra/arch/fused_arch.hpp"
 #include "attn_infra/layout/fused_layout.hpp"
 
@@ -42,10 +42,10 @@ namespace KernelCommon {
     constexpr uint32_t QK_READY_ID = 1;
     constexpr uint32_t SOFTMAX_READY_ID = 2;
     constexpr uint32_t PV_READY_ID = 3;
-    constexpr uint32_t PRE_LAUNCH = FmhaFixedCase::LOOKAHEAD;
+    constexpr uint32_t PRE_LAUNCH = FmhaTileConfig::LOOKAHEAD;
     constexpr uint32_t N_SPLIT_HELPER = 2;
-    constexpr uint32_t MAX_KV_STACK_LEN = FmhaFixedCase::KV_TILE;
-    constexpr uint32_t Q_TILE_CEIL = FmhaFixedCase::Q_TILE;
+    constexpr uint32_t MAX_KV_STACK_LEN = FmhaTileConfig::KV_TILE;
+    constexpr uint32_t Q_TILE_CEIL = FmhaTileConfig::Q_TILE;
     constexpr uint32_t WORKSPACE_BLOCK_SIZE_DB = Q_TILE_CEIL * MAX_KV_STACK_LEN;
     constexpr uint32_t L1_MAX_SIZE = 524288;
     constexpr uint32_t L1_MAX_N_NUM = 128;

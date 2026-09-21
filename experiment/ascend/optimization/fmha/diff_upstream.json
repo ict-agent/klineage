@@ -1,5 +1,5 @@
 {
-  "method": "git diff --no-index",
+  "method": "git diff --no-index --no-renames",
   "files": [
     {
       "file": "op_kernel/attn_infra/epilogue/block/fmha_fixed_ub_layout.hpp",
@@ -33,15 +33,15 @@
     },
     {
       "file": "op_kernel/flash_attention_regular.h",
-      "added": 73,
-      "deleted": 24
+      "added": 51,
+      "deleted": 18
     },
     {
-      "file": "op_kernel/fmha_fixed_case.hpp",
-      "added": 53,
+      "file": "op_kernel/fmha_tile_config.hpp",
+      "added": 39,
       "deleted": 0
     }
   ],
-  "added": 371,
-  "deleted": 48
+  "added": 335,
+  "deleted": 42
 }

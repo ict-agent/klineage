@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and validate this fixed-shape artifact from any working directory.
+# Build and validate this packed-attention artifact from any working directory.
 set -eo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export ASCEND_HOME_PATH="${ASCEND_HOME_PATH:-/usr/local/Ascend/cann-9.1.0}"
@@ -16,3 +16,4 @@ command -v asc_opc >/dev/null || { echo 'CANN 9.1.0 development tools (asc_opc) 
 mkdir -p results/latest
 "$PYTHON" build.py 2>&1 | tee results/latest/build.log
 "$PYTHON" benchmark.py --oracle "$@" 2>&1 | tee results/latest/benchmark.log
+"$PYTHON" check_shapes.py 2>&1 | tee results/latest/shapes.log

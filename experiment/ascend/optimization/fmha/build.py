@@ -1,4 +1,4 @@
-"""Build the fixed-shape FIA kernel and private OPP roots on Ascend 910B1/CANN 9.1."""
+"""Build the shape-dispatched FIA kernel and private OPP roots on Ascend 910B1/CANN 9.1."""
 from enum import Enum
 import hashlib
 import json
@@ -81,7 +81,7 @@ def main():
     make_root(ROOT/'opp_baseline', Role.BASELINE)
     make_root(ROOT/'opp_candidate', Role.CANDIDATE)
     metadata = dict(tiling_key=TILING_KEY, shape=[16384,64,128],
-                    variant='final', source_sha256=source_sha256,
+                    variant='generalized', source_sha256=source_sha256,
                     compile_param_sha256=hashlib.sha256((ROOT/'compile_param.json').read_bytes()).hexdigest(),
                     sequence_lengths=[2048]*8, soc='Ascend910B1', cann=str(CANN),
                     baseline_sha256=baseline_sha256,

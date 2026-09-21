@@ -1,28 +1,28 @@
-diff --git a/op_kernel/attn_infra/epilogue/block/fmha_fixed_ub_layout.hpp b/op_kernel/attn_infra/epilogue/block/fmha_fixed_ub_layout.hpp
+diff --git a/b/op_kernel/attn_infra/epilogue/block/fmha_fixed_ub_layout.hpp b/op_kernel/attn_infra/epilogue/block/fmha_fixed_ub_layout.hpp
 new file mode 100644
-index 0000000..7db12ff
+index 0000000..3fcdec9
 --- /dev/null
 +++ b/op_kernel/attn_infra/epilogue/block/fmha_fixed_ub_layout.hpp
 @@ -0,0 +1,40 @@
 +#ifndef FMHA_FIXED_UB_LAYOUT_HPP
 +#define FMHA_FIXED_UB_LAYOUT_HPP
 +
-+#include "../../../fmha_fixed_case.hpp"
++#include "../../../fmha_tile_config.hpp"
 +
 +// Shared contract between online softmax and the resident-output epilogue.
 +// All offsets are bytes. This layout is specific to Q256/KV512/D128 on 910B.
 +namespace NpuArch::Epilogue::Block {
 +struct FmhaFixedUbLayout {
 +    static constexpr uint32_t KIB = 1024;
-+    static constexpr uint32_t Q_ROWS = KernelCommon::FmhaFixedCase::Q_TILE;
++    static constexpr uint32_t Q_ROWS = KernelCommon::FmhaTileConfig::Q_TILE;
 +    static constexpr uint32_t ROWS_PER_AIV = Q_ROWS / 2;
-+    static constexpr uint32_t HEAD_DIM = KernelCommon::FmhaFixedCase::DIM;
++    static constexpr uint32_t HEAD_DIM = KernelCommon::FmhaTileConfig::DIM;
 +    static constexpr uint32_t STORE_ROWS = 64;
 +    static constexpr uint32_t STATS_ROWS = ROWS_PER_AIV;
-+    static constexpr uint32_t PIPE_SLOTS = KernelCommon::FmhaFixedCase::SLOTS;
++    static constexpr uint32_t PIPE_SLOTS = KernelCommon::FmhaTileConfig::SLOTS;
 +
 +    // S and P retain their original double buffers. They are live while
-+    // running O survives across all four KV iterations of this Q task.
++    // running O survives across all KV iterations of this Q task.
 +    static constexpr uint32_t SCORE = 0;
 +    static constexpr uint32_t PROBABILITY = 64 * KIB;
 +    static constexpr uint32_t OUTPUT_STAGING = 96 * KIB;
@@ -44,9 +44,9 @@ index 0000000..7db12ff
 +};
 +} // namespace NpuArch::Epilogue::Block
 +#endif
-diff --git a/op_kernel/attn_infra/epilogue/block/fmha_resident_output.hpp b/op_kernel/attn_infra/epilogue/block/fmha_resident_output.hpp
+diff --git a/b/op_kernel/attn_infra/epilogue/block/fmha_resident_output.hpp b/op_kernel/attn_infra/epilogue/block/fmha_resident_output.hpp
 new file mode 100644
-index 0000000..03f5023
+index 0000000..841b20a
 --- /dev/null
 +++ b/op_kernel/attn_infra/epilogue/block/fmha_resident_output.hpp
 @@ -0,0 +1,180 @@
@@ -57,7 +57,7 @@ index 0000000..03f5023
 +
 +namespace NpuArch::Epilogue::Block {
 +
-+// Fixed-shape online-attention output state. The 128 rows owned by this AIV
++// Tile-local online-attention output state. The 128 rows owned by this AIV
 +// remain in UB from the first PV tile until the final normalization/store.
 +// The update is vectorized over all rows; only final FP16 stores are chunked.
 +template<class ArchTag>
@@ -337,14 +337,14 @@ index 8906dc4..2de6cf6 100644
          if (len == VECTOR_SIZE || len == 0) {
              AscendC::SetVectorMask<int8_t>((uint64_t)(-1), (uint64_t)(-1));
 diff --git a/op_kernel/fia_kernel_common.hpp b/op_kernel/fia_kernel_common.hpp
-index 3841eae..5c854cb 100644
+index 3841eae..4d98c3c 100644
 --- a/op_kernel/fia_kernel_common.hpp
 +++ b/op_kernel/fia_kernel_common.hpp
 @@ -17,6 +17,7 @@
  #define KERNEL_COMMON
  
  #include "attn_infra/fused_base_defs.hpp"
-+#include "fmha_fixed_case.hpp"
++#include "fmha_tile_config.hpp"
  #include "attn_infra/arch/fused_arch.hpp"
  #include "attn_infra/layout/fused_layout.hpp"
  
@@ -353,24 +353,24 @@ index 3841eae..5c854cb 100644
      constexpr uint32_t SOFTMAX_READY_ID = 2;
      constexpr uint32_t PV_READY_ID = 3;
 -    constexpr uint32_t PRE_LAUNCH = 2;
-+    constexpr uint32_t PRE_LAUNCH = FmhaFixedCase::LOOKAHEAD;
++    constexpr uint32_t PRE_LAUNCH = FmhaTileConfig::LOOKAHEAD;
      constexpr uint32_t N_SPLIT_HELPER = 2;
 -    constexpr uint32_t MAX_KV_STACK_LEN = 512;
 -    constexpr uint32_t Q_TILE_CEIL = 128;
-+    constexpr uint32_t MAX_KV_STACK_LEN = FmhaFixedCase::KV_TILE;
-+    constexpr uint32_t Q_TILE_CEIL = FmhaFixedCase::Q_TILE;
++    constexpr uint32_t MAX_KV_STACK_LEN = FmhaTileConfig::KV_TILE;
++    constexpr uint32_t Q_TILE_CEIL = FmhaTileConfig::Q_TILE;
      constexpr uint32_t WORKSPACE_BLOCK_SIZE_DB = Q_TILE_CEIL * MAX_KV_STACK_LEN;
      constexpr uint32_t L1_MAX_SIZE = 524288;
      constexpr uint32_t L1_MAX_N_NUM = 128;
 diff --git a/op_kernel/flash_attention_regular.h b/op_kernel/flash_attention_regular.h
-index 5c77482..f860ca9 100644
+index 5c77482..0ee3410 100644
 --- a/op_kernel/flash_attention_regular.h
 +++ b/op_kernel/flash_attention_regular.h
 @@ -16,6 +16,8 @@
  #define FLASH_ATTENTION_REGULAR_H
  
  #include "fia_kernel_common.hpp"
-+#include "fmha_fixed_case.hpp"
++#include "fmha_tile_config.hpp"
 +#include "attn_infra/epilogue/block/fmha_resident_output.hpp"
  
  using namespace KernelCommon;
@@ -385,10 +385,10 @@ index 5c77482..f860ca9 100644
 +            LSE_MODE == Epilogue::LseMode::NONE && SINK_MODE == Epilogue::SinkMode::DISABLE &&
 +            std::is_same_v<ElementO, half>;
 +
-+        using Fixed = FmhaFixedCase;
++        using Tile = FmhaTileConfig;
 +        static_assert(!USE_RESIDENT_OUTPUT ||
-+            (PRE_LAUNCH == Fixed::LOOKAHEAD && MAX_KV_STACK_LEN == Fixed::KV_TILE && Q_TILE_CEIL == Fixed::Q_TILE),
-+            "The resident epilogue requires the fixed four-block pipeline");
++            (PRE_LAUNCH == Tile::LOOKAHEAD && MAX_KV_STACK_LEN == Tile::KV_TILE && Q_TILE_CEIL == Tile::Q_TILE),
++            "The resident epilogue requires Q256/KV512 with lookahead two");
 +
          struct GlobalTensorBundle {
              AscendC::GlobalTensor<ElementQ>& gQ;
@@ -400,9 +400,9 @@ index 5c77482..f860ca9 100644
 -            mm1OutSize = fATilingData->mm1OutSize;
 -            smOnlineOutSize = fATilingData->smOnlineOutSize;
 -            mm2OutSize = fATilingData->mm2OutSize;
-+            mm1OutSize = Fixed::SCORE_BYTES;
-+            smOnlineOutSize = Fixed::PROBABILITY_BYTES;
-+            mm2OutSize = Fixed::PARTIAL_OUTPUT_BYTES;
++            mm1OutSize = AscendC::GetBlockNum() * Tile::SLOTS * Tile::SCORE_SLOT_ELEMENTS * sizeof(float);
++            smOnlineOutSize = AscendC::GetBlockNum() * Tile::SLOTS * Tile::SCORE_SLOT_ELEMENTS * sizeof(half);
++            mm2OutSize = AscendC::GetBlockNum() * Tile::SLOTS * Tile::OUTPUT_SLOT_ELEMENTS * sizeof(float);
              batch = fATilingData->batch;
              qHeads = fATilingData->numHeads;
              kvHeads = fATilingData->kvHeads;
@@ -417,23 +417,7 @@ index 5c77482..f860ca9 100644
              blockSize = fATilingData->blockSize;
              maskType = fATilingData->maskType;
              scaleValue = fATilingData->scaleValue;
-@@ -114,6 +127,15 @@ namespace SplitFuse {
-             nextToken = fATilingData->nextToken;
-             pseQ = fATilingData->pseQ;
-             pseKv = fATilingData->pseKv;
-+            if constexpr (USE_RESIDENT_OUTPUT) {
-+                batch = Fixed::BATCH;
-+                qHeads = kvHeads = Fixed::HEADS;
-+                embed = embedV = Fixed::DIM;
-+                firstBatchTaskNum = Fixed::TASKS_PER_BATCH;
-+                totalTaskNum = Fixed::TASKS;
-+                maskType = 0;
-+                sparseMode = 0;
-+            }
-             uint64_t Lsesize = 0;
-             uint64_t Losize = 0;
-             if constexpr (IS_FD) {
-@@ -230,6 +252,9 @@ namespace SplitFuse {
+@@ -230,6 +243,9 @@ namespace SplitFuse {
  
              epilogueOnlineSoftmax.init(resource, scaleValue);
              epilogueRescaleO.init(resource);
@@ -443,101 +427,82 @@ index 5c77482..f860ca9 100644
              epilogueInitOut.init(resource);
  
              coreIdx = AscendC::GetBlockIdx() / AscendC::GetSubBlockNum();
-@@ -242,7 +267,11 @@ namespace SplitFuse {
-             embedRoundV = NpuArch::Detail::Alignment::RoundUp(embedV, FaiKernel::BLOCK_SIZE);
+@@ -243,6 +259,13 @@ namespace SplitFuse {
              groupSize = qHeads / kvHeads;
  
--            totalQTokens = static_cast<uint32_t>(gActualQseqlen.GetValue(batch - 1));
+             totalQTokens = static_cast<uint32_t>(gActualQseqlen.GetValue(batch - 1));
 +            if constexpr (USE_RESIDENT_OUTPUT) {
-+                totalQTokens = Fixed::TOKENS;
-+            } else {
-+                totalQTokens = static_cast<uint32_t>(gActualQseqlen.GetValue(batch - 1));
++                // The wrapper admits uniform, aligned sequences on this path.
++                // Read runtime geometry; only the hardware tile stays fixed.
++                const uint32_t sequence = static_cast<uint32_t>(gActualQseqlen.GetValue(0));
++                firstBatchTaskNum = qHeads * (sequence / Tile::Q_TILE);
++                totalTaskNum = batch * firstBatchTaskNum;
 +            }
  
              if constexpr (IS_FD) {
                  uint32_t startBIdx = fATilingData->coreInfo.startBIdx[coreIdx];
-@@ -313,6 +342,12 @@ namespace SplitFuse {
+@@ -313,6 +336,12 @@ namespace SplitFuse {
                          }
                      }
                  }
 +            } else if constexpr (USE_RESIDENT_OUTPUT) {
-+                for (uint32_t taskIdx = coreIdx; taskIdx < Fixed::TASKS; taskIdx += coreNum) {
-+                    const auto task = Fixed::decode(taskIdx);
++                for (uint32_t taskIdx = coreIdx; taskIdx < totalTaskNum; taskIdx += coreNum) {
++                    const auto task = Tile::decode(taskIdx, qHeads, firstBatchTaskNum);
 +                    runMainLoop(coreIdx, task.batch, task.head, task.queryBlock,
 +                        false, 0, 0, 0, 0, globalTensors, pseQ, pseKv);
 +                }
              } else {
                  for (uint32_t taskIdx = coreIdx; taskIdx < totalTaskNum; taskIdx += uint32_t(coreNum)) {
                      uint32_t curBatchTmp = 0;
-@@ -469,20 +504,27 @@ namespace SplitFuse {
-             auto& gOUpdate = globalTensors.gOUpdate;
-             auto& gSink = globalTensors.gSink;
- 
--            uint32_t qSeqlen = static_cast<uint32_t>(gActualQseqlen.GetValue(BIdx));
--            uint32_t kvSeqlen = static_cast<uint32_t>(gActualKvseqlen.GetValue(BIdx));
--            uint32_t prevQSeqlenSum = 0;
--            uint32_t prevKvSeqlenSum = 0;
+@@ -473,15 +502,12 @@ namespace SplitFuse {
+             uint32_t kvSeqlen = static_cast<uint32_t>(gActualKvseqlen.GetValue(BIdx));
+             uint32_t prevQSeqlenSum = 0;
+             uint32_t prevKvSeqlenSum = 0;
 -
 -            if constexpr(INPUT_LAYOUT == FaiKernel::inputLayout::TND) {
 -                prevQSeqlenSum = (BIdx == 0) ?
 -                    0 : static_cast<uint32_t>(gActualQseqlen.GetValue(BIdx - 1));
 -                qSeqlen = qSeqlen - prevQSeqlenSum;
--                if constexpr (!PAGED_CACHE_FLAG) {
++            if constexpr (INPUT_LAYOUT == FaiKernel::inputLayout::TND) {
++                prevQSeqlenSum = BIdx == 0 ? 0 : static_cast<uint32_t>(gActualQseqlen.GetValue(BIdx - 1));
++                qSeqlen -= prevQSeqlenSum;
+                 if constexpr (!PAGED_CACHE_FLAG) {
 -                    prevKvSeqlenSum = (BIdx == 0) ?
 -                        0 : static_cast<uint32_t>(gActualKvseqlen.GetValue(BIdx - 1));
 -                    kvSeqlen = kvSeqlen - prevKvSeqlenSum;
-+            uint32_t qSeqlen = Fixed::SEQUENCE;
-+            uint32_t kvSeqlen = Fixed::SEQUENCE;
-+            uint32_t prevQSeqlenSum = BIdx * Fixed::SEQUENCE;
-+            uint32_t prevKvSeqlenSum = prevQSeqlenSum;
-+            if constexpr (!USE_RESIDENT_OUTPUT) {
-+                qSeqlen = static_cast<uint32_t>(gActualQseqlen.GetValue(BIdx));
-+                kvSeqlen = static_cast<uint32_t>(gActualKvseqlen.GetValue(BIdx));
-+                prevQSeqlenSum = 0;
-+                prevKvSeqlenSum = 0;
-+    
-+                if constexpr(INPUT_LAYOUT == FaiKernel::inputLayout::TND) {
-+                    prevQSeqlenSum = (BIdx == 0) ?
-+                        0 : static_cast<uint32_t>(gActualQseqlen.GetValue(BIdx - 1));
-+                    qSeqlen = qSeqlen - prevQSeqlenSum;
-+                    if constexpr (!PAGED_CACHE_FLAG) {
-+                        prevKvSeqlenSum = (BIdx == 0) ?
-+                            0 : static_cast<uint32_t>(gActualKvseqlen.GetValue(BIdx - 1));
-+                        kvSeqlen = kvSeqlen - prevKvSeqlenSum;
-+                    }
++                    prevKvSeqlenSum = BIdx == 0 ? 0 : static_cast<uint32_t>(gActualKvseqlen.GetValue(BIdx - 1));
++                    kvSeqlen -= prevKvSeqlenSum;
                  }
-+    
              }
  
-             uint64_t qBOffset = static_cast<uint64_t>(prevQSeqlenSum) * strideQ;
-@@ -545,7 +587,9 @@ namespace SplitFuse {
+@@ -545,7 +571,9 @@ namespace SplitFuse {
              int32_t delEndRow = qSeqlen;
              bool startsWithMaskTile = false;
              bool startsWithMaskThenNomaskFlag = false;
 -            if constexpr (IS_FD) {
 +            if constexpr (USE_RESIDENT_OUTPUT) {
-+                kvSLoopNumTotal = Fixed::KV_BLOCKS;
++                kvSLoopNumTotal = kvSeqlen / Tile::KV_TILE;
 +            } else if constexpr (IS_FD) {
                  noSkipKvS = kvSeqlen;
                  if (maskType != 0U) {
                      int64_t diffS = kvSeqlen - qSeqlen;
-@@ -934,8 +978,8 @@ namespace SplitFuse {
+@@ -934,8 +962,8 @@ namespace SplitFuse {
                          }
                          uint32_t curStackTileMod = (stackSeqCount - PRE_LAUNCH) % (PRE_LAUNCH + 1U);
                          uint64_t gmOffsetOTmp =
 -                            static_cast<uint64_t>(coreIdx) * WORKSPACE_BLOCK_SIZE_DB * (PRE_LAUNCH + 1U) +
 -                            static_cast<uint64_t>(curStackTileMod) * WORKSPACE_BLOCK_SIZE_DB;
-+                            static_cast<uint64_t>(coreIdx) * Fixed::OUTPUT_SLOT_ELEMENTS * (PRE_LAUNCH + 1U) +
-+                            static_cast<uint64_t>(curStackTileMod) * Fixed::OUTPUT_SLOT_ELEMENTS;
++                            static_cast<uint64_t>(coreIdx) * Tile::OUTPUT_SLOT_ELEMENTS * (PRE_LAUNCH + 1U) +
++                            static_cast<uint64_t>(curStackTileMod) * Tile::OUTPUT_SLOT_ELEMENTS;
                          GemmCoord actualBlockShapePV{rowNum, embedV, stackSeqTile};
                          LayoutOTmp layoutOTmp(rowNum, embedV, embedRoundV);
  #ifdef __DAV_C220_CUBE__
-@@ -984,10 +1028,14 @@ namespace SplitFuse {
+@@ -984,10 +1012,14 @@ namespace SplitFuse {
                          LayoutO layoutO(qSeqlen, embed * qHeads);
                          LayoutUpdate layoutUpdate(rowNum, embed, embedRound);
                          LayoutLse layoutLse(totalQTokens, qHeads);
 -                        uint64_t gmOffsetUpdate = static_cast<uint64_t>(coreIdx) * WORKSPACE_BLOCK_SIZE_DB;
-+                        uint64_t gmOffsetUpdate = static_cast<uint64_t>(coreIdx) * Fixed::OUTPUT_SLOT_ELEMENTS;
++                        uint64_t gmOffsetUpdate = static_cast<uint64_t>(coreIdx) * Tile::OUTPUT_SLOT_ELEMENTS;
                          Arch::CrossCoreWaitFlag(pvReady);
  
 -                        if constexpr (IS_FD) {
@@ -549,7 +514,7 @@ index 5c77482..f860ca9 100644
                              LayoutLse layoutgmLse(qSBlockSize, qNBlockSize);
                              LayoutLse layoutgmLo(qSBlockSize, embed * qNBlockSize);
                              typename EpilogueRescaleO::SplitKVParams splitParams;
-@@ -1085,6 +1133,7 @@ namespace SplitFuse {
+@@ -1085,6 +1117,7 @@ namespace SplitFuse {
          BlockMmadQK blockMmadQK;
          BlockMmadPV blockMmadPV;
          EpilogueRescaleO epilogueRescaleO;
@@ -557,35 +522,25 @@ index 5c77482..f860ca9 100644
          EpilogueInitOut epilogueInitOut;
          EpilogueOnlineSoftmax epilogueOnlineSoftmax;
      };
-diff --git a/op_kernel/fmha_fixed_case.hpp b/op_kernel/fmha_fixed_case.hpp
+diff --git a/b/op_kernel/fmha_tile_config.hpp b/op_kernel/fmha_tile_config.hpp
 new file mode 100644
-index 0000000..9aeb483
+index 0000000..218ef3a
 --- /dev/null
-+++ b/op_kernel/fmha_fixed_case.hpp
-@@ -0,0 +1,53 @@
-+#ifndef FMHA_FIXED_CASE_HPP
-+#define FMHA_FIXED_CASE_HPP
++++ b/op_kernel/fmha_tile_config.hpp
+@@ -0,0 +1,39 @@
++#ifndef FMHA_TILE_CONFIG_HPP
++#define FMHA_TILE_CONFIG_HPP
 +
 +namespace KernelCommon {
-+// The Python entry validates this ABI before dispatch. Keeping geometry,
-+// task mapping and workspace strides together prevents independently changing
-+// one tile dimension while leaving an old task count or buffer stride behind.
-+struct FmhaFixedCase {
-+    static constexpr uint32_t BATCH = 8;
-+    static constexpr uint32_t HEADS = 64;
-+    static constexpr uint32_t SEQUENCE = 2048;
++// The wrapper validates the resident-path ABI. Hardware tile geometry and
++// workspace strides stay together; batch, heads and sequence are runtime data.
++struct FmhaTileConfig {
 +    static constexpr uint32_t DIM = 128;
 +    static constexpr uint32_t Q_TILE = 256;
 +    static constexpr uint32_t KV_TILE = 512;
 +    static constexpr uint32_t AIC_COUNT = 24;
 +    static constexpr uint32_t LOOKAHEAD = 2;
 +    static constexpr uint32_t SLOTS = LOOKAHEAD + 1;
-+    static constexpr uint32_t Q_BLOCKS = SEQUENCE / Q_TILE;
-+    static constexpr uint32_t KV_BLOCKS = SEQUENCE / KV_TILE;
-+    static constexpr uint32_t TASKS_PER_BATCH = HEADS * Q_BLOCKS;
-+    static constexpr uint32_t TASKS = BATCH * TASKS_PER_BATCH;
-+    static constexpr uint32_t TOKENS = BATCH * SEQUENCE;
-+    static constexpr uint32_t TOKEN_STRIDE = HEADS * DIM;
 +    static constexpr uint64_t SCORE_SLOT_ELEMENTS = Q_TILE * KV_TILE;
 +    static constexpr uint64_t OUTPUT_SLOT_ELEMENTS = Q_TILE * DIM;
 +    static constexpr uint64_t SCORE_BYTES = AIC_COUNT * SLOTS * SCORE_SLOT_ELEMENTS * sizeof(float);
@@ -599,18 +554,14 @@ index 0000000..9aeb483
 +        uint32_t queryBlock;
 +    };
 +
-+    __aicore__ static inline Task decode(uint32_t index)
++    __aicore__ static inline Task decode(uint32_t index, uint32_t heads, uint32_t tasksPerBatch)
 +    {
 +        // Preserve the accepted head-fast ordering, without scanning ragged
 +        // sequence boundaries or reading cumulative lengths for each task.
-+        return {index / TASKS_PER_BATCH, index % HEADS,
-+                (index % TASKS_PER_BATCH) / HEADS};
++        return {index / tasksPerBatch, index % heads,
++                (index % tasksPerBatch) / heads};
 +    }
 +
-+    static_assert(SEQUENCE % Q_TILE == 0 && SEQUENCE % KV_TILE == 0,
-+                  "This specialization has no tail blocks");
-+    static_assert(LOOKAHEAD > 0 && LOOKAHEAD < KV_BLOCKS,
-+                  "The fixed pipeline must have a nonempty steady state");
 +    static_assert(WORKSPACE_BYTES <= 88ULL * 1024 * 1024,
 +                  "Must fit the official host-allocated workspace");
 +};

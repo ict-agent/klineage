@@ -1,34 +1,57 @@
-# FMHA 内核结构
+# FMHA 执行结构
 
-## 算法与资源布局
+## 运行时分派
 
-保留Q256/KV512、FP32 softmax与累加、FP16 P。没有降低精度、减少head、缩短序列或改变attention语义。
+Python wrapper 校验 packed-NHD 输入、D 的范围和完整序列边界，随后选择路径：
 
-上一版每个AIV负责128行，但输出缓冲仅能容纳64行，因此每次调用新增3GiB逻辑GM读写：四轮KV中，前三轮写running O，后三轮读running O。本版为完整128×128 FP32输出保留64KiB，跨四轮KV更新始终留在UB，完全绕过这部分gUpdate读写。
+```text
+q/k/v + cumulative lengths
+            |
+       validate + dispatch
+            |
+     +------+-----------------------+
+     |                              |
+D128, uniform, aligned         tails / ragged / other D
+     |                              |
+FusedInferAttentionScore       FusionAttention (official)
+     |
+CANN tiling key selection
+     |
+resident output for the replaced non-split-KV key
+```
 
-| UB字节区间（KiB） | softmax阶段 | 输出更新阶段 |
+常驻路径要求 Q/K 边界相同，序列长度是 512 的倍数且至少 1536。硬件 tile 是 Q256/KV512/D128，batch、heads、序列长度不再编译成常量。通用路径使用独立算子，避免不满足 UB 条件的输入进入被替换的 FIA key。形状分派覆盖前向正确性；性能验收仍只针对规定的 B8/H64/S2048/D128。
+
+## 动态任务与工作区
+
+`fmha_tile_config.hpp` 集中定义硬件 tile、流水深度和工作区跨度。batch/head 数来自 CANN tiling；序列长度与 token 总数来自实际边界。每批任务数为 `H * (S / 256)`，总任务数为 `B * H * (S / 256)`，保持 head 最快变化的次序。KV 循环次数为 `S / 512`，不再固定为四轮。
+
+工作区按实际启动的 AIC 数分段：S、P、partial O 均使用三槽流水。24 AIC 时分别为 36 MiB、18 MiB、9 MiB，共 63 MiB；宿主仍使用官方 workspace 分配。核数较少时分段随之缩小，避免用固定 24 核跨度访问较小的宿主工作区。
+
+## UB 常驻输出
+
+每个 AIV 负责 128 行，为 128×128 FP32 输出保留 64 KiB，在所有 KV 轮次之间保持。没有降低精度或改变 attention 语义。针对原 S2048 验收 shape，相比 GM running-O 更新路径，省去每次调用累计 3 GiB 的逻辑 GM 读写；这不是实测 HBM 流量。
+
+| UB 区间（KiB） | softmax 阶段 | 输出更新阶段 |
 |---|---|---|
-| 0–64 | 双缓冲S | 当前PV结果（128行FP32） |
-| 64–96 | 双缓冲P | 保留，不与输出别名 |
-| 96–112 | 不使用 | 最终FP16输出暂存（每次64行） |
-| 112–176 | 常驻running O | 常驻running O |
+| 0–64 | 双缓冲 S | 当前 PV 结果（128 行 FP32） |
+| 64–96 | 双缓冲 P | 保留 |
+| 96–112 | 未使用 | FP16 输出暂存（64 行） |
+| 112–176 | 常驻 running O | 常驻 running O |
 | 176–184 | 归约/广播临时空间 | 行缩放因子广播 |
-| 184–189 | max/sum统计量 | 读取sum等统计量 |
-| 189–190.5 | 三槽delta-max，每槽128行 | 按槽读取delta-max |
+| 184–189 | max/sum | 读取统计量 |
+| 189–190.5 | 三槽 delta-max | 按槽读取 |
 
-S在每次softmax调用结束后没有跨调用存活的数据。输出阶段借用该空间，入口和出口用V→MTE2事件交还所有权。最终FP16暂存与S分离，避免下一个Q任务加载S时覆盖尚未完成的输出DMA。128行更新的Add拆为两条128-repeat指令，避开uint8 repeat上限；最后输出拆为两次64行。
+S 在 softmax 调用结束后没有跨调用存活的数据，输出阶段借用该空间；V→MTE2 事件控制缓冲复用。最终 FP16 暂存与 S 分离，防止下一个 Q 任务覆盖未完成的输出 DMA。128 行 Add 拆成两条 128-repeat 指令，避开 uint8 repeat 上限；输出按两次 64 行写回。
 
-FP32更新仍为独立Mul、Add，最后Div、Cast；没有以FMA或倒数近似改变计算顺序。
-
-固定任务数量4096，保持原先head最快变化的任务顺序。工作区实际使用S36MiB、P18MiB、partial O9MiB，共63MiB；**宿主仍按官方tiling分配88MiB**，本版不宣称减少了宿主实际分配量。这里的3GiB累计逻辑访问量也不等于3GiB实测HBM流量。
+FP32 更新保留独立 Mul、Add，最后 Div、Cast，不以 FMA 或倒数近似改变运算顺序。
 
 ## 模块
 
-- `src/fused_infer_attention_score/op_kernel/fmha_fixed_case.hpp`：固定几何、任务映射、工作区和编译期约束。
-- `src/fused_infer_attention_score/op_kernel/attn_infra/epilogue/block/fmha_fixed_ub_layout.hpp`：共享 UB 布局与容量检查。
-- `src/fused_infer_attention_score/op_kernel/attn_infra/epilogue/block/fmha_resident_output.hpp`：常驻累加、归一化、分块输出和流水同步。
-- `flash_attention_regular.h`：接入输出路径并解码固定任务。
+- `src/fused_infer_attention_score/op_kernel/fmha_tile_config.hpp`：硬件 tile、动态任务解码、工作区约束。
+- `.../attn_infra/epilogue/block/fmha_fixed_ub_layout.hpp`：固定硬件 tile 的 UB 布局与容量检查。
+- `.../attn_infra/epilogue/block/fmha_resident_output.hpp`：常驻累加、归一化、分块输出、流水同步。
+- `flash_attention_regular.h`：读取运行时形状并接入输出路径。
+- `fmha.py`：输入验证和安全分派；`check_shapes.py`：独立 FP32 参考校验。
 
-## 源码归属
-
-`src/ascendc`、`src/common`、其他 attention 目录与生成的编译入口为构建依赖；沿用上游文件，不计为本次创新代码。`kernel_vs_upstream.patch` 的路径相对 `src/fused_infer_attention_score/`，改动统计见 `diff_upstream.json`。
+`src/ascendc`、`src/common`、其他 attention 目录和生成入口沿用上游，不计为本次优化代码。完整补丁路径相对 `src/fused_infer_attention_score/`，统计见 `diff_upstream.json`。

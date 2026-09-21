@@ -1,22 +1,22 @@
 #ifndef FMHA_FIXED_UB_LAYOUT_HPP
 #define FMHA_FIXED_UB_LAYOUT_HPP
 
-#include "../../../fmha_fixed_case.hpp"
+#include "../../../fmha_tile_config.hpp"
 
 // Shared contract between online softmax and the resident-output epilogue.
 // All offsets are bytes. This layout is specific to Q256/KV512/D128 on 910B.
 namespace NpuArch::Epilogue::Block {
 struct FmhaFixedUbLayout {
     static constexpr uint32_t KIB = 1024;
-    static constexpr uint32_t Q_ROWS = KernelCommon::FmhaFixedCase::Q_TILE;
+    static constexpr uint32_t Q_ROWS = KernelCommon::FmhaTileConfig::Q_TILE;
     static constexpr uint32_t ROWS_PER_AIV = Q_ROWS / 2;
-    static constexpr uint32_t HEAD_DIM = KernelCommon::FmhaFixedCase::DIM;
+    static constexpr uint32_t HEAD_DIM = KernelCommon::FmhaTileConfig::DIM;
     static constexpr uint32_t STORE_ROWS = 64;
     static constexpr uint32_t STATS_ROWS = ROWS_PER_AIV;
-    static constexpr uint32_t PIPE_SLOTS = KernelCommon::FmhaFixedCase::SLOTS;
+    static constexpr uint32_t PIPE_SLOTS = KernelCommon::FmhaTileConfig::SLOTS;
 
     // S and P retain their original double buffers. They are live while
-    // running O survives across all four KV iterations of this Q task.
+    // running O survives across all KV iterations of this Q task.
     static constexpr uint32_t SCORE = 0;
     static constexpr uint32_t PROBABILITY = 64 * KIB;
     static constexpr uint32_t OUTPUT_STAGING = 96 * KIB;

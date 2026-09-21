@@ -16,7 +16,7 @@
 #define FLASH_ATTENTION_REGULAR_H
 
 #include "fia_kernel_common.hpp"
-#include "fmha_fixed_case.hpp"
+#include "fmha_tile_config.hpp"
 #include "attn_infra/epilogue/block/fmha_resident_output.hpp"
 
 using namespace KernelCommon;
@@ -75,10 +75,10 @@ namespace SplitFuse {
             LSE_MODE == Epilogue::LseMode::NONE && SINK_MODE == Epilogue::SinkMode::DISABLE &&
             std::is_same_v<ElementO, half>;
 
-        using Fixed = FmhaFixedCase;
+        using Tile = FmhaTileConfig;
         static_assert(!USE_RESIDENT_OUTPUT ||
-            (PRE_LAUNCH == Fixed::LOOKAHEAD && MAX_KV_STACK_LEN == Fixed::KV_TILE && Q_TILE_CEIL == Fixed::Q_TILE),
-            "The resident epilogue requires the fixed four-block pipeline");
+            (PRE_LAUNCH == Tile::LOOKAHEAD && MAX_KV_STACK_LEN == Tile::KV_TILE && Q_TILE_CEIL == Tile::Q_TILE),
+            "The resident epilogue requires Q256/KV512 with lookahead two");
 
         struct GlobalTensorBundle {
             AscendC::GlobalTensor<ElementQ>& gQ;
@@ -107,9 +107,9 @@ namespace SplitFuse {
         void operator()(FAIKernelParams const &params)
         {
             __gm__ FAInferTilingData *fATilingData = reinterpret_cast<__gm__ FAInferTilingData *>(params.tiling);
-            mm1OutSize = Fixed::SCORE_BYTES;
-            smOnlineOutSize = Fixed::PROBABILITY_BYTES;
-            mm2OutSize = Fixed::PARTIAL_OUTPUT_BYTES;
+            mm1OutSize = AscendC::GetBlockNum() * Tile::SLOTS * Tile::SCORE_SLOT_ELEMENTS * sizeof(float);
+            smOnlineOutSize = AscendC::GetBlockNum() * Tile::SLOTS * Tile::SCORE_SLOT_ELEMENTS * sizeof(half);
+            mm2OutSize = AscendC::GetBlockNum() * Tile::SLOTS * Tile::OUTPUT_SLOT_ELEMENTS * sizeof(float);
             batch = fATilingData->batch;
             qHeads = fATilingData->numHeads;
             kvHeads = fATilingData->kvHeads;
@@ -127,15 +127,6 @@ namespace SplitFuse {
             nextToken = fATilingData->nextToken;
             pseQ = fATilingData->pseQ;
             pseKv = fATilingData->pseKv;
-            if constexpr (USE_RESIDENT_OUTPUT) {
-                batch = Fixed::BATCH;
-                qHeads = kvHeads = Fixed::HEADS;
-                embed = embedV = Fixed::DIM;
-                firstBatchTaskNum = Fixed::TASKS_PER_BATCH;
-                totalTaskNum = Fixed::TASKS;
-                maskType = 0;
-                sparseMode = 0;
-            }
             uint64_t Lsesize = 0;
             uint64_t Losize = 0;
             if constexpr (IS_FD) {
@@ -267,10 +258,13 @@ namespace SplitFuse {
             embedRoundV = NpuArch::Detail::Alignment::RoundUp(embedV, FaiKernel::BLOCK_SIZE);
             groupSize = qHeads / kvHeads;
 
+            totalQTokens = static_cast<uint32_t>(gActualQseqlen.GetValue(batch - 1));
             if constexpr (USE_RESIDENT_OUTPUT) {
-                totalQTokens = Fixed::TOKENS;
-            } else {
-                totalQTokens = static_cast<uint32_t>(gActualQseqlen.GetValue(batch - 1));
+                // The wrapper admits uniform, aligned sequences on this path.
+                // Read runtime geometry; only the hardware tile stays fixed.
+                const uint32_t sequence = static_cast<uint32_t>(gActualQseqlen.GetValue(0));
+                firstBatchTaskNum = qHeads * (sequence / Tile::Q_TILE);
+                totalTaskNum = batch * firstBatchTaskNum;
             }
 
             if constexpr (IS_FD) {
@@ -343,8 +337,8 @@ namespace SplitFuse {
                     }
                 }
             } else if constexpr (USE_RESIDENT_OUTPUT) {
-                for (uint32_t taskIdx = coreIdx; taskIdx < Fixed::TASKS; taskIdx += coreNum) {
-                    const auto task = Fixed::decode(taskIdx);
+                for (uint32_t taskIdx = coreIdx; taskIdx < totalTaskNum; taskIdx += coreNum) {
+                    const auto task = Tile::decode(taskIdx, qHeads, firstBatchTaskNum);
                     runMainLoop(coreIdx, task.batch, task.head, task.queryBlock,
                         false, 0, 0, 0, 0, globalTensors, pseQ, pseKv);
                 }
@@ -504,27 +498,17 @@ namespace SplitFuse {
             auto& gOUpdate = globalTensors.gOUpdate;
             auto& gSink = globalTensors.gSink;
 
-            uint32_t qSeqlen = Fixed::SEQUENCE;
-            uint32_t kvSeqlen = Fixed::SEQUENCE;
-            uint32_t prevQSeqlenSum = BIdx * Fixed::SEQUENCE;
-            uint32_t prevKvSeqlenSum = prevQSeqlenSum;
-            if constexpr (!USE_RESIDENT_OUTPUT) {
-                qSeqlen = static_cast<uint32_t>(gActualQseqlen.GetValue(BIdx));
-                kvSeqlen = static_cast<uint32_t>(gActualKvseqlen.GetValue(BIdx));
-                prevQSeqlenSum = 0;
-                prevKvSeqlenSum = 0;
-    
-                if constexpr(INPUT_LAYOUT == FaiKernel::inputLayout::TND) {
-                    prevQSeqlenSum = (BIdx == 0) ?
-                        0 : static_cast<uint32_t>(gActualQseqlen.GetValue(BIdx - 1));
-                    qSeqlen = qSeqlen - prevQSeqlenSum;
-                    if constexpr (!PAGED_CACHE_FLAG) {
-                        prevKvSeqlenSum = (BIdx == 0) ?
-                            0 : static_cast<uint32_t>(gActualKvseqlen.GetValue(BIdx - 1));
-                        kvSeqlen = kvSeqlen - prevKvSeqlenSum;
-                    }
+            uint32_t qSeqlen = static_cast<uint32_t>(gActualQseqlen.GetValue(BIdx));
+            uint32_t kvSeqlen = static_cast<uint32_t>(gActualKvseqlen.GetValue(BIdx));
+            uint32_t prevQSeqlenSum = 0;
+            uint32_t prevKvSeqlenSum = 0;
+            if constexpr (INPUT_LAYOUT == FaiKernel::inputLayout::TND) {
+                prevQSeqlenSum = BIdx == 0 ? 0 : static_cast<uint32_t>(gActualQseqlen.GetValue(BIdx - 1));
+                qSeqlen -= prevQSeqlenSum;
+                if constexpr (!PAGED_CACHE_FLAG) {
+                    prevKvSeqlenSum = BIdx == 0 ? 0 : static_cast<uint32_t>(gActualKvseqlen.GetValue(BIdx - 1));
+                    kvSeqlen -= prevKvSeqlenSum;
                 }
-    
             }
 
             uint64_t qBOffset = static_cast<uint64_t>(prevQSeqlenSum) * strideQ;
@@ -588,7 +572,7 @@ namespace SplitFuse {
             bool startsWithMaskTile = false;
             bool startsWithMaskThenNomaskFlag = false;
             if constexpr (USE_RESIDENT_OUTPUT) {
-                kvSLoopNumTotal = Fixed::KV_BLOCKS;
+                kvSLoopNumTotal = kvSeqlen / Tile::KV_TILE;
             } else if constexpr (IS_FD) {
                 noSkipKvS = kvSeqlen;
                 if (maskType != 0U) {
@@ -978,8 +962,8 @@ namespace SplitFuse {
                         }
                         uint32_t curStackTileMod = (stackSeqCount - PRE_LAUNCH) % (PRE_LAUNCH + 1U);
                         uint64_t gmOffsetOTmp =
-                            static_cast<uint64_t>(coreIdx) * Fixed::OUTPUT_SLOT_ELEMENTS * (PRE_LAUNCH + 1U) +
-                            static_cast<uint64_t>(curStackTileMod) * Fixed::OUTPUT_SLOT_ELEMENTS;
+                            static_cast<uint64_t>(coreIdx) * Tile::OUTPUT_SLOT_ELEMENTS * (PRE_LAUNCH + 1U) +
+                            static_cast<uint64_t>(curStackTileMod) * Tile::OUTPUT_SLOT_ELEMENTS;
                         GemmCoord actualBlockShapePV{rowNum, embedV, stackSeqTile};
                         LayoutOTmp layoutOTmp(rowNum, embedV, embedRoundV);
 #ifdef __DAV_C220_CUBE__
@@ -1028,7 +1012,7 @@ namespace SplitFuse {
                         LayoutO layoutO(qSeqlen, embed * qHeads);
                         LayoutUpdate layoutUpdate(rowNum, embed, embedRound);
                         LayoutLse layoutLse(totalQTokens, qHeads);
-                        uint64_t gmOffsetUpdate = static_cast<uint64_t>(coreIdx) * Fixed::OUTPUT_SLOT_ELEMENTS;
+                        uint64_t gmOffsetUpdate = static_cast<uint64_t>(coreIdx) * Tile::OUTPUT_SLOT_ELEMENTS;
                         Arch::CrossCoreWaitFlag(pvReady);
 
                         if constexpr (USE_RESIDENT_OUTPUT) {
