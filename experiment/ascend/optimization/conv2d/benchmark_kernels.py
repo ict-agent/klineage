@@ -48,14 +48,14 @@ def analyze(rows, rounds, calls, warmup):
     metrics = {}
     for name, values in all_samples.items():
         blocks = [block[warmup:] for block in groups(values, block_calls)]
-        medians = [statistics.median(block) for block in blocks]
-        metrics[name] = {**summarize(medians), "per_call_us": [v for block in blocks for v in block]}
-    speedup = metrics["baseline_core"]["median_us"] / metrics["_conv_cube"]["median_us"]
+        means = [statistics.fmean(block) for block in blocks]
+        metrics[name] = {**summarize(means), "per_call_us": [v for block in blocks for v in block]}
+    speedup = metrics["baseline_core"]["mean_us"] / metrics["_conv_cube"]["mean_us"]
     paired = [a / b for a, b in zip(metrics["baseline_core"]["samples_us"],
                                    metrics["_conv_cube"]["samples_us"])]
     return {"metrics": metrics, "core_speedup": speedup, "paired_core_speedups": paired,
-            "all_device_kernels_speedup": metrics["baseline_all_kernels"]["median_us"]
-                / metrics["candidate_all_kernels"]["median_us"],
+            "all_device_kernels_speedup": metrics["baseline_all_kernels"]["mean_us"]
+                / metrics["candidate_all_kernels"]["mean_us"],
             "baseline_tasks_per_call": tasks_per_call}
 
 
@@ -131,7 +131,7 @@ def main():
                               "device": torch.npu.get_device_name(args.device)},
               "source_sha256": {str(p.relative_to(ROOT)): digest(p) for p in sources},
               "correctness": checks, "inventories": snapshots, **result,
-              "protocol": "Median of round medians; alternate order; warm up each implementation immediately before every measured block. Raw CSV includes excluded warmup calls.",
+              "protocol": "Arithmetic mean of all measured calls, via equal-count round means; speedup is ratio of means. Median/min/max describe round means. Alternate order; warm up each implementation immediately before every measured block. Raw CSV includes excluded warmup calls; retain all measured calls.",
               "scope": {"core": "CANN Conv2D vs _conv_cube; both exclude preparation and output reformatting.",
                         "all_kernels": "Sum all device tasks per full ABI invocation: baseline weight/output conversions and CANN internal formats; candidate padding/convolution/crop; excludes gaps/Python.",
                         "input": "Both implementations consume the same NHWC input and flattened HWCF weights and return contiguous NHWC output."}}

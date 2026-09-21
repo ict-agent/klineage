@@ -141,7 +141,7 @@ def capture(fn, calls):
 
 
 def summarize(values):
-    return {"median_us": statistics.median(values), "min_us": min(values),
+    return {"mean_us": statistics.fmean(values), "median_us": statistics.median(values), "min_us": min(values),
             "max_us": max(values), "samples_us": values}
 
 
@@ -213,8 +213,8 @@ def measure(args, device):
     eager_results = {name: summarize(values) for name, values in eager.items()}
     return {"graph_wall": graph_results, "eager_wall": eager_results,
             "graph_changed_inputs": graph_checks, "timing_inventories": inventories,
-            "speedup_graph": graph_results["torch_npu_nhwc"]["median_us"] / graph_results["tle_nhwc"]["median_us"],
-            "speedup_eager": eager_results["torch_npu_nhwc"]["median_us"] / eager_results["tle_nhwc"]["median_us"]}
+            "speedup_graph": graph_results["torch_npu_nhwc"]["mean_us"] / graph_results["tle_nhwc"]["mean_us"],
+            "speedup_eager": eager_results["torch_npu_nhwc"]["mean_us"] / eager_results["tle_nhwc"]["mean_us"]}
 
 
 def main():
@@ -251,6 +251,7 @@ def main():
               "config": {**vars(args), "output": str(args.output), "atol": ATOL, "rtol": RTOL,
                          "cache": "warm; no explicit cache flush", "shape": PAPER_SHAPE,
                          "timing": "host perf_counter_ns; synchronize after each eager call or graph replay",
+                         "statistics": "Arithmetic mean of equal-count round means; speedup is ratio of means; median/min/max describe round means; retain all rounds.",
                          "filters": PAPER_FILTERS, "dtype": "float16"},
               "source_sha256": {str(p.relative_to(ROOT)): digest(p) for p in files},
               "inventory_before": before}
