@@ -1,0 +1,31 @@
+{
+  "role": "candidate",
+  "seed": 777,
+  "correct": true,
+  "torch": "2.10.0+cpu",
+  "torch_npu": "2.10.0.post4",
+  "opp": "/home/projects/fmha/optimized_v2/opp_candidate",
+  "bitwise_equal": true,
+  "full_comparisons": 3,
+  "checked_elements_per_comparison": 134217728,
+  "core_trials_us": [
+    6441.346435546875,
+    6512.3944091796875,
+    6527.28759765625,
+    6517.679443359375,
+    6530.78369140625,
+    6539.77783203125,
+    6524.019775390625
+  ],
+  "entrypoint_trials_us": [
+    6686.424560546875,
+    6703.6285400390625,
+    6692.3040771484375,
+    6704.398193359375,
+    6697.52197265625,
+    6688.753662109375,
+    6709.283447265625
+  ],
+  "core_median_us": 6524.019775390625,
+  "entrypoint_median_us": 6697.52197265625
+}

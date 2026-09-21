@@ -1,0 +1,618 @@
+diff --git a/op_kernel/attn_infra/epilogue/block/fmha_fixed_ub_layout.hpp b/op_kernel/attn_infra/epilogue/block/fmha_fixed_ub_layout.hpp
+new file mode 100644
+index 0000000..7db12ff
+--- /dev/null
++++ b/op_kernel/attn_infra/epilogue/block/fmha_fixed_ub_layout.hpp
+@@ -0,0 +1,40 @@
++#ifndef FMHA_FIXED_UB_LAYOUT_HPP
++#define FMHA_FIXED_UB_LAYOUT_HPP
++
++#include "../../../fmha_fixed_case.hpp"
++
++// Shared contract between online softmax and the resident-output epilogue.
++// All offsets are bytes. This layout is specific to Q256/KV512/D128 on 910B.
++namespace NpuArch::Epilogue::Block {
++struct FmhaFixedUbLayout {
++    static constexpr uint32_t KIB = 1024;
++    static constexpr uint32_t Q_ROWS = KernelCommon::FmhaFixedCase::Q_TILE;
++    static constexpr uint32_t ROWS_PER_AIV = Q_ROWS / 2;
++    static constexpr uint32_t HEAD_DIM = KernelCommon::FmhaFixedCase::DIM;
++    static constexpr uint32_t STORE_ROWS = 64;
++    static constexpr uint32_t STATS_ROWS = ROWS_PER_AIV;
++    static constexpr uint32_t PIPE_SLOTS = KernelCommon::FmhaFixedCase::SLOTS;
++
++    // S and P retain their original double buffers. They are live while
++    // running O survives across all four KV iterations of this Q task.
++    static constexpr uint32_t SCORE = 0;
++    static constexpr uint32_t PROBABILITY = 64 * KIB;
++    static constexpr uint32_t OUTPUT_STAGING = 96 * KIB;
++    static constexpr uint32_t RUNNING_OUTPUT = 112 * KIB;
++    static constexpr uint32_t BROADCAST = 176 * KIB;
++    static constexpr uint32_t LOCAL_MAX = BROADCAST + 8 * KIB;
++    static constexpr uint32_t HISTORY_MAX = BROADCAST + 9 * KIB;
++    static constexpr uint32_t GLOBAL_MAX = BROADCAST + 10 * KIB;
++    static constexpr uint32_t LOCAL_SUM = BROADCAST + 11 * KIB;
++    static constexpr uint32_t GLOBAL_SUM = BROADCAST + 12 * KIB;
++    static constexpr uint32_t DELTA_MAX = BROADCAST + 13 * KIB;
++    static constexpr uint32_t END = DELTA_MAX + PIPE_SLOTS * STATS_ROWS * sizeof(float);
++
++    static_assert(OUTPUT_STAGING + STORE_ROWS * HEAD_DIM * sizeof(half) == RUNNING_OUTPUT,
++                  "FP16 staging must not overlap persistent O");
++    static_assert(RUNNING_OUTPUT + ROWS_PER_AIV * HEAD_DIM * sizeof(float) == BROADCAST,
++                  "Persistent O must not overlap softmax statistics");
++    static_assert(END <= 192 * KIB, "The shared layout must fit the 910B UB");
++};
++} // namespace NpuArch::Epilogue::Block
++#endif
+diff --git a/op_kernel/attn_infra/epilogue/block/fmha_resident_output.hpp b/op_kernel/attn_infra/epilogue/block/fmha_resident_output.hpp
+new file mode 100644
+index 0000000..03f5023
+--- /dev/null
++++ b/op_kernel/attn_infra/epilogue/block/fmha_resident_output.hpp
+@@ -0,0 +1,180 @@
++#ifndef FMHA_RESIDENT_OUTPUT_HPP
++#define FMHA_RESIDENT_OUTPUT_HPP
++
++#include "fmha_fixed_ub_layout.hpp"
++
++namespace NpuArch::Epilogue::Block {
++
++// Fixed-shape online-attention output state. The 128 rows owned by this AIV
++// remain in UB from the first PV tile until the final normalization/store.
++// The update is vectorized over all rows; only final FP16 stores are chunked.
++template<class ArchTag>
++class FmhaResidentOutput {
++    using UB = FmhaFixedUbLayout;
++    static constexpr uint32_t DIM = UB::HEAD_DIM;
++    static constexpr uint32_t ROWS = UB::ROWS_PER_AIV;
++    static constexpr uint32_t CHUNK = ROWS;
++    static constexpr uint32_t STORE_ROWS = UB::STORE_ROWS;
++    static constexpr uint32_t VEC = 64;
++    static constexpr uint32_t BLOCK_FLOATS = 8;
++    static constexpr uint32_t CHUNK_ELEMENTS = CHUNK * DIM;
++
++public:
++    __aicore__ inline void init(Arch::Resource<ArchTag>& resource)
++    {
++        static_assert(UB::END <= ArchTag::UB_SIZE, "Resident output exceeds UB");
++        // Between softmax invocations, its 64 KiB score buffer is dead and can
++        // receive the entire per-AIV PV result. Final stores use a separate
++        // buffer so a following Q task may start softmax without aliasing DMA.
++        partial = resource.ubBuf.template GetBufferByByte<float>(UB::SCORE);
++        packedOutput = resource.ubBuf.template GetBufferByByte<half>(UB::OUTPUT_STAGING);
++        running = resource.ubBuf.template GetBufferByByte<float>(UB::RUNNING_OUTPUT);
++        broadcast = resource.ubBuf.template GetBufferByByte<float>(UB::BROADCAST);
++        deltaMax = resource.ubBuf.template GetBufferByByte<float>(UB::DELTA_MAX);
++        globalSum = resource.ubBuf.template GetBufferByByte<float>(UB::GLOBAL_SUM);
++    }
++
++    __aicore__ inline void operator()(
++        AscendC::GlobalTensor<half> output,
++        AscendC::GlobalTensor<float> input,
++        uint32_t outputStride, bool first, bool last, uint32_t slot)
++    {
++        const uint32_t subRow = AscendC::GetSubBlockIdx() * ROWS;
++        auto localInput = input[subRow * DIM];
++        auto localOutput = output[subRow * outputStride];
++        if (first) {
++            initialize(localInput);
++            return; // Four nonempty KV512 blocks are guaranteed by the entry ABI.
++        }
++        // Every softmax invocation drains its score-row loop before this
++        // epilogue runs. S has no live values across invocations, so borrow
++        // it between stages and fence both boundaries before returning it.
++        scoreScratchFence();
++        acquirePartial(localInput);
++        update(running, 0, slot);
++        if (last) {
++            normalize(running, 0);
++            for (uint32_t row = 0; row < ROWS; row += STORE_ROWS) {
++                // Protect the compact output buffer between its two stores.
++                if (row != 0) {
++                    AscendC::SetFlag<AscendC::HardEvent::MTE3_V>(EVENT_ID3);
++                    AscendC::WaitFlag<AscendC::HardEvent::MTE3_V>(EVENT_ID3);
++                }
++                store(localOutput[row * outputStride], running[row * DIM], outputStride);
++            }
++        }
++        releasePartial();
++        scoreScratchFence(); // Return S only after the last vector read.
++    }
++
++private:
++    // Event ownership matches the outer kernel's initial/final tokens:
++    // V_MTE2:3 protects partial/input storage; MTE3_MTE2:6 protects the
++    // final FP16 store buffer. MTE2_V:7 is a local handoff; V_MTE2:5
++    // transfers ownership of score scratch between softmax and output update.
++    __aicore__ inline void scoreScratchFence()
++    {
++        AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID5);
++        AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID5);
++    }
++
++    __aicore__ inline void acquireStorage()
++    {
++        AscendC::WaitFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID3);
++        AscendC::WaitFlag<AscendC::HardEvent::MTE3_MTE2>(EVENT_ID6);
++    }
++
++    __aicore__ inline void finishLoad()
++    {
++        AscendC::SetFlag<AscendC::HardEvent::MTE2_V>(EVENT_ID7);
++        AscendC::WaitFlag<AscendC::HardEvent::MTE2_V>(EVENT_ID7);
++    }
++
++    __aicore__ inline void releasePartial()
++    {
++        AscendC::SetFlag<AscendC::HardEvent::V_MTE2>(EVENT_ID3);
++        AscendC::SetFlag<AscendC::HardEvent::MTE3_MTE2>(EVENT_ID6);
++    }
++
++    __aicore__ inline void initialize(AscendC::GlobalTensor<float> input)
++    {
++        acquireStorage();
++        AscendC::DataCopy(running, input,
++            AscendC::DataCopyParams(1, ROWS * DIM / BLOCK_FLOATS, 0, 0));
++        finishLoad();
++        releasePartial();
++    }
++
++    __aicore__ inline void acquirePartial(AscendC::GlobalTensor<float> input)
++    {
++        acquireStorage();
++        AscendC::DataCopy(partial, input,
++            AscendC::DataCopyParams(1, CHUNK_ELEMENTS / BLOCK_FLOATS, 0, 0));
++        finishLoad();
++    }
++
++    __aicore__ inline void broadcastRows(AscendC::LocalTensor<float> scalars)
++    {
++        AscendC::SetVectorMask<int8_t>((uint64_t)-1, (uint64_t)-1);
++        AscendC::Brcb(broadcast.template ReinterpretCast<uint32_t>(),
++            scalars.template ReinterpretCast<uint32_t>(), CHUNK / BLOCK_FLOATS,
++            AscendC::BrcbRepeatParams(1, 8));
++        AscendC::PipeBarrier<PIPE_V>();
++    }
++
++    __aicore__ inline void update(AscendC::LocalTensor<float> accumulator,
++                                 uint32_t row, uint32_t slot)
++    {
++        broadcastRows(deltaMax[slot * UB::STATS_ROWS + row]);
++        // Preserve the official FP32 multiply-then-add ordering, including
++        // separate instructions: do not replace this pair with fused FMA.
++        for (uint32_t col = 0; col < DIM; col += VEC) {
++            AscendC::Mul<float, false>(accumulator[col], accumulator[col], broadcast,
++                (uint64_t)0, CHUNK,
++                AscendC::BinaryRepeatParams(1, 1, 0, DIM / BLOCK_FLOATS, DIM / BLOCK_FLOATS, 1));
++        }
++        AscendC::PipeBarrier<PIPE_V>();
++        // Vector repeat is uint8: split 256 repeats into two 128-repeat
++        // instructions, without changing each element's addition order.
++        for (uint32_t offset = 0; offset < CHUNK_ELEMENTS; offset += 8192) {
++            AscendC::Add<float, false>(accumulator[offset], accumulator[offset], partial[offset],
++                (uint64_t)0, 8192 / VEC,
++                AscendC::BinaryRepeatParams(1, 1, 1, 8, 8, 8));
++        }
++        AscendC::PipeBarrier<PIPE_V>();
++    }
++
++    __aicore__ inline void normalize(AscendC::LocalTensor<float> accumulator, uint32_t row)
++    {
++        broadcastRows(globalSum[row]);
++        for (uint32_t col = 0; col < DIM; col += VEC) {
++            AscendC::Div<float, false>(accumulator[col], accumulator[col], broadcast,
++                (uint64_t)0, CHUNK,
++                AscendC::BinaryRepeatParams(1, 1, 0, DIM / BLOCK_FLOATS, DIM / BLOCK_FLOATS, 1));
++        }
++        AscendC::PipeBarrier<PIPE_V>();
++    }
++
++    __aicore__ inline void store(AscendC::GlobalTensor<half> output,
++                                AscendC::LocalTensor<float> accumulator, uint32_t outputStride)
++    {
++        // This 16 KiB buffer is disjoint from S and the persistent O state.
++        auto packed = packedOutput;
++        AscendC::Cast<half, float, false>(packed, accumulator, AscendC::RoundMode::CAST_NONE,
++            (uint64_t)0, STORE_ROWS * DIM / VEC, AscendC::UnaryRepeatParams(1, 1, 4, 8));
++        AscendC::SetFlag<AscendC::HardEvent::V_MTE3>(EVENT_ID5);
++        AscendC::WaitFlag<AscendC::HardEvent::V_MTE3>(EVENT_ID5);
++        AscendC::DataCopyPad(output, packed,
++            AscendC::DataCopyExtParams(STORE_ROWS, DIM * sizeof(half), 0,
++                                      (outputStride - DIM) * sizeof(half), 0));
++    }
++
++    AscendC::LocalTensor<float> partial;
++    AscendC::LocalTensor<half> packedOutput;
++    AscendC::LocalTensor<float> running;
++    AscendC::LocalTensor<float> broadcast;
++    AscendC::LocalTensor<float> deltaMax;
++    AscendC::LocalTensor<float> globalSum;
++};
++} // namespace NpuArch::Epilogue::Block
++#endif
+diff --git a/op_kernel/attn_infra/epilogue/block/fused_block_epilogue_online_softmax.hpp b/op_kernel/attn_infra/epilogue/block/fused_block_epilogue_online_softmax.hpp
+index 3898775..c267654 100644
+--- a/op_kernel/attn_infra/epilogue/block/fused_block_epilogue_online_softmax.hpp
++++ b/op_kernel/attn_infra/epilogue/block/fused_block_epilogue_online_softmax.hpp
+@@ -11,6 +11,7 @@
+ #ifndef FUSED_BLOCK_EPILOGUE_ONLINE_SOFTMAX_HPP
+ #define FUSED_BLOCK_EPILOGUE_ONLINE_SOFTMAX_HPP
+ 
++#include "fmha_fixed_ub_layout.hpp"
+ #include <type_traits>
+ #include <limits>
+ #include "../../../attn_infra/fused_base_defs.hpp"
+@@ -94,7 +95,7 @@ public:
+     static constexpr uint32_t REDUCE_UB_SIZE = 1024;
+     static constexpr uint32_t ROW_OPS_SPEC_MASK_32 = 32;
+     static constexpr uint32_t ROW_OPS_SPEC_MASK_4 = 4;
+-    static constexpr uint32_t MAX_ROW_NUM_SUB_CORE = 256;
++    static constexpr uint32_t MAX_ROW_NUM_SUB_CORE = FmhaFixedUbLayout::STATS_ROWS;
+     static constexpr int64_t UB_FLOAT_LINE_SIZE = 64;
+     static constexpr uint32_t HEAD_NUM_2 = 2;
+ 
+@@ -113,14 +114,14 @@ public:
+         constexpr uint32_t MASK_UB_TENSOR_OFFSET = 4 * UB_UINT8_BLOCK_SIZE;
+         constexpr uint32_t MASK32_UB_TENSOR_OFFSET = 4 * UB_UINT8_BLOCK_SIZE;
+         constexpr uint32_t MASK_UB_PREMASK_TENSOR_OFFSET = 5 * UB_UINT8_BLOCK_SIZE;
+-        constexpr uint32_t TV_UB_TENSOR_OFFSET = 10 * UB_UINT8_BLOCK_SIZE;
+-        constexpr uint32_t LM_UB_TENSOR_OFFSET = 10 * UB_UINT8_BLOCK_SIZE + 8 * UB_UINT8_VECTOR_SIZE;
+-
+-        constexpr uint32_t HM_UB_TENSOR_OFFSET = 10 * UB_UINT8_BLOCK_SIZE + 9 * UB_UINT8_VECTOR_SIZE;
+-        constexpr uint32_t GM_UB_TENSOR_OFFSET = 10 * UB_UINT8_BLOCK_SIZE + 10 * UB_UINT8_VECTOR_SIZE;
+-        constexpr uint32_t LL_UB_TENSOR_OFFSET = 10 * UB_UINT8_BLOCK_SIZE + 11 * UB_UINT8_VECTOR_SIZE;
+-        constexpr uint32_t GL_UB_TENSOR_OFFSET = 10 * UB_UINT8_BLOCK_SIZE + 12 * UB_UINT8_VECTOR_SIZE;
+-        constexpr uint32_t DM_UB_TENSOR_OFFSET = 10 * UB_UINT8_BLOCK_SIZE + 13 * UB_UINT8_VECTOR_SIZE;
++        constexpr uint32_t TV_UB_TENSOR_OFFSET = FmhaFixedUbLayout::BROADCAST;
++        constexpr uint32_t LM_UB_TENSOR_OFFSET = FmhaFixedUbLayout::LOCAL_MAX;
++
++        constexpr uint32_t HM_UB_TENSOR_OFFSET = FmhaFixedUbLayout::HISTORY_MAX;
++        constexpr uint32_t GM_UB_TENSOR_OFFSET = FmhaFixedUbLayout::GLOBAL_MAX;
++        constexpr uint32_t LL_UB_TENSOR_OFFSET = FmhaFixedUbLayout::LOCAL_SUM;
++        constexpr uint32_t GL_UB_TENSOR_OFFSET = FmhaFixedUbLayout::GLOBAL_SUM;
++        constexpr uint32_t DM_UB_TENSOR_OFFSET = FmhaFixedUbLayout::DELTA_MAX;
+         constexpr uint32_t SEL_MASK_UB_TENSOR_OFFSET = LL_UB_TENSOR_OFFSET;
+ 
+         constexpr uint32_t FULL16_UB_TENSOR_OFFSET = 11 * UB_UINT8_BLOCK_SIZE;
+diff --git a/op_kernel/attn_infra/epilogue/block/fused_block_epilogue_rescale_o.hpp b/op_kernel/attn_infra/epilogue/block/fused_block_epilogue_rescale_o.hpp
+index 96d1650..c5958c2 100644
+--- a/op_kernel/attn_infra/epilogue/block/fused_block_epilogue_rescale_o.hpp
++++ b/op_kernel/attn_infra/epilogue/block/fused_block_epilogue_rescale_o.hpp
+@@ -11,6 +11,7 @@
+ #ifndef FUSED_BLOCK_EPILOGUE_RESCALE_O_HPP
+ #define FUSED_BLOCK_EPILOGUE_RESCALE_O_HPP
+ 
++#include "fmha_fixed_ub_layout.hpp"
+ #include <limits>
+ #include "../../../attn_infra/arch/fused_resource.hpp"
+ #include "../../../attn_infra/epilogue/fused_epilogue_dispatch_policy.hpp"
+@@ -68,7 +69,7 @@ public:
+     static constexpr uint32_t VECTOR_SIZE = 128;
+     static constexpr uint32_t NUM4 = 4;
+     static constexpr uint32_t MAX_UB_O_ELEM_NUM = 8192;
+-    static constexpr uint32_t MAX_ROW_NUM_SUB_CORE = 256;
++    static constexpr uint32_t MAX_ROW_NUM_SUB_CORE = FmhaFixedUbLayout::STATS_ROWS;
+     static constexpr uint32_t SIZE_OF_16BIT = 2;
+ 
+     struct SplitKVParams {
+@@ -86,15 +87,15 @@ public:
+     void init(Arch::Resource<ArchTag> &resource)
+     {
+         // Allocate UB space
+-        constexpr uint32_t TV_UB_TENSOR_OFFSET = 10 * UB_UINT8_BLOCK_SIZE;
++        constexpr uint32_t TV_UB_TENSOR_OFFSET = FmhaFixedUbLayout::BROADCAST;
+         constexpr uint32_t LO_UB_TENSOR_OFFSET = 6 * UB_UINT8_BLOCK_SIZE;
+         constexpr uint32_t GO_UB_TENSOR_OFFSET = 8 * UB_UINT8_BLOCK_SIZE;
+ 
+-        constexpr uint32_t HM_UB_TENSOR_OFFSET = 10 * UB_UINT8_BLOCK_SIZE + 9 * UB_UINT8_VECTOR_SIZE;
+-        constexpr uint32_t GM_UB_TENSOR_OFFSET = 10 * UB_UINT8_BLOCK_SIZE + 10 * UB_UINT8_VECTOR_SIZE;
+-        constexpr uint32_t GL_UB_TENSOR_OFFSET = 10 * UB_UINT8_BLOCK_SIZE + 12 * UB_UINT8_VECTOR_SIZE;
+-        constexpr uint32_t LSE_UB_TENSOR_OFFSET = 10 * UB_UINT8_BLOCK_SIZE + 12 * UB_UINT8_VECTOR_SIZE;
+-        constexpr uint32_t DM_UB_TENSOR_OFFSET = 10 * UB_UINT8_BLOCK_SIZE + 13 * UB_UINT8_VECTOR_SIZE;
++        constexpr uint32_t HM_UB_TENSOR_OFFSET = FmhaFixedUbLayout::HISTORY_MAX;
++        constexpr uint32_t GM_UB_TENSOR_OFFSET = FmhaFixedUbLayout::GLOBAL_MAX;
++        constexpr uint32_t GL_UB_TENSOR_OFFSET = FmhaFixedUbLayout::GLOBAL_SUM;
++        constexpr uint32_t LSE_UB_TENSOR_OFFSET = FmhaFixedUbLayout::GLOBAL_SUM;
++        constexpr uint32_t DM_UB_TENSOR_OFFSET = FmhaFixedUbLayout::DELTA_MAX;
+ 
+         loUbTensor = resource.ubBuf.template GetBufferByByte<float>(LO_UB_TENSOR_OFFSET);
+         dmUbTensor = resource.ubBuf.template GetBufferByByte<float>(DM_UB_TENSOR_OFFSET);
+diff --git a/op_kernel/attn_infra/epilogue/block/online_softmax/fused_block_epilogue_online_softmax_row_ops.inc.hpp b/op_kernel/attn_infra/epilogue/block/online_softmax/fused_block_epilogue_online_softmax_row_ops.inc.hpp
+index 8906dc4..2de6cf6 100644
+--- a/op_kernel/attn_infra/epilogue/block/online_softmax/fused_block_epilogue_online_softmax_row_ops.inc.hpp
++++ b/op_kernel/attn_infra/epilogue/block/online_softmax/fused_block_epilogue_online_softmax_row_ops.inc.hpp
+@@ -14,11 +14,9 @@
+     void SetVecMask(int32_t len)
+     {
+         uint64_t temp = len % FLOAT_VECTOR_SIZE;
+-        uint64_t one = 1;
+-        uint64_t mask = 0;
+-        for (int64_t i = 0; i < temp; i++) {
+-            mask |= one << i;
+-        }
++        // temp is in [0,63] for valid row counts: no shift-by-64. Build
++        // exactly the same low-bit mask without a per-bit scalar loop.
++        uint64_t mask = (uint64_t{1} << temp) - 1;
+ 
+         if (len == VECTOR_SIZE || len == 0) {
+             AscendC::SetVectorMask<int8_t>((uint64_t)(-1), (uint64_t)(-1));
+diff --git a/op_kernel/fia_kernel_common.hpp b/op_kernel/fia_kernel_common.hpp
+index 3841eae..5c854cb 100644
+--- a/op_kernel/fia_kernel_common.hpp
++++ b/op_kernel/fia_kernel_common.hpp
+@@ -17,6 +17,7 @@
+ #define KERNEL_COMMON
+ 
+ #include "attn_infra/fused_base_defs.hpp"
++#include "fmha_fixed_case.hpp"
+ #include "attn_infra/arch/fused_arch.hpp"
+ #include "attn_infra/layout/fused_layout.hpp"
+ 
+@@ -41,10 +42,10 @@ namespace KernelCommon {
+     constexpr uint32_t QK_READY_ID = 1;
+     constexpr uint32_t SOFTMAX_READY_ID = 2;
+     constexpr uint32_t PV_READY_ID = 3;
+-    constexpr uint32_t PRE_LAUNCH = 2;
++    constexpr uint32_t PRE_LAUNCH = FmhaFixedCase::LOOKAHEAD;
+     constexpr uint32_t N_SPLIT_HELPER = 2;
+-    constexpr uint32_t MAX_KV_STACK_LEN = 512;
+-    constexpr uint32_t Q_TILE_CEIL = 128;
++    constexpr uint32_t MAX_KV_STACK_LEN = FmhaFixedCase::KV_TILE;
++    constexpr uint32_t Q_TILE_CEIL = FmhaFixedCase::Q_TILE;
+     constexpr uint32_t WORKSPACE_BLOCK_SIZE_DB = Q_TILE_CEIL * MAX_KV_STACK_LEN;
+     constexpr uint32_t L1_MAX_SIZE = 524288;
+     constexpr uint32_t L1_MAX_N_NUM = 128;
+diff --git a/op_kernel/flash_attention_regular.h b/op_kernel/flash_attention_regular.h
+index 5c77482..f860ca9 100644
+--- a/op_kernel/flash_attention_regular.h
++++ b/op_kernel/flash_attention_regular.h
+@@ -16,6 +16,8 @@
+ #define FLASH_ATTENTION_REGULAR_H
+ 
+ #include "fia_kernel_common.hpp"
++#include "fmha_fixed_case.hpp"
++#include "attn_infra/epilogue/block/fmha_resident_output.hpp"
+ 
+ using namespace KernelCommon;
+ using namespace NpuArch;
+@@ -67,6 +69,17 @@ namespace SplitFuse {
+         static constexpr Epilogue::LseMode LSE_MODE = EpilogueRescaleO::LSE_MODE;
+         static constexpr Epilogue::SinkMode SINK_MODE = EpilogueOnlineSoftmax::SINK_MODE;
+ 
++        static constexpr bool USE_RESIDENT_OUTPUT = !IS_FD && !PAGED_CACHE_FLAG &&
++            INPUT_LAYOUT == FaiKernel::inputLayout::TND &&
++            MASK_TYPE == FaiKernel::MaskType::NO_MASK &&
++            LSE_MODE == Epilogue::LseMode::NONE && SINK_MODE == Epilogue::SinkMode::DISABLE &&
++            std::is_same_v<ElementO, half>;
++
++        using Fixed = FmhaFixedCase;
++        static_assert(!USE_RESIDENT_OUTPUT ||
++            (PRE_LAUNCH == Fixed::LOOKAHEAD && MAX_KV_STACK_LEN == Fixed::KV_TILE && Q_TILE_CEIL == Fixed::Q_TILE),
++            "The resident epilogue requires the fixed four-block pipeline");
++
+         struct GlobalTensorBundle {
+             AscendC::GlobalTensor<ElementQ>& gQ;
+             AscendC::GlobalTensor<ElementK>& gK;
+@@ -94,9 +107,9 @@ namespace SplitFuse {
+         void operator()(FAIKernelParams const &params)
+         {
+             __gm__ FAInferTilingData *fATilingData = reinterpret_cast<__gm__ FAInferTilingData *>(params.tiling);
+-            mm1OutSize = fATilingData->mm1OutSize;
+-            smOnlineOutSize = fATilingData->smOnlineOutSize;
+-            mm2OutSize = fATilingData->mm2OutSize;
++            mm1OutSize = Fixed::SCORE_BYTES;
++            smOnlineOutSize = Fixed::PROBABILITY_BYTES;
++            mm2OutSize = Fixed::PARTIAL_OUTPUT_BYTES;
+             batch = fATilingData->batch;
+             qHeads = fATilingData->numHeads;
+             kvHeads = fATilingData->kvHeads;
+@@ -104,8 +117,8 @@ namespace SplitFuse {
+             embedV = fATilingData->embeddingSizeV;
+             pagedBlockSize = fATilingData->blockSize;
+             maxNumBlocksPerBatch = fATilingData->maxNumBlocksPerBatch;
+-            firstBatchTaskNum = fATilingData->firstBatchTaskNum;
+-            totalTaskNum = fATilingData->totalTaskNum;
++            firstBatchTaskNum = fATilingData->firstBatchTaskNum / 2;
++            totalTaskNum = fATilingData->totalTaskNum / 2;
+             blockSize = fATilingData->blockSize;
+             maskType = fATilingData->maskType;
+             scaleValue = fATilingData->scaleValue;
+@@ -114,6 +127,15 @@ namespace SplitFuse {
+             nextToken = fATilingData->nextToken;
+             pseQ = fATilingData->pseQ;
+             pseKv = fATilingData->pseKv;
++            if constexpr (USE_RESIDENT_OUTPUT) {
++                batch = Fixed::BATCH;
++                qHeads = kvHeads = Fixed::HEADS;
++                embed = embedV = Fixed::DIM;
++                firstBatchTaskNum = Fixed::TASKS_PER_BATCH;
++                totalTaskNum = Fixed::TASKS;
++                maskType = 0;
++                sparseMode = 0;
++            }
+             uint64_t Lsesize = 0;
+             uint64_t Losize = 0;
+             if constexpr (IS_FD) {
+@@ -230,6 +252,9 @@ namespace SplitFuse {
+ 
+             epilogueOnlineSoftmax.init(resource, scaleValue);
+             epilogueRescaleO.init(resource);
++            if constexpr (USE_RESIDENT_OUTPUT) {
++                residentOutput.init(resource);
++            }
+             epilogueInitOut.init(resource);
+ 
+             coreIdx = AscendC::GetBlockIdx() / AscendC::GetSubBlockNum();
+@@ -242,7 +267,11 @@ namespace SplitFuse {
+             embedRoundV = NpuArch::Detail::Alignment::RoundUp(embedV, FaiKernel::BLOCK_SIZE);
+             groupSize = qHeads / kvHeads;
+ 
+-            totalQTokens = static_cast<uint32_t>(gActualQseqlen.GetValue(batch - 1));
++            if constexpr (USE_RESIDENT_OUTPUT) {
++                totalQTokens = Fixed::TOKENS;
++            } else {
++                totalQTokens = static_cast<uint32_t>(gActualQseqlen.GetValue(batch - 1));
++            }
+ 
+             if constexpr (IS_FD) {
+                 uint32_t startBIdx = fATilingData->coreInfo.startBIdx[coreIdx];
+@@ -313,6 +342,12 @@ namespace SplitFuse {
+                         }
+                     }
+                 }
++            } else if constexpr (USE_RESIDENT_OUTPUT) {
++                for (uint32_t taskIdx = coreIdx; taskIdx < Fixed::TASKS; taskIdx += coreNum) {
++                    const auto task = Fixed::decode(taskIdx);
++                    runMainLoop(coreIdx, task.batch, task.head, task.queryBlock,
++                        false, 0, 0, 0, 0, globalTensors, pseQ, pseKv);
++                }
+             } else {
+                 for (uint32_t taskIdx = coreIdx; taskIdx < totalTaskNum; taskIdx += uint32_t(coreNum)) {
+                     uint32_t curBatchTmp = 0;
+@@ -469,20 +504,27 @@ namespace SplitFuse {
+             auto& gOUpdate = globalTensors.gOUpdate;
+             auto& gSink = globalTensors.gSink;
+ 
+-            uint32_t qSeqlen = static_cast<uint32_t>(gActualQseqlen.GetValue(BIdx));
+-            uint32_t kvSeqlen = static_cast<uint32_t>(gActualKvseqlen.GetValue(BIdx));
+-            uint32_t prevQSeqlenSum = 0;
+-            uint32_t prevKvSeqlenSum = 0;
+-
+-            if constexpr(INPUT_LAYOUT == FaiKernel::inputLayout::TND) {
+-                prevQSeqlenSum = (BIdx == 0) ?
+-                    0 : static_cast<uint32_t>(gActualQseqlen.GetValue(BIdx - 1));
+-                qSeqlen = qSeqlen - prevQSeqlenSum;
+-                if constexpr (!PAGED_CACHE_FLAG) {
+-                    prevKvSeqlenSum = (BIdx == 0) ?
+-                        0 : static_cast<uint32_t>(gActualKvseqlen.GetValue(BIdx - 1));
+-                    kvSeqlen = kvSeqlen - prevKvSeqlenSum;
++            uint32_t qSeqlen = Fixed::SEQUENCE;
++            uint32_t kvSeqlen = Fixed::SEQUENCE;
++            uint32_t prevQSeqlenSum = BIdx * Fixed::SEQUENCE;
++            uint32_t prevKvSeqlenSum = prevQSeqlenSum;
++            if constexpr (!USE_RESIDENT_OUTPUT) {
++                qSeqlen = static_cast<uint32_t>(gActualQseqlen.GetValue(BIdx));
++                kvSeqlen = static_cast<uint32_t>(gActualKvseqlen.GetValue(BIdx));
++                prevQSeqlenSum = 0;
++                prevKvSeqlenSum = 0;
++    
++                if constexpr(INPUT_LAYOUT == FaiKernel::inputLayout::TND) {
++                    prevQSeqlenSum = (BIdx == 0) ?
++                        0 : static_cast<uint32_t>(gActualQseqlen.GetValue(BIdx - 1));
++                    qSeqlen = qSeqlen - prevQSeqlenSum;
++                    if constexpr (!PAGED_CACHE_FLAG) {
++                        prevKvSeqlenSum = (BIdx == 0) ?
++                            0 : static_cast<uint32_t>(gActualKvseqlen.GetValue(BIdx - 1));
++                        kvSeqlen = kvSeqlen - prevKvSeqlenSum;
++                    }
+                 }
++    
+             }
+ 
+             uint64_t qBOffset = static_cast<uint64_t>(prevQSeqlenSum) * strideQ;
+@@ -545,7 +587,9 @@ namespace SplitFuse {
+             int32_t delEndRow = qSeqlen;
+             bool startsWithMaskTile = false;
+             bool startsWithMaskThenNomaskFlag = false;
+-            if constexpr (IS_FD) {
++            if constexpr (USE_RESIDENT_OUTPUT) {
++                kvSLoopNumTotal = Fixed::KV_BLOCKS;
++            } else if constexpr (IS_FD) {
+                 noSkipKvS = kvSeqlen;
+                 if (maskType != 0U) {
+                     int64_t diffS = kvSeqlen - qSeqlen;
+@@ -934,8 +978,8 @@ namespace SplitFuse {
+                         }
+                         uint32_t curStackTileMod = (stackSeqCount - PRE_LAUNCH) % (PRE_LAUNCH + 1U);
+                         uint64_t gmOffsetOTmp =
+-                            static_cast<uint64_t>(coreIdx) * WORKSPACE_BLOCK_SIZE_DB * (PRE_LAUNCH + 1U) +
+-                            static_cast<uint64_t>(curStackTileMod) * WORKSPACE_BLOCK_SIZE_DB;
++                            static_cast<uint64_t>(coreIdx) * Fixed::OUTPUT_SLOT_ELEMENTS * (PRE_LAUNCH + 1U) +
++                            static_cast<uint64_t>(curStackTileMod) * Fixed::OUTPUT_SLOT_ELEMENTS;
+                         GemmCoord actualBlockShapePV{rowNum, embedV, stackSeqTile};
+                         LayoutOTmp layoutOTmp(rowNum, embedV, embedRoundV);
+ #ifdef __DAV_C220_CUBE__
+@@ -984,10 +1028,14 @@ namespace SplitFuse {
+                         LayoutO layoutO(qSeqlen, embed * qHeads);
+                         LayoutUpdate layoutUpdate(rowNum, embed, embedRound);
+                         LayoutLse layoutLse(totalQTokens, qHeads);
+-                        uint64_t gmOffsetUpdate = static_cast<uint64_t>(coreIdx) * WORKSPACE_BLOCK_SIZE_DB;
++                        uint64_t gmOffsetUpdate = static_cast<uint64_t>(coreIdx) * Fixed::OUTPUT_SLOT_ELEMENTS;
+                         Arch::CrossCoreWaitFlag(pvReady);
+ 
+-                        if constexpr (IS_FD) {
++                        if constexpr (USE_RESIDENT_OUTPUT) {
++                            residentOutput(gO[gmOffsetO], gOTmp[gmOffsetOTmp], strideO,
++                                stackSeqCount - PRE_LAUNCH == 0,
++                                nowkvSIdx + 1 >= kvSLoopNumTotal, curStackTileMod);
++                        } else if constexpr (IS_FD) {
+                             LayoutLse layoutgmLse(qSBlockSize, qNBlockSize);
+                             LayoutLse layoutgmLo(qSBlockSize, embed * qNBlockSize);
+                             typename EpilogueRescaleO::SplitKVParams splitParams;
+@@ -1085,6 +1133,7 @@ namespace SplitFuse {
+         BlockMmadQK blockMmadQK;
+         BlockMmadPV blockMmadPV;
+         EpilogueRescaleO epilogueRescaleO;
++        Epilogue::Block::FmhaResidentOutput<ArchTag> residentOutput;
+         EpilogueInitOut epilogueInitOut;
+         EpilogueOnlineSoftmax epilogueOnlineSoftmax;
+     };
+diff --git a/op_kernel/fmha_fixed_case.hpp b/op_kernel/fmha_fixed_case.hpp
+new file mode 100644
+index 0000000..9aeb483
+--- /dev/null
++++ b/op_kernel/fmha_fixed_case.hpp
+@@ -0,0 +1,53 @@
++#ifndef FMHA_FIXED_CASE_HPP
++#define FMHA_FIXED_CASE_HPP
++
++namespace KernelCommon {
++// The Python entry validates this ABI before dispatch. Keeping geometry,
++// task mapping and workspace strides together prevents independently changing
++// one tile dimension while leaving an old task count or buffer stride behind.
++struct FmhaFixedCase {
++    static constexpr uint32_t BATCH = 8;
++    static constexpr uint32_t HEADS = 64;
++    static constexpr uint32_t SEQUENCE = 2048;
++    static constexpr uint32_t DIM = 128;
++    static constexpr uint32_t Q_TILE = 256;
++    static constexpr uint32_t KV_TILE = 512;
++    static constexpr uint32_t AIC_COUNT = 24;
++    static constexpr uint32_t LOOKAHEAD = 2;
++    static constexpr uint32_t SLOTS = LOOKAHEAD + 1;
++    static constexpr uint32_t Q_BLOCKS = SEQUENCE / Q_TILE;
++    static constexpr uint32_t KV_BLOCKS = SEQUENCE / KV_TILE;
++    static constexpr uint32_t TASKS_PER_BATCH = HEADS * Q_BLOCKS;
++    static constexpr uint32_t TASKS = BATCH * TASKS_PER_BATCH;
++    static constexpr uint32_t TOKENS = BATCH * SEQUENCE;
++    static constexpr uint32_t TOKEN_STRIDE = HEADS * DIM;
++    static constexpr uint64_t SCORE_SLOT_ELEMENTS = Q_TILE * KV_TILE;
++    static constexpr uint64_t OUTPUT_SLOT_ELEMENTS = Q_TILE * DIM;
++    static constexpr uint64_t SCORE_BYTES = AIC_COUNT * SLOTS * SCORE_SLOT_ELEMENTS * sizeof(float);
++    static constexpr uint64_t PROBABILITY_BYTES = AIC_COUNT * SLOTS * SCORE_SLOT_ELEMENTS * sizeof(half);
++    static constexpr uint64_t PARTIAL_OUTPUT_BYTES = AIC_COUNT * SLOTS * OUTPUT_SLOT_ELEMENTS * sizeof(float);
++    static constexpr uint64_t WORKSPACE_BYTES = SCORE_BYTES + PROBABILITY_BYTES + PARTIAL_OUTPUT_BYTES;
++
++    struct Task {
++        uint32_t batch;
++        uint32_t head;
++        uint32_t queryBlock;
++    };
++
++    __aicore__ static inline Task decode(uint32_t index)
++    {
++        // Preserve the accepted head-fast ordering, without scanning ragged
++        // sequence boundaries or reading cumulative lengths for each task.
++        return {index / TASKS_PER_BATCH, index % HEADS,
++                (index % TASKS_PER_BATCH) / HEADS};
++    }
++
++    static_assert(SEQUENCE % Q_TILE == 0 && SEQUENCE % KV_TILE == 0,
++                  "This specialization has no tail blocks");
++    static_assert(LOOKAHEAD > 0 && LOOKAHEAD < KV_BLOCKS,
++                  "The fixed pipeline must have a nonempty steady state");
++    static_assert(WORKSPACE_BYTES <= 88ULL * 1024 * 1024,
++                  "Must fit the official host-allocated workspace");
++};
++} // namespace KernelCommon
++#endif

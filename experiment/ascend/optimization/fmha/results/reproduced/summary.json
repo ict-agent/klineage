@@ -1,0 +1,58 @@
+{
+  "warmup": 20,
+  "repeat": 50,
+  "trials": 7,
+  "checks": 3,
+  "timer": "NPU Event",
+  "statistic": "median of per-trial mean latency",
+  "shape": [
+    16384,
+    64,
+    128
+  ],
+  "sequence_lengths": [
+    2048,
+    2048,
+    2048,
+    2048,
+    2048,
+    2048,
+    2048,
+    2048
+  ],
+  "pairs": [
+    {
+      "seed": 20260921,
+      "bitwise_equal": true,
+      "baseline_us": 7561.1175537109375,
+      "candidate_us": 6512.34619140625,
+      "core_speedup": 1.1610435519672857,
+      "baseline_entrypoint_us": 7870.6060791015625,
+      "candidate_entrypoint_us": 6707.977294921875,
+      "entrypoint_speedup": 1.1733203219187742
+    },
+    {
+      "seed": 123,
+      "bitwise_equal": true,
+      "baseline_us": 7549.1754150390625,
+      "candidate_us": 6515.814208984375,
+      "core_speedup": 1.158592797908484,
+      "baseline_entrypoint_us": 7884.620361328125,
+      "candidate_entrypoint_us": 6703.895263671875,
+      "entrypoint_speedup": 1.176125230364882
+    },
+    {
+      "seed": 777,
+      "bitwise_equal": true,
+      "baseline_us": 7523.7493896484375,
+      "candidate_us": 6521.2158203125,
+      "core_speedup": 1.153734149729137,
+      "baseline_entrypoint_us": 7831.0015869140625,
+      "candidate_entrypoint_us": 6708.92822265625,
+      "entrypoint_speedup": 1.1672507630158477
+    }
+  ],
+  "core_geomean_speedup": 1.1577861792843402,
+  "entrypoint_geomean_speedup": 1.1722262486628032,
+  "passed": true
+}

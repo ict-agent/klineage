@@ -1,0 +1,47 @@
+{
+  "method": "git diff --no-index",
+  "files": [
+    {
+      "file": "op_kernel/attn_infra/epilogue/block/fmha_fixed_ub_layout.hpp",
+      "added": 40,
+      "deleted": 0
+    },
+    {
+      "file": "op_kernel/attn_infra/epilogue/block/fmha_resident_output.hpp",
+      "added": 180,
+      "deleted": 0
+    },
+    {
+      "file": "op_kernel/attn_infra/epilogue/block/fused_block_epilogue_online_softmax.hpp",
+      "added": 10,
+      "deleted": 9
+    },
+    {
+      "file": "op_kernel/attn_infra/epilogue/block/fused_block_epilogue_rescale_o.hpp",
+      "added": 8,
+      "deleted": 7
+    },
+    {
+      "file": "op_kernel/attn_infra/epilogue/block/online_softmax/fused_block_epilogue_online_softmax_row_ops.inc.hpp",
+      "added": 3,
+      "deleted": 5
+    },
+    {
+      "file": "op_kernel/fia_kernel_common.hpp",
+      "added": 4,
+      "deleted": 3
+    },
+    {
+      "file": "op_kernel/flash_attention_regular.h",
+      "added": 73,
+      "deleted": 24
+    },
+    {
+      "file": "op_kernel/fmha_fixed_case.hpp",
+      "added": 53,
+      "deleted": 0
+    }
+  ],
+  "added": 371,
+  "deleted": 48
+}

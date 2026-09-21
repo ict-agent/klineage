@@ -1,0 +1,31 @@
+{
+  "role": "candidate",
+  "seed": 777,
+  "correct": true,
+  "torch": "2.10.0+cpu",
+  "torch_npu": "2.10.0.post4",
+  "opp": "/home/projects/fmha/artifact-reproduction/fmha/opp_candidate",
+  "bitwise_equal": true,
+  "full_comparisons": 3,
+  "checked_elements_per_comparison": 134217728,
+  "core_trials_us": [
+    6450.4327392578125,
+    6521.2158203125,
+    6540.8740234375,
+    6535.9173583984375,
+    6512.5274658203125,
+    6519.698486328125,
+    6543.106689453125
+  ],
+  "entrypoint_trials_us": [
+    6677.1502685546875,
+    6681.0302734375,
+    6708.92822265625,
+    6836.4837646484375,
+    6689.9578857421875,
+    6719.78515625,
+    6731.2890625
+  ],
+  "core_median_us": 6521.2158203125,
+  "entrypoint_median_us": 6708.92822265625
+}
