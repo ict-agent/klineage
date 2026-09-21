@@ -22,6 +22,10 @@ SETTING_LABELS = {
     "with_memory": "With Expert Knowledge",
 }
 
+#: A gated call within this factor of the best one ends the useful search: the
+#: curve is flat afterwards, so that call is the run's peak.
+PLATEAU = 1.05
+
 
 def read_unit(unit: Path) -> list[dict]:
     events = unit / "events.jsonl"
@@ -50,6 +54,24 @@ def read_unit(unit: Path) -> list[dict]:
             "correctness_passed": event.get("correctness_passed"),
         })
     return rows
+
+
+def milestones(rows: list[dict]) -> dict:
+    """First passing call, plateau, and best call of one unit.
+
+    ``rows`` come from :func:`read_unit`, so each one already carries its
+    position on the time and token axes.
+    """
+
+    passing = [row for row in rows
+               if row["correctness_passed"] and row.get("latency_ms")]
+    if not passing:
+        return {"gate_calls": len(rows), "rejected": len(rows)}
+    best = min(passing, key=lambda row: row["latency_ms"])
+    threshold = best["latency_ms"] * PLATEAU
+    peak = next((row for row in passing if row["latency_ms"] <= threshold), None)
+    return {"first": passing[0], "peak": peak, "best": best,
+            "gate_calls": len(rows), "rejected": len(rows) - len(passing)}
 
 
 def summarize(kernel: str, setting: str, rows: list[dict]) -> str:
