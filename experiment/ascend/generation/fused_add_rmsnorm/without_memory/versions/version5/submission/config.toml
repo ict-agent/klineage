@@ -1,0 +1,9 @@
+[solution]
+name = "fused_add_rmsnorm_ascendc"
+definition = "fused_add_rmsnorm"
+author = "klineage"
+
+[build]
+language = "ascendc"
+entry_point = "kernel.asc::kernel"
+destination_passing_style = true

@@ -1,0 +1,9 @@
+{
+  "kernel": "sparse_attention",
+  "seed": 0,
+  "torch_version": "2.14.0",
+  "sha256": "5a8c8bd51bfe4c4a7af91271e396f70dfc6690edab4cec4866d5d77bc3d5951d",
+  "bytes": 1284505888,
+  "definition_sha256": "ad5cc86ba44fde67a8321d9484095cabddcd9b5b7b10dae6277e4e8bb6ba77fe",
+  "workload_sha256": "12c9707394cda65d7940e8a4b5d1dcd84c8739d7767daea2958e1f3c65a586bc"
+}

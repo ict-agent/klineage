@@ -1,0 +1,62 @@
+{
+  "name": "fused_add_rmsnorm",
+  "op_type": "rmsnorm",
+  "description": "DeepSeek-V3.2 residual add followed by RMSNorm with BF16 outputs.",
+  "axes": {
+    "TOKENS": {
+      "type": "var"
+    },
+    "HIDDEN_SIZE": {
+      "type": "const",
+      "value": 7168
+    }
+  },
+  "inputs": {
+    "hidden_states": {
+      "shape": [
+        "TOKENS",
+        "HIDDEN_SIZE"
+      ],
+      "dtype": "bfloat16",
+      "description": "Contiguous token-major activations."
+    },
+    "residual": {
+      "shape": [
+        "TOKENS",
+        "HIDDEN_SIZE"
+      ],
+      "dtype": "bfloat16",
+      "description": "Contiguous token-major residual stream."
+    },
+    "weight": {
+      "shape": [
+        "HIDDEN_SIZE"
+      ],
+      "dtype": "bfloat16",
+      "description": "BF16 RMSNorm scale at the fused-kernel boundary."
+    }
+  },
+  "outputs": {
+    "output": {
+      "shape": [
+        "TOKENS",
+        "HIDDEN_SIZE"
+      ],
+      "dtype": "bfloat16",
+      "description": "Normalized BF16 activations."
+    },
+    "residual_out": {
+      "shape": [
+        "TOKENS",
+        "HIDDEN_SIZE"
+      ],
+      "dtype": "bfloat16",
+      "description": "BF16 residual after the elementwise add."
+    }
+  },
+  "constraints": [
+    "TOKENS > 0",
+    "HIDDEN_SIZE == 7168"
+  ],
+  "reference": "# Independent FP32-accumulation oracle for DeepSeek-V3.2's fused norm.\n\nfrom __future__ import annotations\n\nimport torch\n\nEPSILON = 1e-6\n\n\ndef run(hidden_states: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor):\n    summed = hidden_states.to(torch.float32) + residual.to(torch.float32)\n    residual_out = summed.to(hidden_states.dtype)\n    mean_square = summed.square().mean(dim=-1, keepdim=True)\n    inverse_rms = torch.rsqrt(mean_square + EPSILON)\n    output = (summed * inverse_rms * weight.to(torch.float32)).to(\n        hidden_states.dtype\n    )\n    return output, residual_out\n"
+}

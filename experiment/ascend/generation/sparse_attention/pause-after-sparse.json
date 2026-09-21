@@ -1,0 +1,6 @@
+{
+  "at": "2026-09-21T13:55:05.985785+00:00",
+  "action": "stop_after_sparse_attention",
+  "reason": "User requests review before FusedAddRmsNorm. Parent scheduler PID8090 suspended; running child sessions continue to deadline.",
+  "next_kernel_authorized": false
+}

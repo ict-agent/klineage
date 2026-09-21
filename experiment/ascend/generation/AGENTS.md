@@ -1,5 +1,9 @@
 # Ascend generation runs (task 2) — how to run them
 
+For the next SparseAttention and FusedAddRmsNorm runs, use [NEXT_RUNS.md](NEXT_RUNS.md).
+The host, model configuration, language policy and trace protocol there supersede
+the historical defaults below. SparseAttention and FusedAddRmsNorm runs are complete; see their audited READMEs.
+
 Scope: the runs published in this directory. One Codex session per
 (kernel, setting) writes an Ascend kernel for the 910B1. This file is the
 operator's runbook and the contract a session's agent is held to.

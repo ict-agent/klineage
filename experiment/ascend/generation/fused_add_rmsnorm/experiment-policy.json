@@ -1,0 +1,29 @@
+{
+  "created_at": "2026-09-21T15:10:50.103516+00:00",
+  "kernel": "fused_add_rmsnorm",
+  "required_language": "ascendc",
+  "model": "deepseek-flash",
+  "timeout_s": 7200,
+  "host": "910b",
+  "arch": "Ascend910B3",
+  "devices": [
+    2,
+    3
+  ],
+  "previous_run": "Stopped Triton run deleted at user request; fresh sessions and baselines.",
+  "expert_files": {
+    "cann/source.json": "0bf8afd17e8e72f48dc928a4b0fddb14eecfdfed74181f2c846eb3110b2f6416",
+    "cann/README.md": "416c740f4a610296ba5cc1d45cff7626b1989b9f853bb3f33cecfec19708c156",
+    "cann/ops_nn/LICENSE": "cb282ac2b66d7d6734c3fb354db792b28cf23ab29fbc16d5cfd8bd542bedeb1e",
+    "cann/ops_nn/norm/add_rms_norm/README.md": "40cc4532f7ee46d59c7e24df63f7be5d768553a47713442bd627bd100e6d00c3",
+    "cann/ops_nn/norm/add_rms_norm/op_host/add_rms_norm_tiling.h": "a8292fbacdabf11509c400e1ce9f4c33f0b6f5523466b83148b6a5c46ae4b2bc",
+    "cann/ops_nn/norm/add_rms_norm/op_host/add_rms_norm_tiling.cpp": "da0ee4904228855fd655642aebf54606cd18517b903dd0b9885423637a59d649",
+    "cann/ops_nn/norm/add_rms_norm/op_kernel/add_rms_norm_base.h": "46e9686706277ed5047f78b961e91e6299c062238d93b64711b0a7942853fefa",
+    "cann/ops_nn/norm/add_rms_norm/op_kernel/add_rms_norm_single_n.h": "b8d05e19ccbcd20bda29c3ee8fdb844d05ac55ccd306b623d866b957eeb98a37",
+    "cann/ops_nn/norm/add_rms_norm/op_kernel/add_rms_norm_multi_n.h": "7bdb027535907b432b1bb94b607047a2d2f97d7e13265e8f9f4cbd24a9e83c71",
+    "cann/ops_nn/norm/add_rms_norm/op_kernel/add_rms_norm_merge_n.h": "eaa3ee2d0d9a9c73d54f5a1c58ec1e0a3a572105ee82791844911f46adb8bb8d",
+    "cann/ops_nn/norm/add_rms_norm/op_kernel/add_rms_norm.cpp": "57462d2d4a21073e95796ddb6109f86b7eea0e9199fe0a3b025f9d9ee77bd480",
+    "cann/ops_nn/norm/add_rms_norm/op_kernel/add_rms_norm_split_d.h": "ee5a3f808413d1b9e1c82f28dd77da8e6ba7bde3120d32ff313157ac6b96484e",
+    "cann/ops_nn/norm/add_rms_norm/op_kernel/add_rms_norm.h": "ebe9dcbe41fb116a3b197b9cb33334ab024a38b837dbeafdb9877a548273d02f"
+  }
+}

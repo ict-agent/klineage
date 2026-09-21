@@ -12,3 +12,13 @@ baseline/
 paper/
 !problems/definitions/paper/
 !problems/workloads/paper/
+
+.venv-ascend/
+experiment/sparse_attention/problems/inputs/*.safetensors
+experiment/fused_add_rmsnorm/problems/inputs/*.safetensors
+
+.DS_Store
+experiment/ascend/generation/batch.log
+
+# Private expert context must never be published.
+/experiment/ascend/generation/*/with_memory/expert/*.md

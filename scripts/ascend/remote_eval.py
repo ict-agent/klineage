@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 #: This file lives at `<project root>/scripts/ascend/`, so the checkout is two
@@ -76,7 +77,7 @@ if destination:
 def install_probe(work: Path) -> Path:
     """Expose the launch probe to every worker the gate spawns."""
 
-    directory = SCRATCH_ROOT / PROBE_DIR
+    directory = Path(tempfile.mkdtemp(prefix=PROBE_DIR+"-", dir=SCRATCH_ROOT))
     directory.mkdir(parents=True, exist_ok=True)
     (directory / "sitecustomize.py").write_text(PROBE_SOURCE, encoding="utf-8")
     count = directory / "launches"

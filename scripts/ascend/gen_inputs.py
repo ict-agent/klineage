@@ -15,6 +15,7 @@ since noise would break the sum-to-one the top-p reference relies on.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -63,6 +64,16 @@ def build(definition: dict, workload: dict, names: list[str], seed: int) -> dict
         spec = definition["inputs"][name]
         shape = tuple(sizes[axis] for axis in spec["shape"])
         dtype = getattr(torch, spec["dtype"])
+        if definition['name'] == 'sparse_attention' and name == 'indices':
+            # Sample without replacement from the causal prefix, preserving
+            # unsorted order. Padding is semantic, never Gaussian noise.
+            selected = torch.full(shape, -1, dtype=dtype)
+            for row in range(sizes['TOKENS']):
+                count = min(sizes['TOPK'], row + 1)
+                for head in range(sizes['KV_HEADS']):
+                    selected[row, head, :count] = torch.randperm(row + 1, generator=generator)[:count].to(dtype)
+            inputs[name] = selected
+            continue
         if name in SEMANTIC:
             inputs[name] = torch.full(shape, SEMANTIC[name](sizes), dtype=dtype)
             continue
@@ -104,7 +115,13 @@ def main(argv: list[str] | None = None) -> None:
 
     target.parent.mkdir(parents=True, exist_ok=True)
     save_file(inputs, str(target), metadata={STRIDES_METADATA: "{}"})
-    print(f"wrote {target.relative_to(REPO)} ({target.stat().st_size} bytes)")
+    digest = hashlib.file_digest(target.open('rb'), 'sha256').hexdigest()
+    manifest = dict(kernel=args.kernel, seed=args.seed, torch_version=torch.__version__,
+                    sha256=digest, bytes=target.stat().st_size,
+                    definition_sha256=hashlib.sha256((root/'definitions'/f'{args.kernel}.json').read_bytes()).hexdigest(),
+                    workload_sha256=hashlib.sha256((root/'workloads'/f'{args.kernel}.jsonl').read_bytes()).hexdigest())
+    target.with_suffix('.manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
+    print(f"wrote {target.relative_to(REPO)} ({target.stat().st_size} bytes), sha256={digest}")
 
 
 if __name__ == "__main__":

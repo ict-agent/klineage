@@ -1,5 +1,23 @@
 # Ascend generation — expert-knowledge ablation (task 2)
 
+## 2026-09-21/22：新增910B3实验
+
+DeepSeek-V4.1-Flash + Codex，两组各7200秒，完整原始Trace仅本地保留；公开产物包含时间/用量元数据和固定评测版本。
+
+| Kernel | Setting | Correct | 最佳延迟 | vs. PyTorch reference |
+| --- | --- | --- | --- | --- |
+| SparseAttention | A | ✗ | — | — |
+| SparseAttention | B | ✓ | 117.7193 ms | 3.882× |
+| FusedAddRmsNorm | A | ✓ | 0.565930 ms | 10.618× |
+| FusedAddRmsNorm | B | ✓ | 0.457040 ms | 13.170× |
+
+完整定义、曲线和限制见 [SparseAttention](sparse_attention/README.md) 与
+[FusedAddRmsNorm](fused_add_rmsnorm/README.md)。后者A/B均限定AscendC；
+有早期私有计时/编译探测和中途协议纠正，不能宣称完全无干预对照。
+Baseline是题目reference，不是最优专用融合算子。
+组合时间/Token图见 [next-plots](next-plots/)。以下为此前KDA/Top-P实验报告，保留原文。
+
+
 Two kernels, `kda` and `top_p`, each generated twice by one Codex session:
 `without_memory` (bare prompt) and `with_memory` (same prompt plus an expert
 pack the agent may read). Same gate, same 2 h budget, same delivery rules; the

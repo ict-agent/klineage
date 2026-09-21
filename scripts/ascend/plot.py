@@ -37,7 +37,7 @@ def read_unit(unit: Path) -> list[dict]:
             event = json.loads(line)
         except ValueError:
             continue
-        when = datetime.fromisoformat(event["at"])
+        when = datetime.fromisoformat(event.get("finished_at") or event["at"])
         started = started or when
         if event.get("event") == "api_response":
             tokens += event.get("total_tokens") or 0
@@ -52,8 +52,43 @@ def read_unit(unit: Path) -> list[dict]:
             "baseline_ms": event.get("baseline_ms"),
             "speedup": event.get("speedup"),
             "correctness_passed": event.get("correctness_passed"),
+            "compile_passed": event.get("compile_passed", True),
+            "profile_passed": event.get("profile_passed", True),
+            "version": event.get("version"),
         })
     return rows
+
+
+def passed(row: dict) -> bool:
+    return all(row.get(key, True) for key in
+               ("correctness_passed", "compile_passed", "profile_passed"))
+
+
+def running_best(rows: list[dict], field: str, x: str) -> list[dict]:
+    best, points = None, []
+    for row in sorted(rows, key=lambda item: item[x]):
+        value = row.get(field)
+        if not passed(row) or value is None or value <= 0:
+            continue
+        best = value if best is None else (max(best, value) if field == 'speedup' else min(best, value))
+        points.append(dict(row, **{field: best}))
+    return points
+
+
+def observed_end(unit: Path, x: str) -> float:
+    events = []
+    path = unit/'events.jsonl'
+    if not path.exists():
+        return 0
+    for line in path.read_text().splitlines():
+        try:
+            events.append(json.loads(line))
+        except ValueError:
+            continue
+    if x == 'tokens':
+        return sum(e.get('total_tokens') or 0 for e in events if e.get('event') == 'api_response')
+    times = [datetime.fromisoformat(e.get('finished_at') or e['at']) for e in events if e.get('at')]
+    return (max(times)-min(times)).total_seconds() if times else 0
 
 
 def milestones(rows: list[dict]) -> dict:
@@ -64,7 +99,7 @@ def milestones(rows: list[dict]) -> dict:
     """
 
     passing = [row for row in rows
-               if row["correctness_passed"] and row.get("latency_ms")]
+               if passed(row) and row.get("latency_ms")]
     if not passing:
         return {"gate_calls": len(rows), "rejected": len(rows)}
     best = min(passing, key=lambda row: row["latency_ms"])
@@ -79,7 +114,7 @@ def summarize(kernel: str, setting: str, rows: list[dict]) -> str:
 
     label = SETTING_LABELS.get(setting, setting)
     passing = [row for row in rows
-               if row["correctness_passed"] and row["latency_ms"]]
+               if passed(row) and row["latency_ms"]]
     correct = "✓" if passing else "✗"
     if not passing:
         return f"| {kernel.upper()} | {label} | {correct} | - | - |"
@@ -95,7 +130,7 @@ def main() -> None:
                     default=Path(os.environ.get("KLINEAGE_RUN_ROOT", "~/klineage-runs")).expanduser())
     parser.add_argument("--out", type=Path, default=Path("experiment/ascend/plots"))
     parser.add_argument("--x", choices=("seconds", "tokens"), default="tokens")
-    parser.add_argument("--y", choices=("latency", "speedup"), default="latency")
+    parser.add_argument("--y", choices=("latency", "speedup"), default="speedup")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -134,25 +169,45 @@ def main() -> None:
         return
 
     field = "latency_ms" if args.y == "latency" else "speedup"
-    label = "latency (ms)" if args.y == "latency" else "speedup vs baseline (x)"
-    figure, axes = plt.subplots(1, len(series), figsize=(4 * len(series), 3.2), squeeze=False)
-    for column, (kernel, groups) in enumerate(sorted(series.items())):
+    label = "Running-best valid latency (ms, log)" if args.y == "latency" else "Running-best valid speedup vs torch (log)"
+    figure, axes = plt.subplots(1, len(SETTINGS), figsize=(12, 4), sharey=True, squeeze=False)
+    colors = {kernel: f'C{index}' for index, kernel in enumerate(sorted(series))}
+    for column, setting in enumerate(SETTINGS):
         axis = axes[0][column]
-        for setting, rows in groups.items():
-            points = [row for row in rows if row.get(field)]
-            axis.plot(
-                [row[args.x] for row in points],
-                [row[field] for row in points],
-                marker="o",
-                label=setting,
-            )
-        axis.set_title(kernel)
-        axis.set_xlabel(args.x)
-        axis.set_ylabel(label)
-        axis.legend()
+        for kernel, groups in sorted(series.items()):
+            points = running_best(groups.get(setting, []), field, args.x)
+            if not points:
+                continue
+            x = [row[args.x] for row in points]
+            y = [row[field] for row in points]
+            end = observed_end(args.root/kernel/setting, args.x)
+            if end > x[-1]:
+                x.append(end)
+                y.append(y[-1])
+            axis.step(x, y, where='post', linewidth=2, color=colors[kernel], label=kernel)
+            axis.scatter([row[args.x] for row in points], [row[field] for row in points],
+                         s=10, color=colors[kernel])
+        axis.set_title(SETTING_LABELS[setting])
+        axis.set_xlabel('Elapsed time (seconds)' if args.x == 'seconds' else 'Cumulative API tokens')
+        axis.set_yscale('log')
+        extent = max((observed_end(args.root/kernel/group, args.x)
+                      for kernel in series for group in SETTINGS), default=1)
+        axis.set_xlim(0, max(1, extent))
+        axis.grid(True, which='both', alpha=0.25)
+        if args.y == 'speedup':
+            axis.axhline(1, color='gray', linestyle=':', linewidth=1)
+            axis.text(0.98, 1, 'torch parity', transform=axis.get_yaxis_transform(),
+                      ha='right', va='bottom', color='gray')
+        if axis.get_legend_handles_labels()[0]:
+            axis.legend()
+        else:
+            axis.text(0.5, 0.5, 'No valid measurement', transform=axis.transAxes, ha='center')
+    axes[0][0].set_ylabel(label)
     figure.tight_layout()
     target = args.out / f"{args.y}-vs-{args.x}.png"
-    figure.savefig(target, dpi=150)
+    figure.savefig(target, dpi=180)
+    figure.savefig(target.with_suffix('.pdf'))
+    plt.close(figure)
     print("wrote", target)
 
 

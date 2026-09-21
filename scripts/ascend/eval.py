@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import secrets
 import shutil
 import subprocess
@@ -27,11 +28,15 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 #: Harness root on the host: `<root>/repo` is this project's checkout there,
 #: `<root>/runs` holds one evaluation copy per unit.
-HARNESS_ROOT_DEFAULT = "~/ascend-harness"
+HARNESS_ROOT_DEFAULT = os.environ.get('KLINEAGE_REMOTE_ROOT', '~/ascend-harness')
+HOST_ROOT = ''
+CONTAINER_ROOT = ''
+ACTIVE_SNAPSHOT = None
+EVALUATION_RECORDED = False
 REPO_NAME = "repo"
 RUNS_NAME = "runs"
 #: The container's bisheng (CANN 9.1.0) takes the SoC name, not `dav-c220`.
-ARCH_DEFAULT = "Ascend910B1"
+ARCH_DEFAULT = os.environ.get("ASCEND_ARCH", "Ascend910B1")
 #: The torch-npu baseline is 50-500x slower than a device kernel; one harness
 #: protocol for it costs minutes, so it is measured once per device and cached.
 BASELINE_FILE = "baseline.json"
@@ -66,13 +71,15 @@ def run_ssh(host: str, container: str, script: str, *,
     snippet travels base64-encoded to keep quoting intact.
     """
 
+    if HOST_ROOT and CONTAINER_ROOT:
+        script = script.replace(HOST_ROOT, CONTAINER_ROOT)
     encoded = base64.b64encode(script.encode()).decode()
     command = f'docker exec -i {container} bash -lc "$(echo {encoded} | base64 -d)" </dev/null'
     return subprocess.run(["ssh", host, command], capture_output=True, text=True, timeout=timeout)
 
 
 def remote_script(work: str, repository: str, timeout: float, device: str | None) -> str:
-    environment = f"KLINEAGE_BACKEND=ascend ASCEND_ARCH={ARCH_DEFAULT}"
+    environment = f"KLINEAGE_BACKEND=ascend ASCEND_ARCH={ARCH}"
     if device:
         environment += f" ASCEND_RT_VISIBLE_DEVICES={device}"
     # umask 022: the container runs as root, and its default 027 hides snapshots
@@ -89,10 +96,10 @@ def remote_script(work: str, repository: str, timeout: float, device: str | None
 def baseline_script(work: str, repository: str, timeout: float, device: str | None) -> str:
     """Time the problem's torch reference: the Baseline column of the report."""
 
-    environment = f"KLINEAGE_BACKEND=ascend ASCEND_ARCH={ARCH_DEFAULT}"
+    environment = f"KLINEAGE_BACKEND=ascend ASCEND_ARCH={ARCH}"
     if device:
         environment += f" ASCEND_RT_VISIBLE_DEVICES={device}"
-    scratch = BASELINE_SCRATCH
+    scratch = BASELINE_SCRATCH + "/" + secrets.token_hex(8)
     return (
         f"umask 022 && mkdir -p {scratch} && cd {work}/problems && {environment} "
         f"python {repository}/scripts/ascend/remote_eval.py --repo {repository} "
@@ -107,7 +114,7 @@ def push_work(work: Path, host: str, remote: str) -> None:
     subprocess.run(["ssh", host, f"mkdir -p {remote}"], check=True)
     subprocess.run(
         ["rsync", "-az", "--delete", "--exclude", ".klineage", "--exclude", "versions",
-         "--exclude", "build", "--exclude", "evaluations", f"{work}/", f"{host}:{remote}/"],
+         "--exclude", "build", "--exclude", "evaluations", "--exclude", "extra-info", f"{work}/", f"{host}:{remote}/"],
         check=True,
     )
 
@@ -221,7 +228,13 @@ def platform_of(work: Path, host: str, container: str) -> str:
 
 
 def append_event(work: Path, fields: dict) -> None:
+    global EVALUATION_RECORDED
     from klineage.logging import LOG_FILE
+
+    if ACTIVE_SNAPSHOT is not None:
+        fields = dict(fields, version=ACTIVE_SNAPSHOT.name)
+        (ACTIVE_SNAPSHOT/'result.json').write_text(json.dumps(fields, indent=2, default=str)+'\n')
+    EVALUATION_RECORDED = True
 
     stats = work / ".klineage" / "stats"
     stats.mkdir(parents=True, exist_ok=True)
@@ -229,22 +242,41 @@ def append_event(work: Path, fields: dict) -> None:
         stream.write(json.dumps({"event": "evaluate", **fields}, default=str) + "\n")
 
 
-def main(argv: list[str] | None = None) -> None:
-    global REPO_REMOTE, RUNS, ARCH
+def require_triton(fields: dict, launches: int | None) -> None:
+    if launches is not None and launches > 0:
+        return
+    fields.update(profile_passed=False, device_kernel=False,
+                  error="Triton policy: no verified Triton kernel launch.")
+    fields.pop("latency_ms", None)
+
+
+def check_language(language: str, required: str) -> None:
+    if required == "ascendc" and language != "ascendc":
+        raise ValueError('This experiment requires build language="ascendc". Python/Triton bundles are rejected.')
+    if required == "triton" and language != "python":
+        raise ValueError('This experiment requires Triton: use build language="python". Native bundles are rejected.')
+
+
+def evaluate_once(argv: list[str] | None = None) -> None:
+    global REPO_REMOTE, RUNS, ARCH, HOST_ROOT, CONTAINER_ROOT
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", type=Path, default=Path.cwd())
     parser.add_argument("--device", default="2", help="NPU id on the host")
     parser.add_argument("--timeout", type=float, default=1800, help="evaluation worker seconds")
-    parser.add_argument("--host", default="910b1")
-    parser.add_argument("--container", default="vllm0.23.0-zcj")
+    parser.add_argument("--host", default=os.environ.get("KLINEAGE_HOST", "910b1"))
+    parser.add_argument("--container", default=os.environ.get("KLINEAGE_CONTAINER", "vllm0.23.0-zcj"))
     parser.add_argument("--remote-root", default=HARNESS_ROOT_DEFAULT,
                         help="harness root on the host: repo/ + runs/")
     parser.add_argument("--arch", default=ARCH_DEFAULT)
     parser.add_argument("--baseline", action="store_true",
                         help="measure and cache the torch-npu baseline, then exit")
+    parser.add_argument("--container-root", default=os.environ.get("KLINEAGE_CONTAINER_ROOT"))
+    parser.add_argument("--language", choices=("unrestricted", "triton", "ascendc"),
+                        default=os.environ.get("KLINEAGE_LANGUAGE", "unrestricted"))
     args = parser.parse_args(argv)
 
     root = host_path(args.host, args.remote_root)
+    HOST_ROOT, CONTAINER_ROOT = root, args.container_root or root
     REPO_REMOTE, RUNS, ARCH = f"{root}/{REPO_NAME}", f"{root}/{RUNS_NAME}", args.arch
     work = args.work.expanduser().resolve()
     remote = f"{RUNS}/{slug(work)}"
@@ -277,7 +309,10 @@ def main(argv: list[str] | None = None) -> None:
         platform=platform_of(work, args.host, args.container),
     )
     kernel = Kernel(definition["name"], problem, bundle_sources(submission))
+    check_language(kernel.language, args.language)
     save_kernel(kernel, work)
+    if ACTIVE_SNAPSHOT is not None:
+        shutil.copy2(work/'kernel.json', ACTIVE_SNAPSHOT/'kernel.json')
 
     push_work(work, args.host, remote)
 
@@ -338,7 +373,10 @@ def main(argv: list[str] | None = None) -> None:
         if gate.get("timing"):
             fields["timing"] = gate["timing"]
 
-    if payload.get("latency_ms") is not None:
+    if args.language == "triton":
+        require_triton(fields, fields.get("triton_launches"))
+
+    if fields.get("latency_ms") is not None:
         try:
             baseline = cached_baseline(work, args.device) \
                 or measure_baseline(work, args, remote, REPO_REMOTE)
@@ -348,29 +386,10 @@ def main(argv: list[str] | None = None) -> None:
             fields["baseline_error"] = f"{type(failure).__name__}: {failure}"[:300]
     append_event(work, fields)
 
-    # Fetch the snapshot the remote evaluation just wrote, as version<N-1>.
-    listing = run_ssh(args.host, args.container, f"ls {remote}/.klineage/versions 2>/dev/null || true")
-    numbers = sorted(int(line) for line in listing.stdout.split() if line.isdigit())
-    if numbers:
-        # Local numbering counts this workspace's own versions, so it stays 0..N
-        # even when the remote run directory already holds earlier snapshots.
-        versions = work / "versions"
-        index = sum(1 for path in versions.glob("version*") if path.is_dir()) if versions.is_dir() else 0
-        folder = versions / f"version{index}"
-        folder.mkdir(parents=True, exist_ok=True)
-        try:
-            subprocess.run(
-                ["rsync", "-az", f"{args.host}:{remote}/.klineage/versions/{numbers[-1]}/", f"{folder}/"],
-                check=True,
-            )
-            # Next to the frozen kernel.json, keep the bundle as it was
-            # submitted: version<N>/ is the kernel artifact of that gate call.
-            shutil.copytree(work / "submission", folder / "submission", dirs_exist_ok=True)
-        except subprocess.CalledProcessError as failure:  # keep the measurement
-            print(f"warning: could not fetch snapshot {numbers[-1]}: {failure}", file=sys.stderr)
-
     drop_remote(args.host, args.container, remote, "submission")
     report = dict(payload)
+    if args.language == "triton" and fields.get("device_kernel") is False:
+        report.update(profile_passed=False, latency_ms=None, error=fields["error"])
     report.update({name: fields[name] for name in
                    ("baseline_ms", "speedup", "triton_launches", "device_kernel")
                    if name in fields})
@@ -381,5 +400,44 @@ def main(argv: list[str] | None = None) -> None:
             "implementation does not count")
 
 
-if __name__ == "__main__":
+def freeze_submission(work: Path) -> Path:
+    versions = work/'versions'
+    versions.mkdir(parents=True, exist_ok=True)
+    numbers = [int(p.name[7:]) for p in versions.glob('version*') if p.name[7:].isdigit()]
+    folder = versions/f'version{max(numbers, default=-1) + 1}'
+    folder.mkdir()
+    submission = work/'submission'
+    if submission.is_dir():
+        shutil.copytree(submission, folder/'submission')
+    return folder
+
+
+def main(argv: list[str] | None = None) -> None:
+    global ACTIVE_SNAPSHOT, EVALUATION_RECORDED
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument('--work', type=Path, default=Path.cwd())
+    parser.add_argument('--baseline', action='store_true')
+    args, _ = parser.parse_known_args(argv)
+    if args.baseline or any(x in ('-h', '--help') for x in (argv or sys.argv[1:])):
+        evaluate_once(argv)
+        return
+    work = args.work.expanduser().resolve()
+    ACTIVE_SNAPSHOT = freeze_submission(work)
+    EVALUATION_RECORDED = False
+    started = now()
+    stats = work/'.klineage'/'stats'
+    stats.mkdir(parents=True, exist_ok=True)
+    with (stats/'events.jsonl').open('a') as stream:
+        stream.write(json.dumps(dict(event='evaluate_start', at=started,
+                                     version=ACTIVE_SNAPSHOT.name))+'\n')
+    try:
+        evaluate_once(argv)
+    except BaseException as error:
+        if not EVALUATION_RECORDED:
+            append_event(work, dict(at=started, finished_at=now(),
+                                   error=f'{type(error).__name__}: {error}'))
+        raise
+
+
+if __name__ == '__main__':
     main()

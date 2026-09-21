@@ -1,0 +1,23 @@
+{
+  "at": "2026-09-21T16:38:32.693364+00:00",
+  "finished_at": "2026-09-21T16:40:53.823447+00:00",
+  "kernel_name": "fused_add_rmsnorm",
+  "fingerprint": "0f74cb87ac4210ec327b6ebe8378fa50fdec752fc200bf0b8e1a9da015f01b95",
+  "platform": "ascend-Ascend910B3",
+  "compile_passed": true,
+  "correctness_passed": true,
+  "profile_passed": true,
+  "latency_ms": 0.49657998979091644,
+  "timing": {
+    "backend": "npu-events",
+    "policy": {
+      "warmup": 10,
+      "repeat": 50,
+      "cold_l2": false,
+      "trials": 3
+    }
+  },
+  "baseline_ms": 6.019270181655884,
+  "speedup": 12.121,
+  "version": "version22"
+}

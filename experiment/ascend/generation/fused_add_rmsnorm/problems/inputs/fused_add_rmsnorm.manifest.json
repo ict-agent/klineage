@@ -1,0 +1,9 @@
+{
+  "kernel": "fused_add_rmsnorm",
+  "seed": 0,
+  "torch_version": "2.14.0",
+  "sha256": "900148db5a96eb2301b811b7c26b3cb7f7afbd7d5d8e2e64ec255c3e84b95eec",
+  "bytes": 234895656,
+  "definition_sha256": "9aaf62434424184da3b03987d1677ee5f5adb8e4b6bb265ed27e1f41a676598c",
+  "workload_sha256": "2eb6d4bb160211500cfb82b76a76472cc7bc7e22417332f16d9dbaee4cda3f12"
+}

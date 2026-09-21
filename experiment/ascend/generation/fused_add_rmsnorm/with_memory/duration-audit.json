@@ -1,0 +1,11 @@
+{
+  "first_response_at": "2026-09-21T15:11:46.798389+00:00",
+  "last_response_at": "2026-09-21T17:11:37.162788+00:00",
+  "response_span_s": 7190.364399,
+  "requested_duration_s": 7200,
+  "response_span_tolerance_s": 120,
+  "response_span_passed": true,
+  "completed_evaluations": 33,
+  "unique_candidates": 29,
+  "iteration_evidence": true
+}

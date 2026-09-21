@@ -1,0 +1,137 @@
+{
+  "name": "sparse_attention",
+  "problem": {
+    "name": "sparse_attention",
+    "definition": {
+      "name": "sparse_attention",
+      "op_type": "sparse_mla_prefill",
+      "description": "DeepSeek-V3.2 supplied-index sparse MLA prefill. FP32 mathematical reductions; fixed model YaRN softmax scale 0.1352337788608801; absorbed QK width 512+64.",
+      "axes": {
+        "TOKENS": {
+          "type": "var"
+        },
+        "HEADS": {
+          "type": "var"
+        },
+        "KV_HEADS": {
+          "type": "const",
+          "value": 1
+        },
+        "QK_DIM": {
+          "type": "var"
+        },
+        "VALUE_DIM": {
+          "type": "var"
+        },
+        "TOPK": {
+          "type": "var"
+        }
+      },
+      "inputs": {
+        "q": {
+          "shape": [
+            "TOKENS",
+            "HEADS",
+            "QK_DIM"
+          ],
+          "dtype": "bfloat16",
+          "description": "Contiguous absorbed query vectors [token, head, qk]."
+        },
+        "kv": {
+          "shape": [
+            "TOKENS",
+            "KV_HEADS",
+            "QK_DIM"
+          ],
+          "dtype": "bfloat16",
+          "description": "Contiguous absorbed latent key/value rows; first VALUE_DIM elements are values."
+        },
+        "indices": {
+          "shape": [
+            "TOKENS",
+            "KV_HEADS",
+            "TOPK"
+          ],
+          "dtype": "int32",
+          "description": "Row t has min(TOPK, t+1) unique causal indices from [0,t], then -1 padding. Selected indices are unsorted; at least one is valid."
+        }
+      },
+      "outputs": {
+        "output": {
+          "shape": [
+            "TOKENS",
+            "HEADS",
+            "VALUE_DIM"
+          ],
+          "dtype": "bfloat16",
+          "description": "BF16 sparse attention output."
+        },
+        "max_logits": {
+          "shape": [
+            "TOKENS",
+            "HEADS"
+          ],
+          "dtype": "float32",
+          "description": "Natural-logit maximum over valid selected tokens."
+        },
+        "lse": {
+          "shape": [
+            "TOKENS",
+            "HEADS"
+          ],
+          "dtype": "float32",
+          "description": "Natural-log log-sum-exp over valid selected tokens."
+        }
+      },
+      "constraints": [
+        "HEADS == 128",
+        "QK_DIM == 576",
+        "VALUE_DIM == 512",
+        "TOPK == 2048",
+        "TOPK % 128 == 0",
+        "TOKENS == 8192"
+      ],
+      "reference": "\"\"\"FP32 mathematical sparse attention; only the final output is cast to BF16.\"\"\"\n\nimport math\n\nimport torch\n\nLATENT_DIM = 512\nPRE_ABSORPTION_DIM = 128 + 64\nYARN_FACTOR = 40\nYARN_MSCALE = 1.0\nSCALE = PRE_ABSORPTION_DIM**-0.5 * (\n    1 + 0.1 * YARN_MSCALE * math.log(YARN_FACTOR)\n) ** 2\nQUERY_BATCH = 32  # Bound temporary memory; each query still reduces all keys.\n\n\ndef _compute(q, kv, indices):\n    tokens, heads, width = q.shape\n    key = kv.squeeze(1).float()\n    selected = indices.squeeze(1)\n    output = torch.empty(\n        (tokens, heads, LATENT_DIM), dtype=q.dtype, device=q.device\n    )\n    maximum = torch.empty((tokens, heads), dtype=torch.float32, device=q.device)\n    lse = torch.empty_like(maximum)\n\n    for start in range(0, tokens, QUERY_BATCH):\n        stop = min(start + QUERY_BATCH, tokens)\n        rows = selected[start:stop]\n        invalid = (rows < 0) | (rows >= len(key))\n        keys = key[rows.clamp(0, len(key) - 1).long()]\n\n        # Direct equations over the complete selected set, with FP32 products.\n        scores = torch.bmm(q[start:stop].float(), keys.transpose(1, 2)) * SCALE\n        scores.masked_fill_(invalid.unsqueeze(1), -torch.inf)\n        probabilities = torch.softmax(scores, dim=-1)\n        values = torch.bmm(probabilities, keys[..., :LATENT_DIM])\n        output[start:stop] = values.to(q.dtype)\n        maximum[start:stop] = scores.amax(dim=-1)\n        lse[start:stop] = torch.logsumexp(scores, dim=-1)\n\n    return output, maximum, lse\n\n\n@torch.inference_mode()\ndef run(q, kv, indices):\n    \"\"\"Require at least one valid, unique causal index per query.\"\"\"\n    previous = torch.backends.cuda.matmul.allow_tf32\n    torch.backends.cuda.matmul.allow_tf32 = False\n    try:\n        return _compute(q, kv, indices)\n    finally:\n        torch.backends.cuda.matmul.allow_tf32 = previous\n"
+    },
+    "workload": {
+      "uuid": "819b7d0d-51cc-5b2e-872f-344712254c44",
+      "axes": {
+        "TOKENS": 8192,
+        "HEADS": 128,
+        "QK_DIM": 576,
+        "VALUE_DIM": 512,
+        "TOPK": 2048
+      },
+      "inputs": {
+        "q": {
+          "type": "safetensors",
+          "path": "inputs/sparse_attention.safetensors",
+          "tensor_key": "q"
+        },
+        "kv": {
+          "type": "safetensors",
+          "path": "inputs/sparse_attention.safetensors",
+          "tensor_key": "kv"
+        },
+        "indices": {
+          "type": "safetensors",
+          "path": "inputs/sparse_attention.safetensors",
+          "tensor_key": "indices"
+        }
+      },
+      "model_constants": {
+        "sm_scale": 0.1352337788608801,
+        "yarn_factor": 40,
+        "yarn_mscale": 1.0,
+        "qk_pre_absorption": 192
+      }
+    },
+    "language": "ascendc",
+    "platform": "ascend-Ascend910B3"
+  },
+  "source_files": {
+    "config.toml": "[solution]\nname = \"sparse_attention\"\ndefinition = \"sparse_attention\"\nauthor = \"klineage\"\n\n[build]\nlanguage = \"ascendc\"\nentry_point = \"kernel.asc::kernel\"\ndestination_passing_style = true\n",
+    "solution/kernel.asc": "// Sparse MLA prefill (supplied-index sparse attention) for Ascend 910B3.\n//\n//   q        : [TOKENS, HEADS, KDIM]      bf16\n//   kv       : [TOKENS, 1, KDIM]          bf16  (first VDIM elements are values)\n//   indices  : [TOKENS, 1, TOPK]          int32 (-1 padding)\n//   output   : [TOKENS, HEADS, VDIM]      bf16\n//   max_logits, lse : [TOKENS, HEADS]     fp32\n//\n// One device block (1 AIC + 1 AIV in MIX mode) owns a strided set of tokens.\n// Per token the selected key rows are gathered into a per-block staging tile in\n// global memory, S = Q * K^T is produced by the Cube, row max / exp / bf16\n// probability matrix by the Vector unit, and O = P * KV by the Cube again.\n// All cube work is issued from the AIV side through the KFC client that\n// REGIST_MATMUL_OBJ installs; the AIC only runs the KFC server loop.\n\n#include <torch/extension.h>\n#include <c10/core/DeviceGuard.h>\n#include \"torch_npu/csrc/core/npu/NPUStream.h\"\n#include \"kernel_operator.h\"\n#ifndef __ASCENDC_ENABLE_SUPER_KERNEL__\n#define __ASCENDC_ENABLE_SUPER_KERNEL__ 1\n#endif\n// The kernel-direct-launch path does not populate __get_kfc_workspace_addr(),\n// so route the KFC workspace to the buffer the host supplies.\n#define GetSysWorkSpacePtr() g_sysWorkspaceReserved\n#define GetUserWorkspace(ws) (g_sysWorkspaceReserved + (int64_t)RESERVED_WORKSPACE)\n#include \"lib/matmul_intf.h\"\n\nusing namespace AscendC;\n\nnamespace sa {\n\nconstexpr int32_t TOKENS = 8192;\nconstexpr int32_t HEADS = 128;\nconstexpr int32_t KDIM = 576;\nconstexpr int32_t VDIM = 512;\nconstexpr int32_t TOPK = 2048;\nconstexpr float SCALE = 0.1352337788608801f;\nconstexpr float NEG = -1.0e30f;\nconstexpr int32_t NCORE = 20;\nconstexpr int32_t NT = 64;              // keys per softmax tile\nconstexpr int32_t TILES = TOPK / NT;    // 32\nconstexpr int32_t NR5 = 8;              // output rows per vector chunk\nconstexpr int32_t ICH = 128;            // indices per gather chunk\nconstexpr int32_t NB = 32;              // key rows per gather batch (ICH/NB even)\n\n// Event ids.  Re-used across the disjoint gather / softmax / output phases.\nconstexpr TEventID EV_A = (TEventID)0;\nconstexpr TEventID EV_B = (TEventID)1;\nconstexpr TEventID EV_C = (TEventID)2;\nconstexpr TEventID EV_D = (TEventID)3;\nconstexpr TEventID EV_E = (TEventID)4;\nconstexpr TEventID EV_F = (TEventID)5;\nconstexpr TEventID EV_G = (TEventID)6;\n\nusing A1T = MatmulType<TPosition::GM, CubeFormat::ND, bfloat16_t>;\nusing B1T = MatmulType<TPosition::GM, CubeFormat::ND, bfloat16_t, true>;\nusing C1T = MatmulType<TPosition::GM, CubeFormat::ND, float>;\nusing BST = MatmulType<TPosition::GM, CubeFormat::ND, float>;\n\nconstexpr MatmulShapeParams SP1{HEADS, TOPK, KDIM, 128, 128, 64};\nconstexpr MatmulConfig CFG1 = GetMMConfig<MatmulConfigMode::CONFIG_NORM>(SP1);\nconstexpr auto TIL1 = GetMatmulApiTiling<A1T, B1T, C1T, BST>(CFG1, 524288);\n\nusing A2T = MatmulType<TPosition::GM, CubeFormat::ND, bfloat16_t>;\nusing B2T = MatmulType<TPosition::GM, CubeFormat::ND, bfloat16_t>;\nusing C2T = MatmulType<TPosition::GM, CubeFormat::ND, float>;\nconstexpr MatmulShapeParams SP2{HEADS, KDIM, TOPK, 128, 64, 64};\nconstexpr MatmulConfig CFG2 = GetMMConfig<MatmulConfigMode::CONFIG_NORM>(SP2);\nconstexpr auto TIL2 = GetMatmulApiTiling<A2T, B2T, C2T, BST>(CFG2, 524288);\n\nclass SparseMla {\npublic:\n    __aicore__ inline SparseMla() {}\n\n    __aicore__ inline void Init1(GM_ADDR q, GM_ADDR kv, GM_ADDR idx, GM_ADDR out, GM_ADDR mx,\n                                GM_ADDR lse, GM_ADDR wk, GM_ADDR sbuf, GM_ADDR pbuf, GM_ADDR obuf,\n                                GM_ADDR pen, GM_ADDR stt, GM_ADDR sysws)\n    {\n        qGm.SetGlobalBuffer((__gm__ bfloat16_t *)q);\n        kvGm.SetGlobalBuffer((__gm__ bfloat16_t *)kv);\n        idxGm.SetGlobalBuffer((__gm__ int32_t *)idx);\n        outGm.SetGlobalBuffer((__gm__ bfloat16_t *)out);\n        mxGm.SetGlobalBuffer((__gm__ float *)mx);\n        lseGm.SetGlobalBuffer((__gm__ float *)lse);\n        SetSysWorkspace(sysws);\n\n        coreId = (int32_t)GetBlockIdx();\n        nCore = (int32_t)GetBlockNum();\n\n        wkGm.SetGlobalBuffer((__gm__ bfloat16_t *)wk + (int64_t)coreId * TOPK * KDIM);\n        sGm.SetGlobalBuffer((__gm__ float *)sbuf + (int64_t)coreId * HEADS * TOPK);\n        pGm.SetGlobalBuffer((__gm__ bfloat16_t *)pbuf + (int64_t)coreId * HEADS * TOPK);\n        oGm.SetGlobalBuffer((__gm__ float *)obuf + (int64_t)coreId * HEADS * KDIM);\n        penGm.SetGlobalBuffer((__gm__ float *)pen + (int64_t)coreId * TOPK);\n        invGm.SetGlobalBuffer((__gm__ float *)stt + (int64_t)coreId * HEADS);\n\n    }\n\n    __aicore__ inline void Init2()\n    {\n        pipe.InitBuffer(gathBuf, 2 * NB * KDIM * (int32_t)sizeof(bfloat16_t));\n        pipe.InitBuffer(idxBuf, ICH * (int32_t)sizeof(int32_t));\n        pipe.InitBuffer(penBuf, TOPK * (int32_t)sizeof(float));\n        pipe.InitBuffer(sBuf, HEADS * NT * (int32_t)sizeof(float));\n        pipe.InitBuffer(pBuf, HEADS * NT * (int32_t)sizeof(bfloat16_t));\n        pipe.InitBuffer(rBuf, 4 * HEADS * (int32_t)sizeof(float));\n        pipe.InitBuffer(oBuf, NR5 * VDIM * (int32_t)sizeof(float));\n        pipe.InitBuffer(obBuf, NR5 * VDIM * (int32_t)sizeof(bfloat16_t));\n        pipe.InitBuffer(ivBuf, 2 * HEADS * (int32_t)sizeof(float));\n    }\n\n    __aicore__ inline void Process()\n    {\n        if ASCEND_IS_AIV {\n            for (int32_t t = coreId; t < TOKENS; t += nCore) {\n                Gather(t);\n                Qk(t);\n                Softmax(t);\n                Pv(t);\n                WriteOut(t);\n            }\n        }\n    }\n\nprivate:\n    // ---------------------------------------------------------------- gather\n    __aicore__ inline void MakePen(LocalTensor<int32_t> &idxT, LocalTensor<float> &penT)\n    {\n        Cast(penT, idxT, RoundMode::CAST_NONE, ICH);\n        Mins(penT, penT, 0.0f, ICH);\n        Muls(penT, penT, -1.0e30f, ICH);\n    }\n\n    __aicore__ inline void Gather(int32_t t)\n    {\n        LocalTensor<bfloat16_t> stg = gathBuf.Get<bfloat16_t>();\n        LocalTensor<int32_t> idxT = idxBuf.Get<int32_t>();\n        LocalTensor<float> penT = penBuf.Get<float>();\n\n        for (int32_t c = 0; c < TOPK; c += ICH) {\n            DataCopy(idxT, idxGm[(int64_t)t * TOPK + c], ICH);\n            SetFlag<HardEvent::MTE2_S>(EV_E);\n            WaitFlag<HardEvent::MTE2_S>(EV_E);\n            SetFlag<HardEvent::S_V>(EV_F);\n            WaitFlag<HardEvent::S_V>(EV_F);\n            MakePen(idxT, penT);\n            SetFlag<HardEvent::V_MTE3>(EV_G);\n            WaitFlag<HardEvent::V_MTE3>(EV_G);\n            DataCopy(penGm[(int64_t)c], penT, ICH);\n            SetFlag<HardEvent::MTE3_V>(EV_F);\n            WaitFlag<HardEvent::MTE3_V>(EV_F);\n\n            for (int32_t b = 0; b < ICH; b += NB) {\n                int32_t bi = (b / NB) & 1;\n                if (b >= 2 * NB) {\n                    WaitFlag<HardEvent::MTE3_MTE2>(bi == 0 ? EV_C : EV_D);\n                }\n                for (int32_t i = 0; i < NB; ++i) {\n                    int32_t r = idxT.GetValue(b + i);\n                    if (r < 0 || r >= TOKENS) {\n                        r = 0;\n                    }\n                    DataCopy(stg[bi * NB * KDIM + i * KDIM], kvGm[(int64_t)r * KDIM], KDIM);\n                }\n                SetFlag<HardEvent::MTE2_MTE3>(bi == 0 ? EV_A : EV_B);\n                WaitFlag<HardEvent::MTE2_MTE3>(bi == 0 ? EV_A : EV_B);\n                for (int32_t i = 0; i < NB; ++i) {\n                    DataCopy(wkGm[(int64_t)(c + b + i) * KDIM], stg[bi * NB * KDIM + i * KDIM], KDIM);\n                }\n                SetFlag<HardEvent::MTE3_MTE2>(bi == 0 ? EV_C : EV_D);\n            }\n            WaitFlag<HardEvent::MTE3_MTE2>(EV_C);\n            WaitFlag<HardEvent::MTE3_MTE2>(EV_D);\n        }\n    }\n\n    // -------------------------------------------------------------------- QK\n    __aicore__ inline void Qk(int32_t t)\n    {\n        mm1.SetTensorA(qGm[(int64_t)t * HEADS * KDIM]);\n        mm1.SetTensorB(wkGm);\n        mm1.IterateAll(sGm);\n    }\n\n    __aicore__ inline void Add2(LocalTensor<float> &sT, LocalTensor<float> &penT)\n    {\n        Add(sT, sT, penT, (int32_t)NT, (uint8_t)HEADS,\n            {1, 1, 1, (uint8_t)(NT / 8), (uint8_t)(NT / 8), 0});\n    }\n\n    // --------------------------------------------------------------- softmax\n    __aicore__ inline void Softmax(int32_t t)\n    {\n        LocalTensor<float> sT = sBuf.Get<float>();\n        LocalTensor<float> penT = penBuf.Get<float>();\n        LocalTensor<bfloat16_t> pT = pBuf.Get<bfloat16_t>();\n        LocalTensor<float> rT = rBuf.Get<float>();\n        LocalTensor<float> runMax = rT[0];\n        LocalTensor<float> tileMax = rT[HEADS];\n        LocalTensor<float> runSum = rT[2 * HEADS];\n        LocalTensor<float> tileSum = rT[3 * HEADS];\n        LocalTensor<float> mVal = ivBuf.Get<float>();\n\n        const uint16_t rowGapF = (uint16_t)((TOPK - NT) * (int32_t)sizeof(float) / 32);\n        const uint16_t rowGapB = (uint16_t)((TOPK - NT) * (int32_t)sizeof(bfloat16_t) / 32);\n        DataCopyParams cpIn{HEADS, (uint16_t)(NT * (int32_t)sizeof(float) / 32), rowGapF, 0};\n        DataCopyParams cpOut{HEADS, (uint16_t)(NT * (int32_t)sizeof(bfloat16_t) / 32), 0, rowGapB};\n\n        Duplicate(runMax, NEG, HEADS);\n        // ---- pass A: row max over the whole selected set\n        for (int32_t tile = 0; tile < TILES; ++tile) {\n            if (tile > 0) {\n                WaitFlag<HardEvent::V_MTE2>(EV_B);\n            }\n            DataCopy(sT, sGm[(int64_t)tile * NT], cpIn);\n            DataCopy(penT, penGm[(int64_t)tile * NT], NT);\n            SetFlag<HardEvent::MTE2_V>(EV_A);\n            WaitFlag<HardEvent::MTE2_V>(EV_A);\n            Muls(sT, sT, SCALE, HEADS * NT);\n            Add2(sT, penT);\n            WholeReduceMax(tileMax, sT, NT, HEADS, 1, 1, NT / 8, ReduceOrder::ORDER_ONLY_VALUE);\n            Max(runMax, runMax, tileMax, HEADS);\n            SetFlag<HardEvent::V_MTE2>(EV_B);\n        }\n        WaitFlag<HardEvent::V_MTE2>(EV_B);\n\n        SetFlag<HardEvent::V_S>(EV_C);\n        WaitFlag<HardEvent::V_S>(EV_C);\n        for (int32_t r = 0; r < HEADS; ++r) {\n            mVal.SetValue(r, runMax.GetValue(r));\n        }\n        SetFlag<HardEvent::S_V>(EV_D);\n        WaitFlag<HardEvent::S_V>(EV_D);\n\n        // ---- pass B: p = exp(s - max), row sums, bf16 probabilities\n        Duplicate(runSum, 0.0f, HEADS);\n        for (int32_t tile = 0; tile < TILES; ++tile) {\n            if (tile > 0) {\n                WaitFlag<HardEvent::MTE3_V>(EV_F);\n                WaitFlag<HardEvent::V_MTE2>(EV_G);\n            }\n            DataCopy(sT, sGm[(int64_t)tile * NT], cpIn);\n            DataCopy(penT, penGm[(int64_t)tile * NT], NT);\n            SetFlag<HardEvent::MTE2_V>(EV_A);\n            WaitFlag<HardEvent::MTE2_V>(EV_A);\n            Muls(sT, sT, SCALE, HEADS * NT);\n            Add2(sT, penT);\n            SetFlag<HardEvent::S_V>(EV_D);\n            WaitFlag<HardEvent::S_V>(EV_D);\n            for (int32_t r = 0; r < HEADS; ++r) {\n                Adds(sT[r * NT], sT[r * NT], -mVal.GetValue(r), NT);\n            }\n            Exp(sT, sT, HEADS * NT);\n            WholeReduceSum(tileSum, sT, NT, HEADS, 1, 1, NT / 8);\n            Add(runSum, runSum, tileSum, HEADS);\n            Cast(pT, sT, RoundMode::CAST_RINT, HEADS * NT);\n            SetFlag<HardEvent::V_MTE3>(EV_E);\n            WaitFlag<HardEvent::V_MTE3>(EV_E);\n            DataCopy(pGm[(int64_t)tile * NT], pT, cpOut);\n            SetFlag<HardEvent::MTE3_V>(EV_F);\n            SetFlag<HardEvent::V_MTE2>(EV_G);\n        }\n        WaitFlag<HardEvent::MTE3_V>(EV_F);\n        WaitFlag<HardEvent::V_MTE2>(EV_G);\n\n        // ---- statistics\n        Ln(tileSum, runSum, HEADS);\n        Add(tileSum, tileSum, runMax, HEADS);\n        SetFlag<HardEvent::V_MTE3>(EV_E);\n        WaitFlag<HardEvent::V_MTE3>(EV_E);\n        DataCopy(mxGm[(int64_t)t * HEADS], runMax, HEADS);\n        DataCopy(lseGm[(int64_t)t * HEADS], tileSum, HEADS);\n        Reciprocal(runSum, runSum, HEADS);\n        SetFlag<HardEvent::V_MTE3>(EV_E);\n        WaitFlag<HardEvent::V_MTE3>(EV_E);\n        DataCopy(invGm, runSum, HEADS);\n    }\n\n    // -------------------------------------------------------------------- PV\n    __aicore__ inline void Pv(int32_t t)\n    {\n        mm2.SetTensorA(pGm);\n        mm2.SetTensorB(wkGm);\n        mm2.IterateAll(oGm);\n    }\n\n    // -------------------------------------------------------------- finalise\n    __aicore__ inline void WriteOut(int32_t t)\n    {\n        LocalTensor<float> oT = oBuf.Get<float>();\n        LocalTensor<bfloat16_t> obT = obBuf.Get<bfloat16_t>();\n        LocalTensor<float> ivT = ivBuf.Get<float>();\n        const uint16_t srcGap = (uint16_t)((KDIM - VDIM) * (int32_t)sizeof(float) / 32);\n        for (int32_t c = 0; c < HEADS; c += NR5) {\n            DataCopy(oT, oGm[(int64_t)c * KDIM], NR5 * VDIM);\n            DataCopy(ivT, invGm[(int64_t)c], NR5);\n            SetFlag<HardEvent::MTE2_S>(EV_A);\n            WaitFlag<HardEvent::MTE2_S>(EV_A);\n            for (int32_t r = 0; r < NR5; ++r) {\n                Muls(oT[r * VDIM], oT[r * VDIM], ivT.GetValue(r), VDIM);\n            }\n            Cast(obT, oT, RoundMode::CAST_RINT, NR5 * VDIM);\n            SetFlag<HardEvent::V_MTE3>(EV_B);\n            WaitFlag<HardEvent::V_MTE3>(EV_B);\n            DataCopy(outGm[((int64_t)t * HEADS + c) * VDIM], obT, NR5 * VDIM);\n            SetFlag<HardEvent::MTE3_MTE2>(EV_C);\n            WaitFlag<HardEvent::MTE3_MTE2>(EV_C);\n        }\n    }\n\npublic:\n    TPipe pipe;\n    TBuf<TPosition::VECCALC> gathBuf, idxBuf, penBuf, sBuf, pBuf, rBuf, oBuf, obBuf, ivBuf;\n    Matmul<A1T, B1T, C1T, BST, TIL1> mm1;\n    Matmul<A2T, B2T, C2T, BST, TIL2> mm2;\nprivate:\n    GlobalTensor<bfloat16_t> qGm, kvGm, outGm, wkGm, pGm;\n    GlobalTensor<int32_t> idxGm;\n    GlobalTensor<float> mxGm, lseGm, sGm, oGm, penGm, invGm;\npublic:\n    int32_t coreId = 0;\n    int32_t nCore = 1;\n};\n\n}  // namespace sa\n\n__global__ __aicore__ void sparse_mla_kernel(GM_ADDR q, GM_ADDR kv, GM_ADDR idx, GM_ADDR out,\n                                             GM_ADDR mx, GM_ADDR lse, GM_ADDR wk, GM_ADDR sbuf,\n                                             GM_ADDR pbuf, GM_ADDR obuf, GM_ADDR pen, GM_ADDR stt,\n                                             GM_ADDR sysws)\n{\n    KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_MIX_AIC_1_1);\n    sa::SparseMla op;\n    op.Init1(q, kv, idx, out, mx, lse, wk, sbuf, pbuf, obuf, pen, stt, sysws);\n    REGIST_MATMUL_OBJ(&op.pipe, g_sysWorkspaceReserved, op.mm1, op.mm2);\n    op.Init2();\n    op.Process();\n}\n\nvoid kernel(at::Tensor q, at::Tensor kv, at::Tensor indices, at::Tensor output, at::Tensor max_logits,\n            at::Tensor lse)\n{\n    TORCH_CHECK(q.scalar_type() == at::kBFloat16, \"q must be bfloat16\");\n    TORCH_CHECK(kv.scalar_type() == at::kBFloat16, \"kv must be bfloat16\");\n    TORCH_CHECK(indices.scalar_type() == at::kInt, \"indices must be int32\");\n    TORCH_CHECK(output.scalar_type() == at::kBFloat16, \"output must be bfloat16\");\n    TORCH_CHECK(max_logits.scalar_type() == at::kFloat, \"max_logits must be float32\");\n    TORCH_CHECK(lse.scalar_type() == at::kFloat, \"lse must be float32\");\n    TORCH_CHECK(q.is_contiguous() && kv.is_contiguous() && indices.is_contiguous() &&\n                    output.is_contiguous() && max_logits.is_contiguous() && lse.is_contiguous(),\n                \"tensors must be contiguous\");\n\n    const c10::DeviceGuard guard(q.device());\n    aclrtStream stream = c10_npu::getCurrentNPUStream().stream(true);\n\n    auto f32 = q.options().dtype(at::kFloat);\n    auto bf16 = q.options().dtype(at::kBFloat16);\n\n    auto wk = at::empty({(int64_t)sa::NCORE * sa::TOPK * sa::KDIM}, bf16);\n    auto sW = at::empty({(int64_t)sa::NCORE * sa::HEADS * sa::TOPK}, f32);\n    auto pW = at::empty({(int64_t)sa::NCORE * sa::HEADS * sa::TOPK}, bf16);\n    auto oW = at::empty({(int64_t)sa::NCORE * sa::HEADS * sa::KDIM}, f32);\n    auto penW = at::empty({(int64_t)sa::NCORE * sa::TOPK}, f32);\n    auto stW = at::empty({(int64_t)sa::NCORE * sa::HEADS}, f32);\n    auto sysW = at::empty({(int64_t)32 * 1024 * 1024}, f32);\n\n    sparse_mla_kernel<<<sa::NCORE, nullptr, stream>>>(\n        (uint8_t *)q.data_ptr(), (uint8_t *)kv.data_ptr(), (uint8_t *)indices.data_ptr(),\n        (uint8_t *)output.data_ptr(), (uint8_t *)max_logits.data_ptr(), (uint8_t *)lse.data_ptr(),\n        (uint8_t *)wk.data_ptr(), (uint8_t *)sW.data_ptr(), (uint8_t *)pW.data_ptr(),\n        (uint8_t *)oW.data_ptr(), (uint8_t *)penW.data_ptr(), (uint8_t *)stW.data_ptr(),\n        (uint8_t *)sysW.data_ptr());\n}\n\nPYBIND11_MODULE(TORCH_EXTENSION_NAME, module)\n{\n    module.def(\"kernel\", &kernel);\n}\n"
+  },
+  "validation": null
+}

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Verified optimization skills from expert accelerator kernels."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = ["jinja2>=3.1,<4", "pyyaml>=6,<7", "safetensors>=0.4,<1"]
+dependencies = ["jinja2>=3.1,<4", "pyyaml>=6,<7", "safetensors>=0.4,<1", "tomli-w>=1,<2"]
 
 [project.scripts]
 klineage-init-memory = "klineage.cli.init_memory:main"

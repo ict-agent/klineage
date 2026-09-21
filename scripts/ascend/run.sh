@@ -14,21 +14,27 @@
 #   scripts/ascend/run.sh plot           latency curves from events.jsonl
 set -euo pipefail
 
-HOST=${HOST:-910b1}
-CONTAINER=${CONTAINER:-vllm0.23.0-zcj}
+HOST=${KLINEAGE_HOST:-${HOST:-910b1}}
+CONTAINER=${KLINEAGE_CONTAINER:-${CONTAINER:-vllm0.23.0-zcj}}
 # Harness root on the host: resolved there because the container's HOME is /root.
-ROOT=${ROOT:-$(ssh "$HOST" 'echo $HOME/ascend-harness')}
+ROOT=${KLINEAGE_REMOTE_ROOT:-${ROOT:-$(ssh "$HOST" 'echo $HOME/ascend-harness')}}
+CONTAINER_ROOT=${KLINEAGE_CONTAINER_ROOT:-$ROOT}
 REPO="$ROOT/repo"
 LOCAL=$(cd "$(dirname "$0")/../.." && pwd)
 PY="$LOCAL/.venv-ascend/bin/python"
 LOG="$LOCAL/experiment/ascend/generation/batch.log"
 # Unit workspaces live outside the checkout so Codex cannot walk up into
 # the repo (expert packs, transfer runs). Override with RUN_ROOT=...
-RUN_ROOT=${RUN_ROOT:-$HOME/klineage-runs}
+RUN_ROOT=${KLINEAGE_RUN_ROOT:-${RUN_ROOT:-$HOME/klineage-runs}}
+export KLINEAGE_HOST="$HOST" KLINEAGE_CONTAINER="$CONTAINER"
+export KLINEAGE_REMOTE_ROOT="$ROOT" KLINEAGE_CONTAINER_ROOT="$CONTAINER_ROOT"
+export KLINEAGE_RUN_ROOT="$RUN_ROOT"
 
 container() {
-  local encoded
-  encoded=$(printf '%s' "$*" | base64 | tr -d '\n')
+  local encoded script
+  script="$*"
+  script="${script//$ROOT/$CONTAINER_ROOT}"
+  encoded=$(printf '%s' "$script" | base64 | tr -d '\n')
   ssh "$HOST" "docker exec -i $CONTAINER bash -lc \"\$(echo $encoded | base64 -d)\" </dev/null"
 }
 
@@ -44,10 +50,14 @@ sync_repo() {
   # plain --delete keeps the excluded expert packs and transfer runs there,
   # where an agent with ssh can read them.
   rsync -az --delete --delete-excluded \
-    --exclude .git --exclude '*.pdf' --exclude __pycache__ \
+    --exclude .git --exclude '.venv*' --exclude '*.pdf' --exclude __pycache__ \
     --exclude 'scripts/ascend/expert' --exclude 'scripts/apply_transfer.py' \
     --exclude 'experiment/_transfer' --exclude 'experiment/transfer_*' \
+    --exclude 'scripts/ascend/deepseek_env.sh' --exclude 'scripts/ascend/task2.sh' --exclude 'scripts/ascend/deepseek.example.toml' \
     --exclude 'scripts/ascend/batch.py' --exclude 'scripts/ascend/collect.py' \
+    --exclude 'scripts/ascend/device_guard.py' --exclude 'scripts/ascend/session_loop.py' --exclude 'scripts/ascend/trace_proxy.py' --exclude 'scripts/ascend/resume.py' \
+    --exclude 'scripts/ascend/run.sh' --exclude 'scripts/ascend/spawn.py' \
+    --exclude 'scripts/ascend/notes' --exclude 'scripts/ascend/community_baseline.py' \
     --exclude 'scripts/ascend/gen_inputs.py' --exclude 'scripts/ascend/plot.py' \
     --exclude 'scripts/ascend/smoke_eval.py' --exclude 'scripts/ascend/README.md' \
     --exclude 'scripts/ascend/*.tmpl' \
@@ -64,9 +74,11 @@ bootstrap() {
   container "cd $REPO && pip install -q -e . && python -c 'import torch, torch_npu, klineage; print(\"torch\", torch.__version__, \"npu\", torch_npu.__version__)'"
 }
 
-probe() { container "cd $REPO && KLINEAGE_BACKEND=ascend ASCEND_ARCH=Ascend910B1 python scripts/ascend/remote_eval.py --probe"; }
+probe() { container "cd $REPO && KLINEAGE_BACKEND=ascend ASCEND_ARCH=${ASCEND_ARCH:-Ascend910B1} python scripts/ascend/remote_eval.py --probe"; }
 
-smoke() { container "cd $REPO && python scripts/ascend/smoke_eval.py --repo $REPO --work $ROOT/smoke --device ${1:-2}"; }
+smoke() {
+  rsync -az "$LOCAL/scripts/ascend/smoke_eval.py" "$HOST:$REPO/scripts/ascend/smoke_eval.py"
+  container "cd $REPO && ASCEND_ARCH=${ASCEND_ARCH:-Ascend910B1} python scripts/ascend/smoke_eval.py --repo $REPO --work $ROOT/smoke --device ${1:-2}"; }
 
 start() {
   mkdir -p "$(dirname "$LOG")"

@@ -30,18 +30,15 @@ import signal
 import subprocess
 import sys
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 KERNELS = ("kda", "sparse_attention", "top_p", "fused_add_rmsnorm", "gqa")
 SETTINGS = ("without_memory", "with_memory")
 #: The evaluator documentation plus the artifact spec both settings get: the
-#: task's own sample for the AscendC bundle format, which this study pins.
+#: task's own sample for the AscendC bundle format.
 SKILLS = ("bench", "ascendc")
-#: The artifact language the gate compiles; templates render it.
-LANGUAGE = "ascendc"
-ENTRY_POINT = "kernel.asc::kernel"
 #: Dropped from the unit copies of ``scripts/`` and ``src/``: the gate plus the
 #: package it imports is all the agent needs. Everything listed here is
 #: experiment metadata (settings, expert packs, CUDA transfer tooling, memory
@@ -51,6 +48,18 @@ PRUNE = (
     "scripts/ascend/README.md",
     "scripts/ascend/agents.md.tmpl",
     "scripts/ascend/batch.py",
+    "scripts/ascend/task2.sh",
+    "scripts/ascend/deepseek_env.sh",
+    "scripts/ascend/deepseek.example.toml",
+    "scripts/ascend/resume.py",
+    "scripts/ascend/trace_proxy.py",
+    "scripts/ascend/session_loop.py",
+    "scripts/ascend/device_guard.py",
+    "scripts/ascend/collect.py",
+    "scripts/ascend/notes",
+    "scripts/ascend/run.sh",
+    "scripts/ascend/spawn.py",
+    "scripts/ascend/community_baseline.py",
     "scripts/ascend/expert",
     "scripts/ascend/gen_inputs.py",
     "scripts/ascend/plot.py",
@@ -172,6 +181,8 @@ def eval_cmd(work: Path, unit: Path, device: str = "") -> str:
     python = f"{VENV_LINK}/bin/python"
     gate = str(EVAL.relative_to(REPO))         # the unit copy, relative to its root
     command = f"{python} {gate} --work {rooted(work, unit)}"
+    if os.environ.get("KLINEAGE_LANGUAGE") in ("triton", "ascendc"):
+        command += " --language " + os.environ["KLINEAGE_LANGUAGE"]
     return f"{command} --device {device}" if device else command
 
 
@@ -209,24 +220,75 @@ def template_fields(work: Path, kernel: str, setting: str, unit: Path,
     expert = setting == "with_memory"
     return {
         "{kernel}": kernel,
+        "{target_arch}": os.environ.get("ASCEND_ARCH", "Ascend910B1"),
         "{setting}": setting,
+        "{language_contract}": (
+            'You must use Triton (triton-ascend) for all device computation. '
+            'Set build language = "python", entry_point = "kernel.py::kernel". '
+            'Python may only wrap/launch Triton kernels and allocate buffers; '
+            'do not implement computation in torch/torch-npu, AscendC, C++, or call prebuilt operators.'
+            if os.environ.get('KLINEAGE_LANGUAGE') == 'triton' else
+            'You must use AscendC for all device computation. Set build language = "ascendc", '
+            'entry_point = "kernel.asc::kernel". Implement a native AscendC kernel and the required '
+            'C++/pybind wrapper. Do not use Triton, torch/torch-npu computation, or prebuilt operators. '
+            'Read work/.agents/skills/ascendc/SKILL.md for the ABI, compiler and current-stream requirements.'
+            if os.environ.get('KLINEAGE_LANGUAGE') == 'ascendc' else
+            'Implementation language is your choice: AscendC or a Python wrapper launching a device kernel.'
+        ),
         "{hours}": str(hours),
-        "{language}": LANGUAGE,
-        "{entry_point}": ENTRY_POINT,
-        "{eval_cmd}": eval_cmd(work, unit, device),
+                "{eval_cmd}": eval_cmd(work, unit, device),
         "{expert_line}": f"Expert knowledge: read `{rooted(work, unit)}/expert/` first.\n" if expert else "",
         **path_fields(work, unit),
     }
 
 
-def provider_settings() -> tuple[str, str]:
-    """(provider name, base_url) from the user's Codex config."""
-
+def provider_config(options):
     import tomllib
 
-    data = tomllib.loads(Path("~/.codex/config.toml").expanduser().read_text(encoding="utf-8"))
-    name = data.get("model_provider", "custom")
-    return name, data["model_providers"][name]["base_url"]
+    path = options.provider_config.expanduser().resolve()
+    data = tomllib.loads(path.read_text())
+    model = options.model or data.get('model', '')
+    if 'deepseek' not in model.lower():
+        raise ValueError('Provide the DeepSeek-V4.1-Flash model configuration; refusing to use another model.')
+    name = data.get('model_provider')
+    provider = dict(data.get('model_providers', {}).get(name, {}))
+    if not provider.get('base_url'):
+        raise ValueError('The provider must define a Responses-compatible base_url.')
+    if provider.get('wire_api', 'responses') != 'responses':
+        raise ValueError('Use a Responses-compatible endpoint or adapter.')
+    key = provider.get('env_key')
+    if key and not os.environ.get(key):
+        raise ValueError(f'Missing provider credential environment variable: {key}')
+    return model, provider, path
+
+
+def write_config(home, model, provider, source):
+    import tomli_w
+
+    home.mkdir(parents=True, exist_ok=True)
+    config = dict(model=model, model_provider='experiment', model_context_window=1000000,
+                  model_auto_compact_token_limit=900000, approval_policy='never',
+                  sandbox_mode='danger-full-access', web_search='disabled',
+                  features={'multi_agent': False}, model_providers={'experiment': provider})
+    target = home/'config.toml'
+    target.write_text(tomli_w.dumps(config))
+    target.chmod(0o600)
+    auth = source.parent/'auth.json'
+    if provider.get('requires_openai_auth') and auth.is_file():
+        shutil.copy2(auth, home/'auth.json')
+        (home/'auth.json').chmod(0o600)
+    public = dict(config)
+    public['model_providers'] = {'experiment': {k: v for k, v in provider.items()
+                                if k in ('name', 'base_url', 'wire_api', 'env_key', 'requires_openai_auth')}}
+    (home.parent/'config.public.toml').write_text(tomli_w.dumps(public))
+
+
+def provider_settings():
+    # Legacy resume entry; new runs require an explicit DeepSeek configuration.
+    import tomllib
+    data = tomllib.loads(Path('~/.codex/config.toml').expanduser().read_text())
+    name = data.get('model_provider', 'custom')
+    return name, data['model_providers'][name]['base_url']
 
 
 def prepare(work: Path, kernel: str, setting: str, template: str, unit: Path,
@@ -299,7 +361,7 @@ def package(out: Path, work: Path) -> None:
 
 
 def run_unit(unit: tuple[str, str], device: str, options: argparse.Namespace) -> dict:
-    from klineage.logging import UsageProxy
+    from trace_proxy import AuditProxy
 
     kernel, setting = unit
     out = Path(options.run_root) / kernel / setting
@@ -311,48 +373,71 @@ def run_unit(unit: tuple[str, str], device: str, options: argparse.Namespace) ->
     error = None
     try:
         template = (REPO / "scripts" / "ascend" / "agents.md.tmpl").read_text(encoding="utf-8")
+        if out.exists() and any((out/name).exists() for name in ('trace.jsonl', 'result.json', 'status.json')):
+            archive = out.parent/'archive'
+            archive.mkdir(exist_ok=True)
+            out.rename(archive/f"{setting}-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%f')}")
         install_unit(out)
         prepare(work, kernel, setting, template, out, hours, device)
         fields = template_fields(work, kernel, setting, out, device, hours)
         prompt = render((REPO / "scripts" / "ascend" / "prompt.md.tmpl").read_text(encoding="utf-8"),
                         fields)
 
-        provider, upstream = provider_settings()
+        model, provider, source_config = provider_config(options)
+        upstream = provider['base_url']
+        record.update(ascend_arch=os.environ.get('ASCEND_ARCH'), model=model, model_label='DeepSeek-V4.1-Flash',
+                      model_context_window=1000000, timeout_s=options.timeout,
+                      required_language=os.environ.get("KLINEAGE_LANGUAGE", "unrestricted"),
+                      host=os.environ.get('KLINEAGE_HOST', '910b1'),
+                      container=os.environ.get('KLINEAGE_CONTAINER', 'vllm0.23.0-zcj'))
+        (out/'prompt.txt').write_text(prompt)
+        shutil.copy2(work/'AGENTS.md', out/'AGENTS.session.md')
         stats = work / ".klineage" / "stats"
-        with UsageProxy(upstream, directory=stats) as proxy:
-            command = [
-                options.codex_bin, "-a", "never", "exec",
-                "-s", "danger-full-access",
-                "--json", "--skip-git-repo-check",
-                "--output-last-message", str(out / "final_message.txt"),
-                "-C", str(work),
-                "-c", f"model_providers.{provider}.base_url={proxy.url}",
-                "-",
-            ]
-            with (out / "trace.jsonl").open("w", encoding="utf-8") as trace, \
-                 (out / "stderr.log").open("w", encoding="utf-8") as stderr:
-                process = subprocess.Popen(
-                    command, cwd=work, stdin=subprocess.PIPE, stdout=trace, stderr=stderr,
-                    text=True, start_new_session=True,
-                )
-                try:
-                    process.communicate(prompt, timeout=options.timeout)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGTERM)
-                    process.communicate()
-                    raise TimeoutError(f"Codex timed out after {options.timeout}s")
-            if process.returncode:
-                raise RuntimeError(f"Codex exited with {process.returncode}")
+        with AuditProxy(upstream, stats) as proxy:
+            provider['base_url'] = proxy.url
+            home = out/'codex-home'
+            write_config(home, model, provider, source_config)
+            environment = dict(os.environ, CODEX_HOME=str(home))
+            from session_loop import run_session
+            record.update(run_session(out, work, environment, options.codex_bin, prompt, options.timeout))
     except Exception as failure:  # partial evidence is still packaged below
         error = f"{type(failure).__name__}: {failure}"
         record["error"] = error
 
     package(out, work)
+    from session_loop import audit_span
+    record.update(audit_span(out, options.timeout))
+    sessions = sorted((out/'codex-home/sessions').rglob('*.jsonl'))
+    if len(sessions) == 1:
+        shutil.copy2(sessions[0], out/'session.jsonl')
+    elif sessions:
+        shutil.copytree(out/'codex-home/sessions', out/'sessions', dirs_exist_ok=True)
+    api = work/'.klineage/stats/api'
+    if api.is_dir():
+        shutil.copytree(api, out/'api', dirs_exist_ok=True)
+    candidates = []
+    for version in (out/'versions').glob('version*'):
+        result_path = version/'result.json'
+        if not result_path.exists():
+            continue
+        result = json.loads(result_path.read_text())
+        if all(result.get(k) for k in ('compile_passed', 'correctness_passed', 'profile_passed')) and result.get('latency_ms'):
+            candidates.append((result['latency_ms'], version, result))
+    if candidates:
+        latency, version, measured = min(candidates, key=lambda item: item[0])
+        if (out/'submission').exists():
+            (out/'submission').rename(out/'agent_submission')
+        shutil.copytree(version/'submission', out/'submission')
+        shutil.copy2(version/'kernel.json', out/'kernel.json')
+        record.update(selected_version=version.name, latency_ms=latency,
+                      speedup=measured.get('speedup'), correctness_passed=True)
+    else:
+        record['correctness_passed'] = False
     record.update(events_counts(out / "events.jsonl"))
     record["versions"] = len(list((out / "versions").glob("version*")))
     record["duration_s"] = round(time.monotonic() - started, 1)
     record["finished_at"] = datetime.now(UTC).isoformat()
-    record["status"] = "error" if error else "ok"
+    record["status"] = "error" if error else ("ok" if record.get("response_span_passed") and record.get("iteration_evidence") else "incomplete")
     out.mkdir(parents=True, exist_ok=True)
     (out / "result.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     return record
@@ -365,6 +450,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--devices", default="2,3,4,5", help="NPU ids, one unit at a time each")
     parser.add_argument("--timeout", type=int, default=7200, help="seconds per Codex session")
     parser.add_argument("--codex-bin", default=CODEX_DEFAULT)
+    parser.add_argument('--provider-config', type=Path,
+                        default=Path(os.environ.get('KLINEAGE_PROVIDER_CONFIG', '~/.codex/config.toml')))
+    parser.add_argument('--model', help='Exact provider model ID for DeepSeek-V4.1-Flash')
     parser.add_argument("--run-root", type=Path, default=RUN_ROOT)
     parser.add_argument("--retry-failed", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -394,27 +482,38 @@ def main(argv: list[str] | None = None) -> None:
     if options.dry_run:
         return
 
+    provider_config(options)  # Fail before starting any unit if model/auth is missing.
+    if not devices or not 0 < options.timeout <= 7200:
+        raise SystemExit('Supply devices and a timeout in (0, 7200].')
     from multiprocessing import Pool
 
-    tasks = [(unit, devices[index % len(devices)], options) for index, unit in enumerate(units)]
-    pool = Pool(len(devices))
-    try:
-        results = []
-        for record in pool.starmap(run_unit, tasks):
-            results.append(record)
-            brief = {key: record.get(key) for key in
-                     ("kernel", "setting", "device", "status", "duration_s", "versions")}
-            print(json.dumps(brief), flush=True)
-            # One batch per unit in practice: the per-unit copy keeps parallel
-            # batches (setting A and B side by side) from clobbering each other.
-            payload = json.dumps(results, indent=2) + "\n"
-            name = f"status-{record['kernel']}-{record['setting']}.json"
-            for path in (options.run_root / "status.json", options.run_root / name):
-                path.write_text(payload, encoding="utf-8")
-    finally:
-        pool.close()
-        pool.join()
+    results = []
+    # Finish both settings before the next kernel. Round-robin assignment to a
+    # generic pool can otherwise start two units on the same NPU.
+    for kernel in kernels:
+        group = [unit for unit in units if unit[0] == kernel]
+        for start in range(0, len(group), len(devices)):
+            wave = group[start:start+len(devices)]
+            tasks = [(unit, devices[index], options) for index, unit in enumerate(wave)]
+            from device_guard import check_devices
+            check_devices(os.environ.get('KLINEAGE_HOST', '910b1'), devices[:len(wave)])
+            with Pool(len(tasks)) as pool:
+                records = pool.starmap(run_unit, tasks)
+            results.extend(records)
+            for record in records:
+                print(json.dumps(record), flush=True)
+            (options.run_root/'status.json').write_text(json.dumps(results, indent=2)+'\n')
+        if group:
+            subprocess.run([sys.executable, str(REPO/'scripts/ascend/collect.py'),
+                            '--kernel', kernel, '--root', str(options.run_root),
+                            '--out', str(REPO/'experiment/ascend/generation')], check=True)
+            for axis in ('seconds', 'tokens'):
+                subprocess.run([sys.executable, str(REPO/'scripts/ascend/plot.py'),
+                                '--root', str(options.run_root), '--out',
+                                str(REPO/'experiment/ascend/generation/next-plots'),
+                                '--x', axis, '--y', 'speedup'], check=True)
 
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     main()

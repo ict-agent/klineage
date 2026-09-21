@@ -1,22 +1,12 @@
-Implement and optimize the `{kernel}` operator on Ascend 910B1 in AscendC.
+Implement and optimize `{kernel}` on {target_arch} from its definition and torch reference.
+Read `{work_rel}/AGENTS.md` for the artifact format and fixed evaluation interface.
+Definition: `{work_rel}/problems/definitions/{kernel}.json`.
+Workload: `{work_rel}/problems/workloads/{kernel}.jsonl`.
 
-Two phases, one session:
-
-1. Land a correct AscendC version, as fast as possible.
-2. Spend the rest of the budget improving it, one measured change per gate call.
-
-- Work in `{work_rel}/`; every path is relative to the project root (`cd {root_rel}` from this workspace).
-- Definition: `{work_rel}/problems/definitions/{kernel}.json`; workload: `{work_rel}/problems/workloads/{kernel}.jsonl`.
-- Evaluate from the project root with: {eval_cmd}
-  Gate every change: keep it when correctness passes and latency drops, revert it otherwise.
-- Budget: {hours} hours, then the session is killed. Run `date` before each step and
-  keep iterating while more than ~10 minutes remain. Do not stop early to report;
-  only the gated `submission/` counts, and an unmeasured change scores nothing.
-- Vary one thing per step (tiling, block sizes, vector width, fusion, launch shape,
-  pipelining), and keep the best result in the bundle.
-- Deliverable: a correct, fast AscendC bundle at `{work_rel}/submission/config.toml`
-  (`language = "{language}"`, `entry_point = "{entry_point}"`) + `{work_rel}/submission/solution/`.
-  The timed path must run the kernel you compiled; a torch-only implementation is rejected.
-- Score: speedup over the torch-npu baseline. The gate prints `speedup` next to the latency.
+First obtain a correct generated device kernel, then use the remaining {hours}-hour budget
+for measured improvements. Continue until the deadline; do not stop after a successful version.
+If this turn ends early, the controller will resume this same session with the remaining budget. {language_contract} Run the fixed gate
+`{eval_cmd}` from the project root after each candidate change. Retain the best passing
+measured version in `{work_rel}/submission/`. Check the time as you work; the runner stops
+this session at the deadline. Report the final measured latency and speedup.
 {expert_line}
-End your last message with the final measured latency.

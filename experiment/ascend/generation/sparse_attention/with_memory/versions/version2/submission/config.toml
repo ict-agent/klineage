@@ -1,0 +1,9 @@
+[solution]
+name = "sparse-attn-triton"
+definition = "sparse_attention"
+author = "klineage"
+
+[build]
+language = "python"
+entry_point = "kernel.py::kernel"
+destination_passing_style = true

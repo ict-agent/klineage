@@ -1,0 +1,91 @@
+{
+  "name": "sparse_attention",
+  "op_type": "sparse_mla_prefill",
+  "description": "DeepSeek-V3.2 supplied-index sparse MLA prefill. FP32 mathematical reductions; fixed model YaRN softmax scale 0.1352337788608801; absorbed QK width 512+64.",
+  "axes": {
+    "TOKENS": {
+      "type": "var"
+    },
+    "HEADS": {
+      "type": "var"
+    },
+    "KV_HEADS": {
+      "type": "const",
+      "value": 1
+    },
+    "QK_DIM": {
+      "type": "var"
+    },
+    "VALUE_DIM": {
+      "type": "var"
+    },
+    "TOPK": {
+      "type": "var"
+    }
+  },
+  "inputs": {
+    "q": {
+      "shape": [
+        "TOKENS",
+        "HEADS",
+        "QK_DIM"
+      ],
+      "dtype": "bfloat16",
+      "description": "Contiguous absorbed query vectors [token, head, qk]."
+    },
+    "kv": {
+      "shape": [
+        "TOKENS",
+        "KV_HEADS",
+        "QK_DIM"
+      ],
+      "dtype": "bfloat16",
+      "description": "Contiguous absorbed latent key/value rows; first VALUE_DIM elements are values."
+    },
+    "indices": {
+      "shape": [
+        "TOKENS",
+        "KV_HEADS",
+        "TOPK"
+      ],
+      "dtype": "int32",
+      "description": "Row t has min(TOPK, t+1) unique causal indices from [0,t], then -1 padding. Selected indices are unsorted; at least one is valid."
+    }
+  },
+  "outputs": {
+    "output": {
+      "shape": [
+        "TOKENS",
+        "HEADS",
+        "VALUE_DIM"
+      ],
+      "dtype": "bfloat16",
+      "description": "BF16 sparse attention output."
+    },
+    "max_logits": {
+      "shape": [
+        "TOKENS",
+        "HEADS"
+      ],
+      "dtype": "float32",
+      "description": "Natural-logit maximum over valid selected tokens."
+    },
+    "lse": {
+      "shape": [
+        "TOKENS",
+        "HEADS"
+      ],
+      "dtype": "float32",
+      "description": "Natural-log log-sum-exp over valid selected tokens."
+    }
+  },
+  "constraints": [
+    "HEADS == 128",
+    "QK_DIM == 576",
+    "VALUE_DIM == 512",
+    "TOPK == 2048",
+    "TOPK % 128 == 0",
+    "TOKENS == 8192"
+  ],
+  "reference": "\"\"\"FP32 mathematical sparse attention; only the final output is cast to BF16.\"\"\"\n\nimport math\n\nimport torch\n\nLATENT_DIM = 512\nPRE_ABSORPTION_DIM = 128 + 64\nYARN_FACTOR = 40\nYARN_MSCALE = 1.0\nSCALE = PRE_ABSORPTION_DIM**-0.5 * (\n    1 + 0.1 * YARN_MSCALE * math.log(YARN_FACTOR)\n) ** 2\nQUERY_BATCH = 32  # Bound temporary memory; each query still reduces all keys.\n\n\ndef _compute(q, kv, indices):\n    tokens, heads, width = q.shape\n    key = kv.squeeze(1).float()\n    selected = indices.squeeze(1)\n    output = torch.empty(\n        (tokens, heads, LATENT_DIM), dtype=q.dtype, device=q.device\n    )\n    maximum = torch.empty((tokens, heads), dtype=torch.float32, device=q.device)\n    lse = torch.empty_like(maximum)\n\n    for start in range(0, tokens, QUERY_BATCH):\n        stop = min(start + QUERY_BATCH, tokens)\n        rows = selected[start:stop]\n        invalid = (rows < 0) | (rows >= len(key))\n        keys = key[rows.clamp(0, len(key) - 1).long()]\n\n        # Direct equations over the complete selected set, with FP32 products.\n        scores = torch.bmm(q[start:stop].float(), keys.transpose(1, 2)) * SCALE\n        scores.masked_fill_(invalid.unsqueeze(1), -torch.inf)\n        probabilities = torch.softmax(scores, dim=-1)\n        values = torch.bmm(probabilities, keys[..., :LATENT_DIM])\n        output[start:stop] = values.to(q.dtype)\n        maximum[start:stop] = scores.amax(dim=-1)\n        lse[start:stop] = torch.logsumexp(scores, dim=-1)\n\n    return output, maximum, lse\n\n\n@torch.inference_mode()\ndef run(q, kv, indices):\n    \"\"\"Require at least one valid, unique causal index per query.\"\"\"\n    previous = torch.backends.cuda.matmul.allow_tf32\n    torch.backends.cuda.matmul.allow_tf32 = False\n    try:\n        return _compute(q, kv, indices)\n    finally:\n        torch.backends.cuda.matmul.allow_tf32 = previous\n"
+}

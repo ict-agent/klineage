@@ -36,8 +36,8 @@ DEFINITION_DIR = "work/problems/definitions"
 #: The expert pack is this study's input, not run output: keep it across collects.
 EXPERT_DIR = "expert"
 #: Copied verbatim from the run root into the submission directory.
-UNIT_FILES = ("events.jsonl", "trace.jsonl", "result.json", "final_message.txt",
-              "baseline.json")
+UNIT_FILES = ("duration-audit.json", "events.jsonl", "trace.jsonl", "result.json", "final_message.txt",
+              "baseline.json", "stderr.log", "session.jsonl", "prompt.txt", "AGENTS.session.md", "config.public.toml")
 
 
 def expand(version: Path) -> None:
@@ -63,6 +63,11 @@ def copy_unit(unit: Path, target: Path) -> None:
     for name in UNIT_FILES:
         if (unit / name).is_file():
             shutil.copy2(unit / name, target / name)
+    for folder in ('api', 'sessions', 'agent_submission'):
+        if (unit/folder).is_dir():
+            shutil.copytree(unit/folder, target/folder, dirs_exist_ok=True)
+    for prompt in unit.glob("continuation-*.txt"):
+        shutil.copy2(prompt, target/prompt.name)
     for version in sorted((unit / "versions").glob("version*")):
         target_version = target / "versions" / version.name
         shutil.copytree(version, target_version, dirs_exist_ok=True)
@@ -101,10 +106,11 @@ def oracle_line(definition: dict) -> str:
     return common
 
 
-def problem_block(definition: dict) -> str:
+def problem_block(definition: dict, workload: dict | None = None) -> str:
     """The operator: axes, tensors, and the oracle, straight from the definition."""
 
-    axes = {name: axis["value"] for name, axis in definition.get("axes", {}).items()}
+    axes = {name: axis["value"] for name, axis in definition.get("axes", {}).items() if "value" in axis}
+    axes.update((workload or {}).get("axes", {}))
     op_type = definition.get("op_type", "op")
     headline = definition.get("description") or ""
     title = f"`{definition['name']}` ({op_type})"
@@ -161,8 +167,8 @@ def setup_block(source: Path) -> list[str]:
     lines = ["## Setup", ""]
     if languages:
         lines += textwrap.wrap(
-            f"- Language: `{' / '.join(languages)}` (`submission/config.toml`), shared "
-            f"by both settings; the task leaves the choice open.",
+            f"- Submitted language(s): `{' / '.join(languages)}` "
+            f"(`submission/config.toml`); the task leaves the choice open.",
             width=72, subsequent_indent="  ")
     if devices:
         lines += textwrap.wrap(
@@ -243,7 +249,7 @@ def readme(kernel: str, collected: dict[str, list[dict]], notes: str = "",
         "## Measurement protocol",
         "",
         "- Gate: `scripts/ascend/eval.py`, one call per candidate version,",
-        "  evaluated on 910B1 inside the `vllm0.23.0-zcj` container (torch-npu,",
+        "  evaluated on the Ascend device and container recorded in result.json (torch-npu,",
         "  CANN 9.1.0).",
         "- Timer: NPU stream events (`npu-events`) around one operator call:",
         "  10 warmup + 50 timed iterations, 3 trials, median of trial medians.",
@@ -351,7 +357,9 @@ def main(argv: list[str] | None = None) -> None:
     for setting in SETTINGS:
         definition = source / setting / DEFINITION_DIR / f"{args.kernel}.json"
         if definition.is_file():
-            problem = problem_block(json.loads(definition.read_text(encoding="utf-8")))
+            workload_path = definition.parent.parent/'workloads'/f'{args.kernel}.jsonl'
+            workload = json.loads(workload_path.read_text().splitlines()[0])['workload']
+            problem = problem_block(json.loads(definition.read_text(encoding="utf-8")), workload)
             break
     (target / "README.md").write_text(
         readme(args.kernel, collected, notes, problem, setup_block(source)),

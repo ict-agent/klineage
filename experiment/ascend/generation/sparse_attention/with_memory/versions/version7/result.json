@@ -1,0 +1,25 @@
+{
+  "at": "2026-09-21T13:36:51.035355+00:00",
+  "finished_at": "2026-09-21T13:37:54.263910+00:00",
+  "kernel_name": "sparse_attention",
+  "fingerprint": "b88e9cf7feb51eda875825c0d7895840349c5b1408f3acf6555c7a252a56d151",
+  "platform": "ascend-Ascend910B3",
+  "compile_passed": true,
+  "correctness_passed": true,
+  "profile_passed": true,
+  "latency_ms": 123.70927047729492,
+  "triton_launches": 362,
+  "device_kernel": true,
+  "timing": {
+    "backend": "npu-events",
+    "policy": {
+      "warmup": 10,
+      "repeat": 50,
+      "cold_l2": false,
+      "trials": 3
+    }
+  },
+  "baseline_ms": 457.03721618652344,
+  "speedup": 3.694,
+  "version": "version7"
+}

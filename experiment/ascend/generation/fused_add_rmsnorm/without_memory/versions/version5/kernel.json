@@ -1,0 +1,97 @@
+{
+  "name": "fused_add_rmsnorm",
+  "problem": {
+    "name": "fused_add_rmsnorm",
+    "definition": {
+      "name": "fused_add_rmsnorm",
+      "op_type": "rmsnorm",
+      "description": "DeepSeek-V3.2 residual add followed by RMSNorm with BF16 outputs.",
+      "axes": {
+        "TOKENS": {
+          "type": "var"
+        },
+        "HIDDEN_SIZE": {
+          "type": "const",
+          "value": 7168
+        }
+      },
+      "inputs": {
+        "hidden_states": {
+          "shape": [
+            "TOKENS",
+            "HIDDEN_SIZE"
+          ],
+          "dtype": "bfloat16",
+          "description": "Contiguous token-major activations."
+        },
+        "residual": {
+          "shape": [
+            "TOKENS",
+            "HIDDEN_SIZE"
+          ],
+          "dtype": "bfloat16",
+          "description": "Contiguous token-major residual stream."
+        },
+        "weight": {
+          "shape": [
+            "HIDDEN_SIZE"
+          ],
+          "dtype": "bfloat16",
+          "description": "BF16 RMSNorm scale at the fused-kernel boundary."
+        }
+      },
+      "outputs": {
+        "output": {
+          "shape": [
+            "TOKENS",
+            "HIDDEN_SIZE"
+          ],
+          "dtype": "bfloat16",
+          "description": "Normalized BF16 activations."
+        },
+        "residual_out": {
+          "shape": [
+            "TOKENS",
+            "HIDDEN_SIZE"
+          ],
+          "dtype": "bfloat16",
+          "description": "BF16 residual after the elementwise add."
+        }
+      },
+      "constraints": [
+        "TOKENS > 0",
+        "HIDDEN_SIZE == 7168"
+      ],
+      "reference": "# Independent FP32-accumulation oracle for DeepSeek-V3.2's fused norm.\n\nfrom __future__ import annotations\n\nimport torch\n\nEPSILON = 1e-6\n\n\ndef run(hidden_states: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor):\n    summed = hidden_states.to(torch.float32) + residual.to(torch.float32)\n    residual_out = summed.to(hidden_states.dtype)\n    mean_square = summed.square().mean(dim=-1, keepdim=True)\n    inverse_rms = torch.rsqrt(mean_square + EPSILON)\n    output = (summed * inverse_rms * weight.to(torch.float32)).to(\n        hidden_states.dtype\n    )\n    return output, residual_out\n"
+    },
+    "workload": {
+      "axes": {
+        "TOKENS": 8192
+      },
+      "inputs": {
+        "hidden_states": {
+          "type": "safetensors",
+          "path": "inputs/fused_add_rmsnorm.safetensors",
+          "tensor_key": "hidden_states"
+        },
+        "residual": {
+          "type": "safetensors",
+          "path": "inputs/fused_add_rmsnorm.safetensors",
+          "tensor_key": "residual"
+        },
+        "weight": {
+          "type": "safetensors",
+          "path": "inputs/fused_add_rmsnorm.safetensors",
+          "tensor_key": "weight"
+        }
+      }
+    },
+    "language": "ascendc",
+    "platform": "ascend-Ascend910B3"
+  },
+  "source_files": {
+    "config.toml": "[solution]\nname = \"fused_add_rmsnorm_ascendc\"\ndefinition = \"fused_add_rmsnorm\"\nauthor = \"klineage\"\n\n[build]\nlanguage = \"ascendc\"\nentry_point = \"kernel.asc::kernel\"\ndestination_passing_style = true\n",
+    "solution/kernel.asc": "// Fused residual-add + RMSNorm (DeepSeek-V3.2 style decoder boundary).\n//\n//   s   = fp32(hidden_states) + fp32(residual)\n//   res = bf16(s)\n//   out = bf16(s * (1/sqrt(mean(s^2) + eps)) * fp32(weight))\n//\n// Each block owns a contiguous range of rows.  The two bf16 inputs are staged\n// through a double-buffered pair of UB slots, so the MTE2 transfer of row i+1\n// runs while the vector pipe normalises row i; every buffer hand-off, including\n// the write-after-read fences (V->MTE2, MTE3->V, S->V), is an explicit\n// SetFlag/WaitFlag pair.  The row is kept in fp32 in UB, so the normalisation\n// pass never re-reads global memory, and the sum of squares is accumulated per\n// 1024 element tile and reduced with a power-of-two pairwise tree whose 32 wide\n// tail is finished on the scalar unit (no sub-32B vector operation anywhere).\n\n#include <torch/extension.h>\n#include <c10/core/DeviceGuard.h>\n#include <acl/acl.h>\n#include \"torch_npu/csrc/core/npu/NPUStream.h\"\n#include \"kernel_operator.h\"\n\nusing namespace AscendC;\n\nnamespace {\n\nconstexpr uint32_t kHidden = 7168;\nconstexpr uint32_t kTile = 1024;\nconstexpr uint32_t kNTile = kHidden / kTile;   // 7 tiles per row\nconstexpr uint32_t kSmall = 32;                // reduction tail read on the S unit\nconstexpr uint32_t kScaleVec = 8;              // one 32B fp32 vector block\nconstexpr uint32_t kBlocks = 40;\nconstexpr float kEps = 1e-6f;\nconstexpr float kInvHidden = 1.0f / static_cast<float>(kHidden);\n\nconstexpr event_t kEvIn0 = EVENT_ID0;      // V    -> MTE2 : staging slot 0 free\nconstexpr event_t kEvIn1 = EVENT_ID1;      // V    -> MTE2 : staging slot 1 free\nconstexpr event_t kEvLand0 = EVENT_ID0;    // MTE2 -> V    : slot 0 landed\nconstexpr event_t kEvLand1 = EVENT_ID1;    // MTE2 -> V    : slot 1 landed\nconstexpr event_t kEvWeight = EVENT_ID2;   // MTE2 -> V    : weight tiled landed\nconstexpr event_t kEvResReady = EVENT_ID0; // V    -> MTE3 : residual_out ready\nconstexpr event_t kEvOutReady = EVENT_ID1; // V    -> MTE3 : output ready\nconstexpr event_t kEvResFree = EVENT_ID0;  // MTE3 -> V    : residual_out copied\nconstexpr event_t kEvOutFree = EVENT_ID1;  // MTE3 -> V    : output copied\nconstexpr event_t kEvScale = EVENT_ID1;    // V    -> S    : partial sums visible\nconstexpr event_t kEvScalar = EVENT_ID2;   // S    -> V    : partial sums consumed\nconstexpr event_t kEvScalar2 = EVENT_ID3;  // S    -> V    : scale register ready\n\nclass FusedAddRmsNorm {\npublic:\n    __aicore__ inline FusedAddRmsNorm() {}\n\n    __aicore__ inline void Init(GM_ADDR hidden, GM_ADDR residual, GM_ADDR weight, GM_ADDR output,\n                                GM_ADDR residual_out, uint32_t tokens, uint32_t blocks)\n    {\n        tokens_ = tokens;\n        blocks_ = blocks;\n        hiddenG_.SetGlobalBuffer((__gm__ bfloat16_t *)hidden, static_cast<uint64_t>(tokens) * kHidden);\n        residualG_.SetGlobalBuffer((__gm__ bfloat16_t *)residual, static_cast<uint64_t>(tokens) * kHidden);\n        weightG_.SetGlobalBuffer((__gm__ bfloat16_t *)weight, kHidden);\n        outputG_.SetGlobalBuffer((__gm__ bfloat16_t *)output, static_cast<uint64_t>(tokens) * kHidden);\n        residualOutG_.SetGlobalBuffer((__gm__ bfloat16_t *)residual_out,\n                                      static_cast<uint64_t>(tokens) * kHidden);\n\n        pipe_.InitBuffer(hBuf_, 2 * kHidden * sizeof(bfloat16_t));\n        pipe_.InitBuffer(rBuf_, 2 * kHidden * sizeof(bfloat16_t));\n        pipe_.InitBuffer(xBuf_, kHidden * sizeof(float));\n        pipe_.InitBuffer(wBuf_, kHidden * sizeof(float));\n        pipe_.InitBuffer(sqBuf_, kTile * sizeof(float));\n        pipe_.InitBuffer(accBuf_, kTile * sizeof(float));\n        pipe_.InitBuffer(yBuf_, 2 * kHidden * sizeof(bfloat16_t));\n        pipe_.InitBuffer(redBuf_, kScaleVec * sizeof(float));\n\n        hT_ = hBuf_.Get<bfloat16_t>();\n        rT_ = rBuf_.Get<bfloat16_t>();\n        xF_ = xBuf_.Get<float>();\n        wF_ = wBuf_.Get<float>();\n        sq_ = sqBuf_.Get<float>();\n        acc_ = accBuf_.Get<float>();\n        yT_ = yBuf_.Get<bfloat16_t>();\n        yOut_ = yT_[kHidden];\n        red_ = redBuf_.Get<float>();\n    }\n\n    __aicore__ inline void Process()\n    {\n        if (tokens_ == 0) {\n            return;\n        }\n        const uint32_t blockIdx = static_cast<uint32_t>(GetBlockIdx());\n        const uint32_t rowsPerBlock = (tokens_ + blocks_ - 1) / blocks_;\n        const uint32_t start = blockIdx * rowsPerBlock;\n        if (start >= tokens_) {\n            return;\n        }\n        uint32_t end = start + rowsPerBlock;\n        if (end > tokens_) {\n            end = tokens_;\n        }\n        LoadWeight();\n        const uint32_t rows = end - start;\n        SetFlag<HardEvent::V_MTE2>(kEvIn0);\n        SetFlag<HardEvent::V_MTE2>(kEvIn1);\n        SetFlag<HardEvent::MTE3_V>(kEvResFree);\n        SetFlag<HardEvent::MTE3_V>(kEvOutFree);\n        if (rows > 0) {\n            LoadRow(start, 0);  // prologue: fill slot 0\n            for (uint32_t i = 0; i < rows; ++i) {\n                const uint32_t slot = i & 1u;\n                if (i + 1 < rows) {\n                    LoadRow(start + i + 1, slot ^ 1u);\n                }\n                ComputeRow(start + i, slot);\n            }\n        }\n        WaitFlag<HardEvent::V_MTE2>(kEvIn0);\n        WaitFlag<HardEvent::V_MTE2>(kEvIn1);\n    }\n\nprivate:\n    __aicore__ inline void LoadWeight()\n    {\n        // hT_ slot 0 doubles as the bf16 staging for the weight row.\n        DataCopy(hT_, weightG_[0], kHidden);\n        SetFlag<HardEvent::MTE2_V>(kEvWeight);\n        WaitFlag<HardEvent::MTE2_V>(kEvWeight);\n        Cast(wF_, hT_, RoundMode::CAST_NONE, kHidden);\n    }\n\n    __aicore__ inline void LoadRow(uint32_t row, uint32_t slot)\n    {\n        const event_t ev_in = slot == 0 ? kEvIn0 : kEvIn1;\n        const event_t ev_land = slot == 0 ? kEvLand0 : kEvLand1;\n        const uint64_t base = static_cast<uint64_t>(row) * kHidden;\n        WaitFlag<HardEvent::V_MTE2>(ev_in);\n        DataCopy(hT_[slot * kHidden], hiddenG_[base], kHidden);\n        DataCopy(rT_[slot * kHidden], residualG_[base], kHidden);\n        SetFlag<HardEvent::MTE2_V>(ev_land);\n    }\n\n    // The store itself never stalls the vector pipe: the owning slot is only\n    // reclaimed by the matching WaitFlag at the top of the next row.\n    __aicore__ inline void StoreBf16(const GlobalTensor<bfloat16_t>& dst, uint64_t base,\n                                     LocalTensor<bfloat16_t>& src, event_t ready, event_t free_ev)\n    {\n        SetFlag<HardEvent::V_MTE3>(ready);\n        WaitFlag<HardEvent::V_MTE3>(ready);\n        DataCopy(dst[base], src, kHidden);\n        SetFlag<HardEvent::MTE3_V>(free_ev);\n    }\n\n    __aicore__ inline void ComputeRow(uint32_t row, uint32_t slot)\n    {\n        const event_t ev_in = slot == 0 ? kEvIn0 : kEvIn1;\n        const event_t ev_land = slot == 0 ? kEvLand0 : kEvLand1;\n        const uint64_t base = static_cast<uint64_t>(row) * kHidden;\n\n        WaitFlag<HardEvent::MTE3_V>(kEvResFree);  // previous row's y slots retired\n        WaitFlag<HardEvent::MTE3_V>(kEvOutFree);\n        WaitFlag<HardEvent::MTE2_V>(ev_land);\n        Cast(xF_, hT_[slot * kHidden], RoundMode::CAST_NONE, kHidden);\n        Cast(sq_, rT_[slot * kHidden], RoundMode::CAST_NONE, kHidden);\n        Add(xF_, xF_, sq_, kHidden);\n        SetFlag<HardEvent::V_MTE2>(ev_in);  // staging slot consumed\n\n        Cast(yT_, xF_, RoundMode::CAST_RINT, kHidden);\n        StoreBf16(residualOutG_, base, yT_, kEvResReady, kEvResFree);\n\n        // Sum of squares: exact pairwise tree over the 1024 element tile.\n        Duplicate(acc_, 0.0f, kTile);\n        for (uint32_t t = 0; t < kNTile; ++t) {\n            Mul(sq_, xF_[t * kTile], xF_[t * kTile], kTile);\n            Add(acc_, acc_, sq_, kTile);\n        }\n        for (uint32_t span = kTile >> 1; span >= kSmall; span >>= 1) {\n            Add(acc_, acc_, acc_[span], span);\n        }\n        SetFlag<HardEvent::V_S>(kEvScale);\n        WaitFlag<HardEvent::V_S>(kEvScale);\n        float total = 0.0f;\n        for (uint32_t i = 0; i < kSmall; ++i) {\n            total += acc_.GetValue(i);\n        }\n        SetFlag<HardEvent::S_V>(kEvScalar);\n        WaitFlag<HardEvent::S_V>(kEvScalar);\n\n        Duplicate(red_, total * kInvHidden + kEps, kScaleVec);\n        Sqrt(red_, red_, kScaleVec);\n        Reciprocal(red_, red_, kScaleVec);\n        SetFlag<HardEvent::V_S>(kEvScale);\n        WaitFlag<HardEvent::V_S>(kEvScale);\n        const float scale = red_.GetValue(0);\n        SetFlag<HardEvent::S_V>(kEvScalar2);\n        WaitFlag<HardEvent::S_V>(kEvScalar2);\n\n        Muls(xF_, xF_, scale, kHidden);\n        Mul(xF_, xF_, wF_, kHidden);\n        Cast(yOut_, xF_, RoundMode::CAST_RINT, kHidden);\n        StoreBf16(outputG_, base, yOut_, kEvOutReady, kEvOutFree);\n    }\n\n    TPipe pipe_;\n    TBuf<TPosition::VECCALC> hBuf_;\n    TBuf<TPosition::VECCALC> rBuf_;\n    TBuf<TPosition::VECCALC> xBuf_;\n    TBuf<TPosition::VECCALC> wBuf_;\n    TBuf<TPosition::VECCALC> sqBuf_;\n    TBuf<TPosition::VECCALC> accBuf_;\n    TBuf<TPosition::VECCALC> yBuf_;\n    TBuf<TPosition::VECCALC> redBuf_;\n\n    GlobalTensor<bfloat16_t> hiddenG_;\n    GlobalTensor<bfloat16_t> residualG_;\n    GlobalTensor<bfloat16_t> weightG_;\n    GlobalTensor<bfloat16_t> outputG_;\n    GlobalTensor<bfloat16_t> residualOutG_;\n\n    LocalTensor<bfloat16_t> hT_;\n    LocalTensor<bfloat16_t> rT_;\n    LocalTensor<float> xF_;\n    LocalTensor<float> wF_;\n    LocalTensor<float> sq_;\n    LocalTensor<float> acc_;\n    LocalTensor<bfloat16_t> yT_;\n    LocalTensor<bfloat16_t> yOut_;\n    LocalTensor<float> red_;\n\n    uint32_t tokens_ = 0;\n    uint32_t blocks_ = 1;\n};\n\n}  // namespace\n\nextern \"C\" __global__ __aicore__ void fused_add_rmsnorm_kernel(GM_ADDR hidden, GM_ADDR residual,\n                                                              GM_ADDR weight, GM_ADDR output,\n                                                              GM_ADDR residual_out, uint32_t tokens,\n                                                              uint32_t blocks)\n{\n    KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_AIV_ONLY);\n    FusedAddRmsNorm op;\n    op.Init(hidden, residual, weight, output, residual_out, tokens, blocks);\n    op.Process();\n}\n\nvoid kernel(torch::Tensor hidden, torch::Tensor residual, torch::Tensor weight, torch::Tensor output,\n            torch::Tensor residual_out)\n{\n    TORCH_CHECK(hidden.device().type() == c10::DeviceType::PrivateUse1,\n                \"fused_add_rmsnorm expects NPU tensors\");\n    const c10::DeviceGuard guard(hidden.device());\n    const uint32_t tokens = static_cast<uint32_t>(hidden.size(0));\n    if (tokens == 0) {\n        return;\n    }\n    aclrtStream stream = c10_npu::getCurrentNPUStream(hidden.get_device()).stream(true);\n    uint32_t blocks = kBlocks;\n    if (blocks > tokens) {\n        blocks = tokens;\n    }\n    fused_add_rmsnorm_kernel<<<blocks, nullptr, stream>>>(\n        (GM_ADDR)hidden.data_ptr(), (GM_ADDR)residual.data_ptr(), (GM_ADDR)weight.data_ptr(),\n        (GM_ADDR)output.data_ptr(), (GM_ADDR)residual_out.data_ptr(), tokens, blocks);\n}\n\nPYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {\n    module.def(\"kernel\", &kernel);\n}\n"
+  },
+  "validation": null
+}

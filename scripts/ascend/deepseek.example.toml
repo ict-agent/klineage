@@ -1,0 +1,14 @@
+# DeepSeek official API. deepseek-flash maps to DeepSeek-V4.1-Flash as of 2026-09-21.
+model = "deepseek-flash"
+model_provider = "deepseek"
+model_context_window = 1000000
+model_auto_compact_token_limit = 900000
+web_search = "disabled"
+
+[model_providers.deepseek]
+name = "DeepSeek official"
+base_url = "https://api.deepseek.com"
+wire_api = "responses"
+env_key = "DEEPSEEK_API_KEY"
+requires_openai_auth = false
+supports_websockets = false
