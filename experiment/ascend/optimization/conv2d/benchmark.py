@@ -1,4 +1,4 @@
-"""Correctness and paired warm-cache timing for the public Conv2d ABI."""
+"""Correctness and synchronized host latency for the public Conv2d ABI."""
 
 import argparse
 import hashlib
@@ -146,15 +146,12 @@ def summarize(values):
 
 
 def time_graph(graph, replays, calls):
-    start = torch.npu.Event(enable_timing=True)
-    end = torch.npu.Event(enable_timing=True)
     torch.npu.synchronize()
-    start.record()
+    start = time.perf_counter_ns()
     for _ in range(replays):
         graph.replay()
-    end.record()
-    end.synchronize()
-    return start.elapsed_time(end) * 1000 / (replays * calls)
+        torch.npu.synchronize()
+    return (time.perf_counter_ns() - start) / (replays * calls * 1000)
 
 
 def time_eager(fn, iterations):
@@ -162,7 +159,7 @@ def time_eager(fn, iterations):
     start = time.perf_counter_ns()
     for _ in range(iterations):
         out = fn()
-    torch.npu.synchronize()
+        torch.npu.synchronize()
     elapsed = (time.perf_counter_ns() - start) / (iterations * 1000)
     assert out is not None
     return elapsed
@@ -192,6 +189,7 @@ def measure(args, device):
             graph_checks[name] = compare(out, oracle)
         for _ in range(args.warmup):
             graph.replay()
+            torch.npu.synchronize()
     torch.npu.synchronize()
 
     samples = {name: [] for name in funcs}
@@ -213,7 +211,7 @@ def measure(args, device):
               + ", ".join(f"{name}={samples[name][-1]:.3f} us" for name in funcs), flush=True)
     graph_results = {name: summarize(values) for name, values in samples.items()}
     eager_results = {name: summarize(values) for name, values in eager.items()}
-    return {"graph_device": graph_results, "eager_wall": eager_results,
+    return {"graph_wall": graph_results, "eager_wall": eager_results,
             "graph_changed_inputs": graph_checks, "timing_inventories": inventories,
             "speedup_graph": graph_results["torch_npu_nhwc"]["median_us"] / graph_results["tle_nhwc"]["median_us"],
             "speedup_eager": eager_results["torch_npu_nhwc"]["median_us"] / eager_results["tle_nhwc"]["median_us"]}
@@ -226,7 +224,7 @@ def main():
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iterations", type=int, default=50)
     parser.add_argument("--repeats", type=int, default=7)
-    parser.add_argument("--graph-calls", type=int, default=8)
+    parser.add_argument("--graph-calls", type=int, default=1)
     parser.add_argument("--output", type=Path, default=ROOT / "results" / "latest.json")
     args = parser.parse_args()
     if min(args.warmup, args.iterations, args.repeats, args.graph_calls) <= 0:
@@ -252,6 +250,7 @@ def main():
                               "allow_hf32_matmul": getattr(torch.npu.matmul, "allow_hf32", "unavailable")},
               "config": {**vars(args), "output": str(args.output), "atol": ATOL, "rtol": RTOL,
                          "cache": "warm; no explicit cache flush", "shape": PAPER_SHAPE,
+                         "timing": "host perf_counter_ns; synchronize after each eager call or graph replay",
                          "filters": PAPER_FILTERS, "dtype": "float16"},
               "source_sha256": {str(p.relative_to(ROOT)): digest(p) for p in files},
               "inventory_before": before}
