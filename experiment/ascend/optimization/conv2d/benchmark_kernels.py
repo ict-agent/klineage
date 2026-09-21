@@ -24,6 +24,15 @@ def groups(values, count):
     return [values[i:i + count] for i in range(0, len(values), count)]
 
 
+def core_table(report):
+    metrics = report["metrics"]
+    baseline_us = metrics["baseline_core"]["mean_us"]
+    tle_us = metrics["_conv_cube"]["mean_us"]
+    return ("| Kernel | Baseline mean (us) | TLE mean (us) | Speedup |\n"
+            "| --- | ---: | ---: | ---: |\n"
+            f"| Conv2d core | {baseline_us:.4f} | {tle_us:.4f} | {report['core_speedup']:.3f}x |")
+
+
 def analyze(rows, rounds, calls, warmup):
     block_calls = warmup + calls
     total = rounds * block_calls
@@ -136,7 +145,9 @@ def main():
                         "all_kernels": "Sum all device tasks per full ABI invocation: baseline weight/output conversions and CANN internal formats; candidate padding/convolution/crop; excludes gaps/Python.",
                         "input": "Both implementations consume the same NHWC input and flattened HWCF weights and return contiguous NHWC output."}}
     args.output.write_text(json.dumps(report, indent=2) + "\n")
-    print(json.dumps({"core_speedup": report["core_speedup"]}), flush=True)
+    table = core_table(report)
+    args.output.with_suffix(".txt").write_text(table + "\n")
+    print(table, flush=True)
 
 
 if __name__ == "__main__":

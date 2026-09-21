@@ -85,6 +85,15 @@ CANN_ENV=/usr/local/Ascend/ascend-toolkit/set_env.sh \
 PYTHON=python bash run_benchmark.sh --device 0
 ```
 
-结果保存到 `results/run.XXXXXX/`；`--output-dir DIR` 可指定新的输出目录。
+终端以 `|` 分隔表格输出核心均值耗时（μs）和加速比：
+
+```text
+| Kernel | Baseline mean (us) | TLE mean (us) | Speedup |
+| --- | ---: | ---: | ---: |
+| Conv2d core | 26.5391 | 17.7352 | 1.496x |
+```
+
+结果保存到 `results/run.XXXXXX/`，核心表格同时写入 `kernels.txt`；
+`--output-dir DIR` 可指定新的输出目录。执行失败时终端给出对应日志路径。
 `--device` 为逻辑卡号，物理卡号按 `ASCEND_RT_VISIBLE_DEVICES` 映射，
 也可用 `--physical-device` 指定。Python 与 `npu-smi` 使用相同 PID 命名空间。
