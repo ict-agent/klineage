@@ -1,0 +1,21 @@
+{
+  "model_label": "DeepSeek-V4.1-Flash",
+  "model_context_window": 1000000,
+  "required_language": "ascendc",
+  "ascend_arch": "Ascend910B3",
+  "model_started_at": "2026-09-23T22:24:18.929934+00:00",
+  "deadline_at": "2026-09-24T00:24:18.929934+00:00",
+  "timeout_s": 7200,
+  "budget_elapsed_s": 7200.024985249998,
+  "response_span_s": 7190.117917,
+  "resume_count": 14,
+  "selected_version": "version0",
+  "latency_ms": 5648.614013671875,
+  "correctness_passed": true,
+  "kernel": "sparse_attention",
+  "setting": "without_memory",
+  "initial_latency_ms": 5648.614013671875,
+  "baseline_ms": 470.2021179199219,
+  "speedup": 0.08324203367088762,
+  "vs_initial": 1.0
+}

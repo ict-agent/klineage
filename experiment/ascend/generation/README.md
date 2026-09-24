@@ -1,22 +1,20 @@
 # Ascend generation — expert-knowledge ablation (task 2)
 
-## 2026-09-21/22：新增910B3实验
+## SparseAttention / FusedAddRmsNorm 正式结果
 
-DeepSeek-V4.1-Flash + Codex，两组各7200秒，完整原始Trace仅本地保留；公开产物包含时间/用量元数据和固定评测版本。
+[四组正式交付入口](formal/README.md)：AscendC，DeepSeek-V4.1-Flash + Codex，每组7200秒。
 
-| Kernel | Setting | Correct | 最佳延迟 | vs. PyTorch reference |
-| --- | --- | --- | --- | --- |
-| SparseAttention | A | ✗ | — | — |
-| SparseAttention | B | ✓ | 117.7193 ms | 3.882× |
-| FusedAddRmsNorm | A | ✓ | 0.565930 ms | 10.618× |
-| FusedAddRmsNorm | B | ✓ | 0.457040 ms | 13.170× |
+| Kernel | Setting | Correct | 最佳延迟(ms) | vs. PyTorch reference |
+|---|---|---|---:|---:|
+| SparseAttention | A | ✓（保留初始实现） | 5648.614014 | 0.0832× |
+| SparseAttention | B | ✓ | 99.355560 | 4.6938× |
+| FusedAddRmsNorm | A | ✓ | 0.565930 | 10.6181× |
+| FusedAddRmsNorm | B | ✓ | 0.457040 | 13.1701× |
 
-完整定义、曲线和限制见 [SparseAttention](sparse_attention/README.md) 与
-[FusedAddRmsNorm](fused_add_rmsnorm/README.md)。后者A/B均限定AscendC；
-有早期私有计时/编译探测和中途协议纠正，不能宣称完全无干预对照。
-Baseline是题目reference，不是最优专用融合算子。
-组合时间/Token图见 [next-plots](next-plots/)。以下为此前KDA/Top-P实验报告，保留原文。
-
+SparseAttention两组初始源码相同，相对本组初始实现分别为1.0000×与56.8563×。
+[定义、复现与限制](formal/README.md) · [四组曲线](formal/overview/) · [优化技巧表](formal/overview/optimization-techniques.md)。
+公开包包含源码、版本快照和脱敏元数据；原始会话与私有资料仅本地保留。不同开发反馈条件及无效resume在报告中披露。
+本节替换这两个算子的旧结果；以下KDA/Top-P记录保留原文。
 
 Two kernels, `kda` and `top_p`, each generated twice by one Codex session:
 `without_memory` (bare prompt) and `with_memory` (same prompt plus an expert

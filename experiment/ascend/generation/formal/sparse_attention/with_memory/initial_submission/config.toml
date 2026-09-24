@@ -1,0 +1,9 @@
+[solution]
+name = "sparse_attention_ascendc"
+definition = "sparse_attention"
+author = "klineage"
+
+[build]
+language = "ascendc"
+entry_point = "kernel.asc::kernel"
+destination_passing_style = true

@@ -1,9 +1,0 @@
-{
-  "at": "2026-09-21T13:10:47.630276+00:00",
-  "finished_at": "2026-09-21T13:16:08.733918+00:00",
-  "kernel_name": "sparse_attention",
-  "fingerprint": "5afdb9d35398b3e99a43fa54536127ce17a876a732239b357c2d4d5a34385868",
-  "platform": "ascend-Ascend910B3",
-  "error": "unction(kernel, *args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/pjj/klineage-generation-harness/repo/src/klineage/harness/eval.py\", line 592, in evaluate\n    return runtime.evaluate(\n           ^^^^^^^^^^^^^^^^^\n  File \"/mnt/pjj/klineage-generation-harness/repo/src/klineage/harness/eval.py\", line 317, in evaluate\n    payload = self.invoke(request, logs, stem)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/mnt/pjj/klineage-generation-harness/repo/src/klineage/harness/eval.py\", line 455, in invoke\n    raise WorkerError(\nklineage.harness.eval.WorkerError: evaluator worker timed out after 300s; see /mnt/pjj/klineage-generation-harness/runs/sparse_attention-without_memory-work-6cff69a1/evaluations/evaluate-20260921T130858.649604Z-cd27b0/eval-0001-stderr.log",
-  "version": "version6"
-}

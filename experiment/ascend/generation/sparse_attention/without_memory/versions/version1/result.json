@@ -1,6 +1,0 @@
-{
-  "at": "2026-09-21T12:27:10.210124+00:00",
-  "finished_at": "2026-09-21T12:27:13.106081+00:00",
-  "error": "CalledProcessError: Command '['rsync', '-az', '--delete', '--exclude', '.klineage', '--exclude', 'versions', '--exclude', 'build', '--exclude', 'evaluations', '/Users/qianqiuer/klineage-task2-runs/sparse_attention/without_memory/work/', '910b:/mnt/nvme0n1/home/pjj/klineage-generation-harness/runs/sparse_attention-without_memory-work-6cff69a1/']' returned non-zero exit status 23.",
-  "version": "version1"
-}

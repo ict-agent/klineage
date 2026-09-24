@@ -1,0 +1,20 @@
+{
+  "event": "evaluate",
+  "stage": "check",
+  "at": "2026-09-24T04:12:11.287047+00:00",
+  "finished_at": "2026-09-24T04:14:39.690893+00:00",
+  "compile_passed": true,
+  "correctness_passed": true,
+  "profile_passed": false,
+  "timing": {
+    "backend": "npu-events",
+    "policy": {
+      "warmup": 10,
+      "repeat": 50,
+      "cold_l2": false,
+      "trials": 3
+    }
+  },
+  "version": "version15",
+  "has_error": false
+}

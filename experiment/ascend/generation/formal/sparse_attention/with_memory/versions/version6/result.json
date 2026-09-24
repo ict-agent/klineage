@@ -1,0 +1,23 @@
+{
+  "event": "evaluate",
+  "stage": "full",
+  "at": "2026-09-24T03:34:25.663588+00:00",
+  "finished_at": "2026-09-24T03:37:38.052644+00:00",
+  "compile_passed": true,
+  "correctness_passed": true,
+  "profile_passed": true,
+  "latency_ms": 198.5164566040039,
+  "timing": {
+    "backend": "npu-events",
+    "policy": {
+      "warmup": 10,
+      "repeat": 50,
+      "cold_l2": false,
+      "trials": 3
+    }
+  },
+  "baseline_ms": 466.3553466796875,
+  "speedup": 2.349,
+  "version": "version6",
+  "has_error": false
+}
