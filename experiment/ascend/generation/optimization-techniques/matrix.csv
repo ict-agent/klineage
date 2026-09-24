@@ -1,0 +1,41 @@
+setting,section,technique,KDA,Top-P,GQA,Sparse Attention,Fused Add + RMSNorm
+without_memory,Compute mapping,AIV vector arithmetic and reductions,present,present,present,present,present
+without_memory,Compute mapping,Cube Matmul for attention products,not_observed,not_observed,present,not_observed,not_observed
+without_memory,Compute mapping,Separate Cube products and Vector softmax stages,not_observed,not_observed,present,not_observed,not_observed
+without_memory,Compute mapping,"Core-parallel row, token, or head-slice partitioning",present,present,present,present,present
+without_memory,Compute mapping,Work-aware launch partition across streams or cores,not_observed,not_observed,not_observed,not_observed,not_observed
+without_memory,Memory and pipeline,GM-to-UB staging with DataCopy and LocalTensor,present,present,present,present,present
+without_memory,Memory and pipeline,Two-slot queues or ping-pong staging buffers,present,present,present,not_observed,present
+without_memory,Memory and pipeline,"Prefetch next token, row, or chunk before compute ends",not_observed,not_observed,not_observed,not_observed,present
+without_memory,Memory and pipeline,Pack or transpose layout for downstream access,not_observed,not_observed,present,not_observed,not_observed
+without_memory,Memory and pipeline,Overlap phases across streams with event dependencies,not_observed,not_observed,not_observed,not_observed,not_observed
+without_memory,Memory and pipeline,Reuse intermediate workspace across attention phases,not_observed,not_observed,not_observed,not_observed,not_observed
+without_memory,Memory and pipeline,Bypass L2 caching for streaming output writes,not_observed,not_observed,not_observed,not_observed,not_observed
+without_memory,Memory and pipeline,"Explicit DMA, Vector, or Cube synchronization",present,present,present,present,present
+without_memory,Numerics and data semantics,FP32 vector intermediates for reductions or normalization,present,present,present,present,present
+without_memory,Numerics and data semantics,Subtract row maximum before Exp in softmax,not_observed,not_observed,not_observed,present,not_observed
+without_memory,Numerics and data semantics,Compensated FP32 sum in Top-P cutoff search,not_observed,present,not_observed,not_observed,not_observed
+without_memory,Numerics and data semantics,"Invalid-index, causal, or tail masking",not_observed,present,present,present,not_observed
+without_memory,Numerics and data semantics,GatherMask compaction of Top-P threshold band,not_observed,not_observed,not_observed,not_observed,not_observed
+without_memory,Operator-specific reuse,Keep recurrent KDA state in local memory across tokens,present,not_observed,not_observed,not_observed,not_observed
+without_memory,Operator-specific reuse,Reuse fused row sum for both RMSNorm outputs,not_observed,not_observed,not_observed,not_observed,present
+with_memory,Compute mapping,AIV vector arithmetic and reductions,present,present,present,present,present
+with_memory,Compute mapping,Cube Matmul for attention products,not_observed,not_observed,present,present,not_observed
+with_memory,Compute mapping,Separate Cube products and Vector softmax stages,not_observed,not_observed,present,present,not_observed
+with_memory,Compute mapping,"Core-parallel row, token, or head-slice partitioning",present,present,present,present,present
+with_memory,Compute mapping,Work-aware launch partition across streams or cores,not_observed,not_observed,present,not_observed,present
+with_memory,Memory and pipeline,GM-to-UB staging with DataCopy and LocalTensor,present,present,present,present,present
+with_memory,Memory and pipeline,Two-slot queues or ping-pong staging buffers,present,present,present,present,present
+with_memory,Memory and pipeline,"Prefetch next token, row, or chunk before compute ends",present,not_observed,not_observed,present,present
+with_memory,Memory and pipeline,Pack or transpose layout for downstream access,present,not_observed,present,not_observed,not_observed
+with_memory,Memory and pipeline,Overlap phases across streams with event dependencies,not_observed,not_observed,present,present,not_observed
+with_memory,Memory and pipeline,Reuse intermediate workspace across attention phases,not_observed,not_observed,present,present,not_observed
+with_memory,Memory and pipeline,Bypass L2 caching for streaming output writes,not_observed,not_observed,not_observed,not_observed,present
+with_memory,Memory and pipeline,"Explicit DMA, Vector, or Cube synchronization",present,present,present,present,present
+with_memory,Numerics and data semantics,FP32 vector intermediates for reductions or normalization,present,present,present,present,present
+with_memory,Numerics and data semantics,Subtract row maximum before Exp in softmax,not_observed,not_observed,present,present,not_observed
+with_memory,Numerics and data semantics,Compensated FP32 sum in Top-P cutoff search,not_observed,present,not_observed,not_observed,not_observed
+with_memory,Numerics and data semantics,"Invalid-index, causal, or tail masking",not_observed,present,present,present,not_observed
+with_memory,Numerics and data semantics,GatherMask compaction of Top-P threshold band,not_observed,present,not_observed,not_observed,not_observed
+with_memory,Operator-specific reuse,Keep recurrent KDA state in local memory across tokens,present,not_observed,not_observed,not_observed,not_observed
+with_memory,Operator-specific reuse,Reuse fused row sum for both RMSNorm outputs,not_observed,not_observed,not_observed,not_observed,present

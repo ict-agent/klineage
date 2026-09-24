@@ -1,0 +1,170 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1810" height="1810" viewBox="0 0 1810 1810" role="img" aria-labelledby="title desc">
+<title id="title">AscendC optimization techniques by operator</title>
+<desc id="desc">Setting B: Expert knowledge (with_memory). Check marks indicate source-level evidence in the selected final submission.</desc>
+<rect width="100%" height="100%" fill="#ffffff"/>
+<g font-family="Arial, Helvetica, sans-serif" fill="#111315">
+<text x="40" y="42" font-size="29" font-weight="700">Setting B: Expert knowledge (with_memory)</text>
+<text x="40" y="72" font-size="16" fill="#4b5359">Selected final submission source audit | all ten submitted bundles pin AscendC</text>
+<line x1="40" y1="98" x2="1730" y2="98" stroke="#111315" stroke-width="2"/>
+<text x="920.0" y="218" transform="rotate(-90 920.0 218)" text-anchor="middle" font-size="21" font-weight="600">KDA</text>
+<text x="1100.0" y="218" transform="rotate(-90 1100.0 218)" text-anchor="middle" font-size="21" font-weight="600">Top-P</text>
+<text x="1280.0" y="218" transform="rotate(-90 1280.0 218)" text-anchor="middle" font-size="21" font-weight="600">GQA</text>
+<text x="1460.0" y="218" transform="rotate(-90 1460.0 218)" text-anchor="middle" font-size="21" font-weight="600">Sparse Attention</text>
+<text x="1640.0" y="218" transform="rotate(-90 1640.0 218)" text-anchor="middle" font-size="21" font-weight="600">Fused Add + RMSNorm</text>
+<line x1="40" y1="390" x2="1730" y2="390" stroke="#111315" stroke-width="1.4"/>
+<rect x="40" y="406" width="1690" height="36" fill="#e9ecee"/>
+<text x="58" y="430" font-size="18" font-weight="700">Compute mapping</text>
+<text x="62" y="477.0" font-size="17.5">AIV vector arithmetic and reductions</text>
+<path d="M 910.0 471.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1090.0 471.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1270.0 471.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1450.0 471.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1630.0 471.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="40" y1="500" x2="1730" y2="500" stroke="#e0e3e5" stroke-width="0.8"/>
+<text x="62" y="535.0" font-size="17.5">Cube Matmul for attention products</text>
+<path d="M 911.0 529.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1091.0 529.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1270.0 529.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1450.0 529.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1631.0 529.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<line x1="40" y1="558" x2="1730" y2="558" stroke="#e0e3e5" stroke-width="0.8"/>
+<text x="62" y="593.0" font-size="17.5">Separate Cube products and Vector softmax stages</text>
+<path d="M 911.0 587.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1091.0 587.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1270.0 587.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1450.0 587.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1631.0 587.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<line x1="40" y1="616" x2="1730" y2="616" stroke="#e0e3e5" stroke-width="0.8"/>
+<text x="62" y="651.0" font-size="17.5">Core-parallel row, token, or head-slice partitioning</text>
+<path d="M 910.0 645.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1090.0 645.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1270.0 645.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1450.0 645.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1630.0 645.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="40" y1="674" x2="1730" y2="674" stroke="#e0e3e5" stroke-width="0.8"/>
+<text x="62" y="709.0" font-size="17.5">Work-aware launch partition across streams or cores</text>
+<path d="M 911.0 703.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1091.0 703.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1270.0 703.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1451.0 703.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1630.0 703.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="40" y1="732" x2="1730" y2="732" stroke="#e0e3e5" stroke-width="0.8"/>
+<rect x="40" y="732" width="1690" height="36" fill="#e9ecee"/>
+<text x="58" y="756" font-size="18" font-weight="700">Memory and pipeline</text>
+<text x="62" y="803.0" font-size="17.5">GM-to-UB staging with DataCopy and LocalTensor</text>
+<path d="M 910.0 797.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1090.0 797.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1270.0 797.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1450.0 797.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1630.0 797.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="40" y1="826" x2="1730" y2="826" stroke="#e0e3e5" stroke-width="0.8"/>
+<text x="62" y="861.0" font-size="17.5">Two-slot queues or ping-pong staging buffers</text>
+<path d="M 910.0 855.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1090.0 855.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1270.0 855.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1450.0 855.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1630.0 855.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="40" y1="884" x2="1730" y2="884" stroke="#e0e3e5" stroke-width="0.8"/>
+<text x="62" y="919.0" font-size="17.5">Prefetch next token, row, or chunk before compute ends</text>
+<path d="M 910.0 913.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1091.0 913.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1271.0 913.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1450.0 913.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1630.0 913.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="40" y1="942" x2="1730" y2="942" stroke="#e0e3e5" stroke-width="0.8"/>
+<text x="62" y="977.0" font-size="17.5">Pack or transpose layout for downstream access</text>
+<path d="M 910.0 971.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1091.0 971.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1270.0 971.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1451.0 971.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1631.0 971.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<line x1="40" y1="1000" x2="1730" y2="1000" stroke="#e0e3e5" stroke-width="0.8"/>
+<text x="62" y="1035.0" font-size="17.5">Overlap phases across streams with event dependencies</text>
+<path d="M 911.0 1029.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1091.0 1029.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1270.0 1029.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1450.0 1029.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1631.0 1029.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<line x1="40" y1="1058" x2="1730" y2="1058" stroke="#e0e3e5" stroke-width="0.8"/>
+<text x="62" y="1093.0" font-size="17.5">Reuse intermediate workspace across attention phases</text>
+<path d="M 911.0 1087.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1091.0 1087.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1270.0 1087.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1450.0 1087.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1631.0 1087.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<line x1="40" y1="1116" x2="1730" y2="1116" stroke="#e0e3e5" stroke-width="0.8"/>
+<text x="62" y="1151.0" font-size="17.5">Bypass L2 caching for streaming output writes</text>
+<path d="M 911.0 1145.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1091.0 1145.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1271.0 1145.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1451.0 1145.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1630.0 1145.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="40" y1="1174" x2="1730" y2="1174" stroke="#e0e3e5" stroke-width="0.8"/>
+<text x="62" y="1209.0" font-size="17.5">Explicit DMA, Vector, or Cube synchronization</text>
+<path d="M 910.0 1203.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1090.0 1203.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1270.0 1203.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1450.0 1203.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1630.0 1203.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="40" y1="1232" x2="1730" y2="1232" stroke="#e0e3e5" stroke-width="0.8"/>
+<rect x="40" y="1232" width="1690" height="36" fill="#e9ecee"/>
+<text x="58" y="1256" font-size="18" font-weight="700">Numerics and data semantics</text>
+<text x="62" y="1303.0" font-size="17.5">FP32 vector intermediates for reductions or normalization</text>
+<path d="M 910.0 1297.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1090.0 1297.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1270.0 1297.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1450.0 1297.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1630.0 1297.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="40" y1="1326" x2="1730" y2="1326" stroke="#e0e3e5" stroke-width="0.8"/>
+<text x="62" y="1361.0" font-size="17.5">Subtract row maximum before Exp in softmax</text>
+<path d="M 911.0 1355.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1091.0 1355.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1270.0 1355.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1450.0 1355.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1631.0 1355.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<line x1="40" y1="1384" x2="1730" y2="1384" stroke="#e0e3e5" stroke-width="0.8"/>
+<text x="62" y="1419.0" font-size="17.5">Compensated FP32 sum in Top-P cutoff search</text>
+<path d="M 911.0 1413.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1090.0 1413.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1271.0 1413.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1451.0 1413.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1631.0 1413.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<line x1="40" y1="1442" x2="1730" y2="1442" stroke="#e0e3e5" stroke-width="0.8"/>
+<text x="62" y="1477.0" font-size="17.5">Invalid-index, causal, or tail masking</text>
+<path d="M 911.0 1471.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1090.0 1471.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1270.0 1471.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1450.0 1471.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1631.0 1471.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<line x1="40" y1="1500" x2="1730" y2="1500" stroke="#e0e3e5" stroke-width="0.8"/>
+<text x="62" y="1535.0" font-size="17.5">GatherMask compaction of Top-P threshold band</text>
+<path d="M 911.0 1529.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1090.0 1529.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1271.0 1529.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1451.0 1529.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1631.0 1529.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<line x1="40" y1="1558" x2="1730" y2="1558" stroke="#e0e3e5" stroke-width="0.8"/>
+<rect x="40" y="1558" width="1690" height="36" fill="#e9ecee"/>
+<text x="58" y="1582" font-size="18" font-weight="700">Operator-specific reuse</text>
+<text x="62" y="1629.0" font-size="17.5">Keep recurrent KDA state in local memory across tokens</text>
+<path d="M 910.0 1623.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M 1091.0 1623.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1271.0 1623.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1451.0 1623.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1631.0 1623.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<line x1="40" y1="1652" x2="1730" y2="1652" stroke="#e0e3e5" stroke-width="0.8"/>
+<text x="62" y="1687.0" font-size="17.5">Reuse fused row sum for both RMSNorm outputs</text>
+<path d="M 911.0 1681.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1091.0 1681.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1271.0 1681.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1451.0 1681.0 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<path d="M 1630.0 1681.0 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="40" y1="1710" x2="1730" y2="1710" stroke="#e0e3e5" stroke-width="0.8"/>
+<line x1="40" y1="1720" x2="1730" y2="1720" stroke="#111315" stroke-width="1.5"/>
+<path d="M 48 1749 l 7 8 l 15 -18" fill="none" stroke="#111315" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="80" y="1755" font-size="15">Present in selected source</text>
+<path d="M 342 1749 h 18" fill="none" stroke="#626a70" stroke-width="2.2" stroke-linecap="round"/>
+<text x="373" y="1755" font-size="15">Not observed or not applicable</text>
+<text x="40" y="1785" font-size="14" fill="#4b5359">Source-level presence is not an isolated performance attribution. A/B names refer to expert-knowledge settings, not implementation language.</text>
+</g>
+</svg>

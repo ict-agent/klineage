@@ -16,6 +16,8 @@ SparseAttention两组初始源码相同，相对本组初始实现分别为1.000
 公开包包含源码、版本快照和脱敏元数据；原始会话与私有资料仅本地保留。不同开发反馈条件及无效resume在报告中披露。
 本节替换这两个算子的旧结果；以下KDA/Top-P记录保留原文。
 
+五个算子的最终A/B AscendC源码优化技巧对照见[无专家知识图](optimization-techniques/without-expert.png)和[专家知识图](optimization-techniques/with-expert.png)；字段顺序保持一致。
+
 Two kernels, `kda` and `top_p`, each generated twice by one Codex session:
 `without_memory` (bare prompt) and `with_memory` (same prompt plus an expert
 pack the agent may read). Same gate, same 2 h budget, same delivery rules; the
