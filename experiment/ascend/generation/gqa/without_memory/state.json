@@ -1,0 +1,14 @@
+{
+  "armed": true,
+  "device": 2,
+  "prepared_at": "2026-09-21T23:11:01.990619+00:00",
+  "budget_s": 7200,
+  "protocol": "seeded-optimization-v1",
+  "initial_fingerprint": "c9404548abcb5f84facfd6694c499a623ca50eda122375cade94c644bab1488d",
+  "started_at_epoch": 1790037530.6556573,
+  "started_at": "2026-09-22T00:38:50.655662+00:00",
+  "initial_latency_ms": 85.28491973876953,
+  "initial_version": 0,
+  "closed": true,
+  "thread_id": "01a0c688-38b5-7be1-8d3e-ff330740abd5"
+}

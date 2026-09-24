@@ -1,0 +1,21 @@
+{
+  "model": "deepseek-flash",
+  "review_model": "deepseek-flash",
+  "model_provider": "deepseek_gqa",
+  "model_reasoning_effort": "high",
+  "model_context_window": 1048576,
+  "model_auto_compact_token_limit": 900000,
+  "model_catalog_json": "D:\\_CODE_\\gqa-generation-control\\models.json",
+  "web_search": "disabled",
+  "approval_policy": "never",
+  "sandbox_mode": "workspace-write",
+  "disable_response_storage": false,
+  "setting": "B",
+  "features": {
+    "enable_request_compression": false,
+    "skip_host_skill_discovery": true,
+    "plugins": false
+  },
+  "provider": "DeepSeek via local Responses recorder",
+  "model_catalog_sha256": "dc7ccca850a53905962d53dac93071ff23d4ad52b240a598ac6d5d959d036c44"
+}

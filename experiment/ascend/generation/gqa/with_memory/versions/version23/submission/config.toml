@@ -1,0 +1,8 @@
+[solution]
+name="gqa-candidate"
+definition="gqa"
+author="deepseek"
+[build]
+language="ascendc"
+entry_point="kernel.asc::kernel"
+destination_passing_style=true

@@ -1,0 +1,20 @@
+{
+  "setting": "A",
+  "trace_files": [
+    "rollout-2026-09-22T08-33-31-01a0c688-38b5-7be1-8d3e-ff330740abd5.jsonl"
+  ],
+  "elapsed_s": 7418.128206014633,
+  "required_duration_s": 7200,
+  "continuity_status": "deviation_sleep_at_end",
+  "status": "pass",
+  "finished_at": "2026-09-22T02:42:28.933050+00:00",
+  "best_version": "version33",
+  "latency_ms": 39.2078800201416,
+  "speedup": 13.349075396688916,
+  "protocol": "seeded-optimization-v1",
+  "initial_fingerprint": "c9404548abcb5f84facfd6694c499a623ca50eda122375cade94c644bab1488d",
+  "initial_latency_ms": 85.28491973876953,
+  "initial_speedup": 2.175198447224322,
+  "review_status": "qualified: fixed workload pass, stability failure, duration deviation",
+  "audit": "audit.json"
+}

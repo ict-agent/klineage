@@ -1,0 +1,31 @@
+{
+  "repository": "https://gitcode.com/cann/ops-transformer.git",
+  "revision": "0c74daa3b6dfe980aee3b3a35eb1a5a1e57c5cea",
+  "purpose": "GQA expert material; source excerpts for study, not a prebuilt candidate",
+  "files": {
+    "attention/flash_attention_score/README.md": "c41537692e81845b06d54750ec75d64315f7d2e2ee5e3e80dcab4c8982673e9f",
+    "attention/flash_attention_score/docs/aclnnFlashAttentionScore.md": "75cb1a5cbe5845a6ee14dd316ea7495b2000ba0667ee55ebd1e7bf6f053aad8e",
+    "attention/flash_attention_score/op_kernel/arch22/flash_attention_score_common.h": "3e074a966515df1c9cf0cc070d2315a5978ccb44e7e75a842188de5016e4cc34",
+    "attention/flash_attention_score/op_kernel/arch22/flash_attention_score_s1s2_bn2gs1.h": "92e8b36770f4acf3b1a2160235104613f992c8682014c9ecdc2644ad3972f84a",
+    "attention/flash_attention_score/op_kernel/arch22/flash_attention_score_s1_bn2gs1.h": "c7ceee274bac633f61dbd8a547942388c92d1be6fc06ad8682640ca1512fe3f5",
+    "attention/flash_attention_score/op_kernel/arch22/flash_attention_score_tiling.h": "6ca76bce8a92fdf63d3c5646dfe6d2af3a9b367a9e6fbf7f994f0a5cee71c8d3",
+    "LICENSE": "cb282ac2b66d7d6734c3fb354db792b28cf23ab29fbc16d5cfd8bd542bedeb1e"
+  },
+  "reading_order": [
+    "00_OPTIMIZATION_PRIORITIES.md",
+    "attention/flash_attention_score/README.md",
+    "attention/flash_attention_score/docs/aclnnFlashAttentionScore.md",
+    "attention/flash_attention_score/op_kernel/arch22/flash_attention_score_s1s2_bn2gs1.h",
+    "attention/flash_attention_score/op_kernel/arch22/flash_attention_score_s1_bn2gs1.h",
+    "attention/flash_attention_score/op_kernel/arch22/flash_attention_score_common.h",
+    "attention/flash_attention_score/op_kernel/arch22/flash_attention_score_tiling.h"
+  ],
+  "supplemental_materials": [
+    {
+      "path": "00_OPTIMIZATION_PRIORITIES.md",
+      "kind": "curated optimization guidance",
+      "priority": "first",
+      "sha256": "2c939263878f9909b15179b9f233b9237ade15df7ae7ed130a98fcaf906af3bd"
+    }
+  ]
+}

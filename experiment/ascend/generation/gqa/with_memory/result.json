@@ -1,0 +1,18 @@
+{
+  "setting": "B",
+  "trace_files": [
+    "rollout-2026-09-24T00-26-16-01a0cf16-da4f-7ac2-b679-dc523856ffb9.jsonl"
+  ],
+  "elapsed_s": 33284.247436761856,
+  "required_duration_s": 7200,
+  "continuity_status": "requires_trace_review",
+  "status": "pass",
+  "finished_at": "2026-09-24T01:41:04.828963+00:00",
+  "best_version": "version34",
+  "latency_ms": 35.142818450927734,
+  "speedup": 14.882515770185202,
+  "protocol": "seeded-optimization-v1",
+  "initial_fingerprint": "c9404548abcb5f84facfd6694c499a623ca50eda122375cade94c644bab1488d",
+  "initial_latency_ms": 85.50350952148438,
+  "initial_speedup": 2.433029372441446
+}

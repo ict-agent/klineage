@@ -1,0 +1,3 @@
+# Preserve recorded traces and expert sources byte-for-byte.
+with_memory/** -text -whitespace
+without_memory/** -text -whitespace
