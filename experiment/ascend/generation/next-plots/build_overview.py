@@ -6,14 +6,14 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 KERNELS = ('sparse_attention', 'fused_add_rmsnorm')
 SETTINGS = ('without_memory', 'with_memory')
 
 def main():
-    out = ROOT/'overview'
+    out = ROOT/'next-plots'
     out.mkdir(exist_ok=True)
-    selected = json.loads((ROOT/'selection.json').read_text())
+    selected = json.loads((ROOT/'next-plots/selection.json').read_text())
     rows = []
     for kernel in KERNELS:
         for setting in SETTINGS:

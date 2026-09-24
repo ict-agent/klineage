@@ -8,8 +8,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
-REPO = ROOT.parents[3]
+ROOT = Path(__file__).resolve().parent.parent
+REPO = ROOT.parents[2]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

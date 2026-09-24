@@ -6,7 +6,7 @@
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
     <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
-    <dc:date>2026-09-24T14:48:40.734951</dc:date>
+    <dc:date>2026-09-24T14:54:35.428970</dc:date>
     <dc:format>image/svg+xml</dc:format>
     <dc:creator>
      <cc:Agent>
@@ -35,7 +35,7 @@ L 835.56 191.544
 L 835.56 168.12 
 L 28.44 168.12 
 z
-" clip-path="url(#pcc85da2561)" style="fill: #ededed"/>
+" clip-path="url(#pb0db131981)" style="fill: #ededed"/>
    </g>
    <g id="patch_3">
     <path d="M 28.44 367.224 
@@ -43,7 +43,7 @@ L 835.56 367.224
 L 835.56 343.8 
 L 28.44 343.8 
 z
-" clip-path="url(#pcc85da2561)" style="fill: #ededed"/>
+" clip-path="url(#pb0db131981)" style="fill: #ededed"/>
    </g>
    <g id="patch_4">
     <path d="M 28.44 484.344 
@@ -51,7 +51,7 @@ L 835.56 484.344
 L 835.56 460.92 
 L 28.44 460.92 
 z
-" clip-path="url(#pcc85da2561)" style="fill: #ededed"/>
+" clip-path="url(#pb0db131981)" style="fill: #ededed"/>
    </g>
    <g id="patch_5">
     <path d="M 28.44 572.184 
@@ -59,22 +59,22 @@ L 835.56 572.184
 L 835.56 548.76 
 L 28.44 548.76 
 z
-" clip-path="url(#pcc85da2561)" style="fill: #ededed"/>
+" clip-path="url(#pb0db131981)" style="fill: #ededed"/>
    </g>
    <g id="line2d_1">
     <path d="M 28.44 23.184 
 L 835.56 23.184 
-" clip-path="url(#pcc85da2561)" style="fill: none; stroke: #000000; stroke-width: 1.8; stroke-linecap: square"/>
+" clip-path="url(#pb0db131981)" style="fill: none; stroke: #000000; stroke-width: 1.8; stroke-linecap: square"/>
    </g>
    <g id="line2d_2">
     <path d="M 28.44 163.728 
 L 835.56 163.728 
-" clip-path="url(#pcc85da2561)" style="fill: none; stroke: #000000; stroke-linecap: square"/>
+" clip-path="url(#pb0db131981)" style="fill: none; stroke: #000000; stroke-linecap: square"/>
    </g>
    <g id="line2d_3">
     <path d="M 28.44 636.6 
 L 835.56 636.6 
-" clip-path="url(#pcc85da2561)" style="fill: none; stroke: #000000; stroke-width: 1.2; stroke-linecap: square"/>
+" clip-path="url(#pb0db131981)" style="fill: none; stroke: #000000; stroke-width: 1.2; stroke-linecap: square"/>
    </g>
    <g id="text_1">
     <!-- SparseAttention A -->
@@ -3095,7 +3095,7 @@ z
   </g>
  </g>
  <defs>
-  <clipPath id="pcc85da2561">
+  <clipPath id="pb0db131981">
    <rect x="21.6" y="14.4" width="820.8" height="658.8"/>
   </clipPath>
  </defs>

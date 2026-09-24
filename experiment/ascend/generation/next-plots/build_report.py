@@ -9,7 +9,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 SETTINGS = ('without_memory', 'with_memory')
 KERNELS = ('sparse_attention', 'fused_add_rmsnorm')
 
@@ -35,7 +35,7 @@ def read_rows(unit):
 def main():
     for kernel in KERNELS:
         if kernel == "sparse_attention":
-            runpy.run_path(str(ROOT/kernel/"build_report.py"), run_name="__main__")
+            runpy.run_path(str(ROOT/kernel/"plots/plot.py"), run_name="__main__")
             continue
         folder = ROOT/kernel/'plots'
         folder.mkdir(exist_ok=True)
@@ -71,9 +71,9 @@ def main():
             fig.tight_layout()
             for ext in ('png','pdf'): fig.savefig(folder/f'speedup-vs-{axis}.{ext}',dpi=180)
             plt.close(fig)
-    runpy.run_path(str(ROOT/"build_overview.py"), run_name="__main__")
-    runpy.run_path(str(ROOT/"overview/build_techniques.py"), run_name="__main__")
-    manifest = {str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(ROOT.rglob('*')) if p.is_file() and p.name!='SHA256SUMS.json' and '__pycache__' not in p.parts}
-    (ROOT/'SHA256SUMS.json').write_text(json.dumps(manifest,indent=2)+'\n')
+    runpy.run_path(str(ROOT/"next-plots/build_overview.py"), run_name="__main__")
+    runpy.run_path(str(ROOT/"next-plots/build_techniques.py"), run_name="__main__")
+    manifest = {str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for folder in ('sparse_attention','fused_add_rmsnorm','next-plots') for p in sorted((ROOT/folder).rglob('*')) if p.is_file() and p.name!='SHA256SUMS.json' and '__pycache__' not in p.parts}
+    (ROOT/'next-plots/SHA256SUMS.json').write_text(json.dumps(manifest,indent=2)+'\n')
 
 if __name__=='__main__': main()

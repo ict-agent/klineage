@@ -2,7 +2,7 @@
 
 ## SparseAttention / FusedAddRmsNorm 正式结果
 
-[四组正式交付入口](formal/README.md)：AscendC，DeepSeek-V4.1-Flash + Codex，每组7200秒。
+[四组正式交付入口](next-plots/README.md)：AscendC，DeepSeek-V4.1-Flash + Codex，每组7200秒。
 
 | Kernel | Setting | Correct | 最佳延迟(ms) | vs. PyTorch reference |
 |---|---|---|---:|---:|
@@ -12,7 +12,7 @@
 | FusedAddRmsNorm | B | ✓ | 0.457040 | 13.1701× |
 
 SparseAttention两组初始源码相同，相对本组初始实现分别为1.0000×与56.8563×。
-[定义、复现与限制](formal/README.md) · [四组曲线](formal/overview/) · [优化技巧表](formal/overview/optimization-techniques.md)。
+[定义、复现与限制](next-plots/README.md) · [四组曲线](next-plots/) · [优化技巧表](next-plots/optimization-techniques.md)。
 公开包包含源码、版本快照和脱敏元数据；原始会话与私有资料仅本地保留。不同开发反馈条件及无效resume在报告中披露。
 本节替换这两个算子的旧结果；以下KDA/Top-P记录保留原文。
 
