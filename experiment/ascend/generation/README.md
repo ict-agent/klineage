@@ -28,7 +28,7 @@ The x axis is the session's wall clock (minutes) or the tokens it has spent so
 far; the y axis is the gated latency of the version the session holds at that
 moment, or its speedup over the torch-npu baseline. The baseline is a single
 flat line — the torch reference never improves — so every point on our curve is
-a comparison against it. `plots/latency-vs-tokens.png` draws both settings of
+a comparison against it. `kda/plots/legacy-shared-latency-vs-tokens.png` draws both settings of
 both kernels on those axes.
 
 Two readings carry the claim this study is about:
@@ -92,14 +92,14 @@ At equal tokens the comparison is:
 ```text
 generation/
 |- README.md       this file
-|- plots/          table.md (the four rows above) + csv per setting + curves
+|- <kernel>/plots/ tables, csv per setting and curves
 |- kda/            per-kernel tree: one directory per setting
 `- top_p/
 ```
 
 Each `kda/` and `top_p/` tree holds `README.md` (problem, protocol, trajectory),
 one directory per setting with `events.jsonl`, `trace.jsonl`, `baseline.json`,
-`versions/version<N>/` and `submission/`, plus `plots/`.
+`versions/version<N>/` and `submission/`, plus each operator’s `plots/`.
 
 ## Reproducing
 
@@ -133,3 +133,5 @@ scripts/ascend/plot.py --root <run root> --x tokens --y latency
   reference element for element, with no tolerance, and rows must sum to 1.
 - The kda without_memory unit was resumed once by the batch after its first
   session ended, which is why its curve continues past minute 85.
+
+顶层联合plots已移除；旧KDA/Top-P联合图表逐字节保存在对应算子的plots/legacy-shared-*，不改动其已有结果文件。

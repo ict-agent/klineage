@@ -1,0 +1,53 @@
+{
+  "policy": "structural-trace-v1",
+  "raw_content_published": false,
+  "files": {
+    "trace.jsonl": {
+      "records": 767,
+      "event_counts": {
+        "thread.started": 51,
+        "item.completed": 385,
+        "turn.started": 51,
+        "item.started": 231,
+        "turn.completed": 49
+      }
+    },
+    "session.jsonl": {
+      "records": 2302,
+      "event_counts": {
+        "session_meta": 1,
+        "event_msg": 1062,
+        "response_item": 896,
+        "world_state": 4,
+        "turn_context": 52,
+        "token_usage_record": 285,
+        "compacted": 2
+      }
+    },
+    "events.jsonl": {
+      "records": 993,
+      "event_counts": {
+        "session_budget": 1,
+        "session_start": 1,
+        "api_request": 286,
+        "api_tool_call": 275,
+        "api_response": 286,
+        "evaluate_start": 21,
+        "session_segment_end": 51,
+        "session_resume": 50,
+        "evaluate": 21,
+        "session_budget_end": 1
+      }
+    },
+    "stderr.log": {
+      "source_present": true,
+      "source_lines": 1293,
+      "body_redacted": true
+    },
+    "final_message.txt": {
+      "source_present": true,
+      "source_lines": 1,
+      "body_redacted": true
+    }
+  }
+}

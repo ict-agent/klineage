@@ -45,3 +45,7 @@ A=无预注入专家知识；B=有专家知识。A可自行查阅公开API。Bas
 在仓库根目录执行 `.venv-ascend/bin/python experiment/ascend/generation/fused_add_rmsnorm/build_report.py` 可离线重画两个算子的图，不调用模型或NPU。
 
 [本算子A/B汇总表](results.csv) · [优化技巧表](optimization-techniques.md) · [校验清单](SHA256SUMS.json)
+
+## Codex Trace补充
+
+两组均提供trace.jsonl、session.jsonl及完整事件类别的events.jsonl。记录数量与私有原始文件核对一致，API与评测元数据保留；所有自由文本正文脱敏。详见各组TRACE_ACCESS.md和trace-export-audit.json。本包不是未删减的原始会话。

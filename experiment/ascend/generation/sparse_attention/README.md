@@ -53,3 +53,7 @@ A曾越界读取本机已有公开API/通用示例，范围已纠正；因此A�
 完整API/Codex Trace与专家资料仅本地保存；此目录是脱敏结果包，events不是完整Trace。最佳源码与选中快照逐字节一致；校验清单见SHA256SUMS.json。
 
 [本算子A/B汇总表](results.csv) · [优化技巧表](optimization-techniques.md) · [校验清单](SHA256SUMS.json)
+
+## Codex Trace补充
+
+两组均提供trace.jsonl、session.jsonl及完整事件类别的events.jsonl。记录数量与私有原始文件核对一致，API与评测元数据保留；所有自由文本正文脱敏。详见各组TRACE_ACCESS.md和trace-export-audit.json。本包不是未删减的原始会话。
