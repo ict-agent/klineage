@@ -1,0 +1,30 @@
+[
+  {
+    "kernel": "fused_add_rmsnorm",
+    "setting": "without_memory",
+    "language": "ascendc",
+    "correct": true,
+    "baseline_ms": 6.009089946746826,
+    "latency_ms": 0.5659300088882446,
+    "speedup": 10.618079713693806,
+    "selected_version": "version10",
+    "response_span_s": 7187.802476,
+    "budget_elapsed_s": 7200.017758250004,
+    "completed_evaluations": 11,
+    "snapshot_count": 11
+  },
+  {
+    "kernel": "fused_add_rmsnorm",
+    "setting": "with_memory",
+    "language": "ascendc",
+    "correct": true,
+    "baseline_ms": 6.019270181655884,
+    "latency_ms": 0.4570399969816208,
+    "speedup": 13.170116885629902,
+    "selected_version": "version9",
+    "response_span_s": 7190.364399,
+    "budget_elapsed_s": 7200.025485208003,
+    "completed_evaluations": 33,
+    "snapshot_count": 33
+  }
+]

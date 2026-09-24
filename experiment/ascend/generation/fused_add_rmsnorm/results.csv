@@ -1,0 +1,3 @@
+kernel,setting,correct,reference_ms,latency_ms,vs_reference,initial_ms,vs_initial,selected_version,budget_s,response_span_s
+fused_add_rmsnorm,A,True,6.009089946746826,0.5659300088882446,10.618079713693806,,,version10,7200.017758250004,7187.802476
+fused_add_rmsnorm,B,True,6.019270181655884,0.4570399969816208,13.170116885629902,,,version9,7200.025485208003,7190.364399

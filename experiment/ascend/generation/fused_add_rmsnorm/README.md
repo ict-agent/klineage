@@ -41,5 +41,7 @@ A=无预注入专家知识；B=有专家知识。A可自行查阅公开API。Bas
 每组CSV在plots/；曲线仅以固定gate的正确结果更新最优值，失败点标为×，正确点标为竖线，无有效结果不绘制虚构曲线。Token包含累计缓存输入，不等于生成Token或费用。
 每组保留submission/、versions/、脱敏events.jsonl、baseline.json、result.json、duration-audit.json。
 原始API请求/响应、Codex Trace和工具正文完整留在本地，不随此交付包分发；events不是完整Trace。失败/中断快照同样保留。
-最终有效submission与选中version逐字节核验一致。../next-plots/SHA256SUMS.json覆盖正式文件；../next-plots/selection.json给出最终选择。
-在仓库根目录执行 `.venv-ascend/bin/python experiment/ascend/generation/next-plots/build_report.py` 可离线重画两个算子的图，不调用模型或NPU。
+最终有效submission与选中version逐字节核验一致。SHA256SUMS.json覆盖正式文件；selection.json给出最终选择。
+在仓库根目录执行 `.venv-ascend/bin/python experiment/ascend/generation/fused_add_rmsnorm/build_report.py` 可离线重画两个算子的图，不调用模型或NPU。
+
+[本算子A/B汇总表](results.csv) · [优化技巧表](optimization-techniques.md) · [校验清单](SHA256SUMS.json)

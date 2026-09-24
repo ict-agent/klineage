@@ -6,31 +6,13 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
 ROOT = Path(__file__).resolve().parent
-ROWS = [
- ('Expert-only: SparseAttention',None),
- ('Cube Matmul for both QK and PV', ['—','✓','—','—']),
- ('Cube / Vector stages on separate streams', ['—','✓','—','—']),
- ('Event-driven cross-chunk pipeline', ['—','✓','—','—']),
- ('Gather KV once; reuse across QK and PV', ['—','✓','—','—']),
- ('Explicit L1 depth / L0 double-buffer tiling', ['—','✓','—','—']),
- ('Expert-only: FusedAddRmsNorm',None),
- ('Explicit output L2 write-cache hint', ['—','—','—','✓']),
- ('Query hardware core count for launch grid', ['—','—','—','✓']),
- ('Even row partition (core loads differ by <= 1)', ['—','—','—','✓']),
- ('Shared B-side choices (not necessarily faster)',None),
- ('TQue-managed producer / consumer buffers', ['—','✓','—','✓']),
- ('ReduceSum API instead of a manual sum tree', ['✓*','✓','—','✓']),
- ('Context: techniques also present in A',None),
- ('Double buffering and input prefetch', ['—','✓','✓','✓']),
- ('Vector arithmetic / UB reuse / mixed precision', ['✓*','✓','✓','✓']),
-]
-
+ROWS = [('Cube Matmul for both QK and PV', ['—', '✓']), ('Cube / Vector stages on separate streams', ['—', '✓']), ('Event-driven cross-chunk pipeline', ['—', '✓']), ('Gather KV once; reuse across QK and PV', ['—', '✓']), ('Explicit L1 depth / L0 double-buffer tiling', ['—', '✓']), ('TQue-managed producer / consumer buffers', ['—', '✓']), ('ReduceSum API instead of a manual sum tree', ['✓*', '✓']), ('Double buffering and input prefetch', ['—', '✓']), ('Vector arithmetic / UB reuse / mixed precision', ['✓*', '✓'])]
 
 def main():
     fig,ax=plt.subplots(figsize=(12,10))
     ax.set_xlim(0,12);ax.set_ylim(-1,len(ROWS)+5.5);ax.axis('off')
-    xs=[7.2,8.5,9.8,11.1]
-    labels=['SparseAttention A','SparseAttention B','FusedAddRmsNorm A','FusedAddRmsNorm B']
+    xs=[8.3,10.4]
+    labels=['sparse_attention A', 'sparse_attention B']
     top=len(ROWS)+5.2
     ax.plot([.1,11.9],[top,top],color='black',lw=1.8)
     for x,label in zip(xs,labels):ax.text(x,len(ROWS)+.65,label,rotation=90,ha='center',va='bottom',fontsize=11)

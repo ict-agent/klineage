@@ -50,4 +50,6 @@ A曾越界读取本机已有公开API/通用示例，范围已纠正；因此A�
 [时间PDF](plots/speedup-vs-minutes.pdf) · [Token PNG](plots/speedup-vs-tokens.png) · [Token PDF](plots/speedup-vs-tokens.pdf)
 
 曲线只用预算内、无重叠、正确的完整评测更新最优值。水平尾段不表示新迭代；Token含缓存输入，不等同生成Token或费用。首次有效测量前留空。
-完整API/Codex Trace与专家资料仅本地保存；此目录是脱敏结果包，events不是完整Trace。最佳源码与选中快照逐字节一致；校验清单见../next-plots/SHA256SUMS.json。
+完整API/Codex Trace与专家资料仅本地保存；此目录是脱敏结果包，events不是完整Trace。最佳源码与选中快照逐字节一致；校验清单见SHA256SUMS.json。
+
+[本算子A/B汇总表](results.csv) · [优化技巧表](optimization-techniques.md) · [校验清单](SHA256SUMS.json)
