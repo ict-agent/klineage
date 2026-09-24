@@ -8,6 +8,7 @@ build/
 dist/
 agent-workspace/
 baseline/
+!experiment/ascend/optimization/baseline/
 .vscode/
 paper/
 !problems/definitions/paper/
