@@ -1,0 +1,198 @@
+{
+  "name": "kda",
+  "problem": {
+    "name": "kda",
+    "definition": {
+      "name": "kda",
+      "op_type": "kda_prefill",
+      "description": "Kimi-K3 bounded-gate KDA prefill, independent FP32 recurrence.",
+      "axes": {
+        "BATCH": {
+          "type": "const",
+          "value": 1
+        },
+        "TOKENS": {
+          "type": "const",
+          "value": 4096
+        },
+        "HEADS": {
+          "type": "const",
+          "value": 96
+        },
+        "HEAD_DIM": {
+          "type": "const",
+          "value": 128
+        }
+      },
+      "inputs": {
+        "q": {
+          "shape": [
+            "BATCH",
+            "TOKENS",
+            "HEADS",
+            "HEAD_DIM"
+          ],
+          "dtype": "bfloat16",
+          "description": "Contiguous BTHD; before normalization or activation."
+        },
+        "k": {
+          "shape": [
+            "BATCH",
+            "TOKENS",
+            "HEADS",
+            "HEAD_DIM"
+          ],
+          "dtype": "bfloat16",
+          "description": "Contiguous BTHD; before normalization or activation."
+        },
+        "v": {
+          "shape": [
+            "BATCH",
+            "TOKENS",
+            "HEADS",
+            "HEAD_DIM"
+          ],
+          "dtype": "bfloat16",
+          "description": "Contiguous BTHD; before normalization or activation."
+        },
+        "g": {
+          "shape": [
+            "BATCH",
+            "TOKENS",
+            "HEADS",
+            "HEAD_DIM"
+          ],
+          "dtype": "bfloat16",
+          "description": "Contiguous BTHD; before normalization or activation."
+        },
+        "beta": {
+          "shape": [
+            "BATCH",
+            "TOKENS",
+            "HEADS"
+          ],
+          "dtype": "float32",
+          "description": "Raw beta logits; sigmoid in operator."
+        },
+        "scale": {
+          "shape": [],
+          "dtype": "float32",
+          "description": "Fixed 1/sqrt(128)."
+        },
+        "a_log": {
+          "shape": [
+            "HEADS"
+          ],
+          "dtype": "float32",
+          "description": "Log gate gain."
+        },
+        "dt_bias": {
+          "shape": [
+            "HEADS",
+            "HEAD_DIM"
+          ],
+          "dtype": "float32",
+          "description": "Full-rank gate bias."
+        },
+        "lower_bound": {
+          "shape": [],
+          "dtype": "float32",
+          "description": "Fixed Kimi-K3 bounded gate value -5."
+        },
+        "initial_state": {
+          "shape": [
+            "BATCH",
+            "HEADS",
+            "HEAD_DIM",
+            "HEAD_DIM"
+          ],
+          "dtype": "float32",
+          "description": "Contiguous BVK state; zero for fresh prefill."
+        }
+      },
+      "outputs": {
+        "output": {
+          "shape": [
+            "BATCH",
+            "TOKENS",
+            "HEADS",
+            "HEAD_DIM"
+          ],
+          "dtype": "bfloat16",
+          "description": "Causal post-update readout before output gate/projection."
+        },
+        "final_state": {
+          "shape": [
+            "BATCH",
+            "HEADS",
+            "HEAD_DIM",
+            "HEAD_DIM"
+          ],
+          "dtype": "float32",
+          "description": "Full-precision recurrent state in [batch, head, value, key]."
+        }
+      },
+      "reference": "\"\"\"Mathematical Kimi-K3 KDA recurrence; FP32 working state.\"\"\"\n\nimport torch\n\nNORM_EPS = 1e-6\n\n\n@torch.no_grad()\ndef run(q, k, v, g, beta, scale, a_log, dt_bias, lower_bound, initial_state):\n    batch, tokens, heads, dim = q.shape\n    query = q.float()\n    key = k.float()\n    query = query / (query.square().sum(-1, keepdim=True) + NORM_EPS).sqrt()\n    key = key / (key.square().sum(-1, keepdim=True) + NORM_EPS).sqrt()\n    query = query * scale.float()\n    decay = (lower_bound.float() * torch.sigmoid(\n        a_log.float().exp()[:, None] * (g.float() + dt_bias.float())\n    )).exp()\n    gain = beta.float().sigmoid()\n    value = v.float()\n    state = initial_state.float().clone()\n    output = torch.empty_like(v)\n\n    # Each token decays, corrects, then reads the state in [value, key] layout.\n    for t in range(tokens):\n        kt = key[:, t]\n        state = state * decay[:, t, :, None, :]\n        prediction = (state * kt[:, :, None, :]).sum(-1)\n        delta = gain[:, t, :, None] * (value[:, t] - prediction)\n        state = state + delta[:, :, :, None] * kt[:, :, None, :]\n        output[:, t] = (state * query[:, t, :, None, :]).sum(-1)\n\n    return output, state.contiguous()\n"
+    },
+    "workload": {
+      "uuid": "b7a070e0-48cb-5191-aab7-d01c18c38b02",
+      "axes": {
+        "BATCH": 1,
+        "TOKENS": 4096,
+        "HEADS": 96,
+        "HEAD_DIM": 128
+      },
+      "inputs": {
+        "q": {
+          "type": "random"
+        },
+        "k": {
+          "type": "random"
+        },
+        "v": {
+          "type": "random"
+        },
+        "g": {
+          "type": "random"
+        },
+        "beta": {
+          "type": "random"
+        },
+        "scale": {
+          "type": "safetensors",
+          "path": "inputs/kda.safetensors",
+          "tensor_key": "scale"
+        },
+        "a_log": {
+          "type": "random"
+        },
+        "dt_bias": {
+          "type": "random"
+        },
+        "lower_bound": {
+          "type": "safetensors",
+          "path": "inputs/kda.safetensors",
+          "tensor_key": "lower_bound"
+        },
+        "initial_state": {
+          "type": "random"
+        }
+      }
+    },
+    "language": "ascendc",
+    "platform": "ascend-Ascend910B3"
+  },
+  "source_files": {
+    "config.toml": "[solution]\nname = \"kda\"\ndefinition = \"kda\"\nauthor = \"klineage\"\n\n[build]\nlanguage = \"ascendc\"\nentry_point = \"op_host/binding.cpp::kernel\"\nproject = \"chunk_kda_fwd\"\ndestination_passing_style = true\n",
+    "solution/chunk_kda_fwd/CMakeLists.txt": "cmake_minimum_required(VERSION 3.16)\nproject(chunk_kda_fwd)\nfind_package(ASC REQUIRED)\nset(ASCEND_COMPUTE_UNIT ascend910b)\nset(package_name custom)\nnpu_op_package(${package_name} TYPE RUN CONFIG INSTALL_PATH ${CMAKE_BINARY_DIR})\nadd_subdirectory(op_host)\nadd_subdirectory(op_kernel)\n",
+    "solution/chunk_kda_fwd/op_host/CMakeLists.txt": "file(GLOB host_src CONFIGURE_DEPENDS ./*.cpp)\nnpu_op_code_gen(SRC ${host_src} PACKAGE ${package_name} OUT_DIR ${ASCEND_AUTOGEN_PATH})\nnpu_op_library(cust_optiling TILING ${host_src})\nfile(GLOB autogen_aclnn_src ${ASCEND_AUTOGEN_PATH}/aclnn_*.cpp)\nset_source_files_properties(${autogen_aclnn_src} PROPERTIES GENERATED TRUE)\nnpu_op_library(cust_opapi ACLNN ${autogen_aclnn_src})\nnpu_op_package_add(${package_name} LIBRARY cust_optiling cust_opapi)\n",
+    "solution/chunk_kda_fwd/op_host/chunk_kda_fwd.cpp": "#include \"register/op_def_registry.h\"\n#include \"chunk_kda_fwd_tiling.h\"\n\nnamespace optiling {\nge::graphStatus TilingFunc(gert::TilingContext *context) {\n    const auto* input = context->GetInputShape(0);\n    if (input == nullptr) return ge::GRAPH_FAILED;\n\n    const auto& shape = input->GetStorageShape();\n    constexpr int64_t kExpectedRank = 4;\n    constexpr int64_t kExpectedBatch = 1;\n    constexpr int64_t kExpectedTokens = 4096;\n    constexpr int64_t kExpectedHeads = 96;\n    constexpr int64_t kExpectedDim = 128;\n    constexpr int64_t kInitialChunkSize = 64;\n    if (shape.GetDimNum() != kExpectedRank || shape.GetDim(0) != kExpectedBatch ||\n        shape.GetDim(1) != kExpectedTokens || shape.GetDim(2) != kExpectedHeads ||\n        shape.GetDim(3) != kExpectedDim) return ge::GRAPH_FAILED;\n\n    ChunkKdaFwdTilingData data;\n    data.set_chunkSize(kInitialChunkSize);\n    auto* buffer = context->GetRawTilingData();\n    if (buffer == nullptr) return ge::GRAPH_FAILED;\n    data.SaveToBuffer(buffer->GetData(), buffer->GetCapacity());\n    buffer->SetDataSize(data.GetDataSize());\n    context->SetBlockDim(kExpectedHeads);\n    context->GetWorkspaceSizes(1)[0] = 0;\n    return ge::GRAPH_SUCCESS;\n}\n}\n\nnamespace ops {\nclass ChunkKdaFwd : public OpDef {\npublic:\n    explicit ChunkKdaFwd(const char *name) : OpDef(name) {\n        for (const char *input : {\"q\", \"k\", \"v\", \"g\"}) {\n            this->Input(input).ParamType(REQUIRED)\n                .DataType({ge::DT_BF16}).Format({ge::FORMAT_ND});\n        }\n        for (const char *input : {\"beta\", \"scale\", \"a_log\", \"dt_bias\",\n                                 \"lower_bound\", \"initial_state\"}) {\n            this->Input(input).ParamType(REQUIRED)\n                .DataType({ge::DT_FLOAT}).Format({ge::FORMAT_ND});\n        }\n        this->Output(\"output\").ParamType(REQUIRED)\n            .DataType({ge::DT_BF16}).Format({ge::FORMAT_ND});\n        this->Output(\"final_state\").ParamType(REQUIRED)\n            .DataType({ge::DT_FLOAT}).Format({ge::FORMAT_ND});\n        this->AICore().SetTiling(optiling::TilingFunc).AddConfig(\"ascend910b\");\n    }\n};\nOP_ADD(ChunkKdaFwd);\n}\n",
+    "solution/chunk_kda_fwd/op_host/chunk_kda_fwd_tiling.h": "#pragma once\n\n#include <register/tilingdata_base.h>\n\nnamespace optiling {\nBEGIN_TILING_DATA_DEF(ChunkKdaFwdTilingData)\nTILING_DATA_FIELD_DEF(int64_t, chunkSize);\nEND_TILING_DATA_DEF;\n\nREGISTER_TILING_DATA_CLASS(ChunkKdaFwd, ChunkKdaFwdTilingData)\n}\n",
+    "solution/chunk_kda_fwd/op_kernel/CMakeLists.txt": "npu_op_kernel_sources(ascendc_kernels KERNEL_DIR ./)\nnpu_op_kernel_library(ascendc_kernels\n    SRC_BASE ${CMAKE_CURRENT_SOURCE_DIR} TILING_LIBRARY cust_optiling)\nnpu_op_package_add(${package_name} LIBRARY ascendc_kernels)\n",
+    "solution/chunk_kda_fwd/op_kernel/chunk_kda_fwd.cpp": "#include \"kernel_operator.h\"\n\nusing namespace AscendC;\n\nnamespace kda {\n\nconstexpr int32_t kDim = 128;\nconstexpr int32_t kHeads = 96;\nconstexpr int32_t kTokens = 4096;\nconstexpr int32_t kVSplit = 1;\nconstexpr int32_t kRows = kDim / kVSplit;\nconstexpr int32_t kTB = 16;\nconstexpr int32_t kPerTok = kHeads * kDim;\nconstexpr int32_t kPerTokBlocks = kPerTok * 2 / 32;  // 32B datablock units\nconstexpr int32_t kStateElems = kDim * kRows;\nconstexpr int32_t kStageRows = 16;\nconstexpr int32_t kStageElems = kStageRows * kDim;\nconstexpr float kNormEps = 1e-6f;\n\nconstexpr int32_t kInBf16 = 3 * kTB * kDim + kTB * kRows;\nconstexpr int32_t kInBytes = kInBf16 * 2;\nconstexpr int32_t kBetaOff = kInBytes / 4;\nconstexpr int32_t kBetaFloats = kTB * 8;\nconstexpr int32_t kInBufferBytes = kInBytes + kBetaFloats * 4 + 32;\n\nconstexpr int32_t kQF = 0;\nconstexpr int32_t kKF = 128;\nconstexpr int32_t kDF = 256;\nconstexpr int32_t kVF = 384;\nconstexpr int32_t kBF = 512;\nconstexpr int32_t kPF = 640;\nconstexpr int32_t kOF = 768;\nconstexpr int32_t kLF = 896;\nconstexpr int32_t kA0 = 1024;\nconstexpr int32_t kA1 = 1032;\nconstexpr int32_t kA2 = 1040;\nconstexpr int32_t kAC = 1048;\nconstexpr int32_t kTF = 1056;\nconstexpr int32_t kBA = 1184;\nconstexpr int32_t kRW = 1312;\nconstexpr int32_t kRWSpace = 288;\n\nconstexpr int32_t kChunk = 16;\nconstexpr int32_t kChunkLanes = kChunk * kRows;\nconstexpr int32_t kBP = 1600;\nconstexpr int32_t kBT = 1728;\nconstexpr int32_t kBX = 3776;\nconstexpr int32_t kBY = 5824;\nconstexpr int32_t kWK = 7872;\nconstexpr int32_t kWQ = 8000;\nconstexpr int32_t kWorkFloats = 8256;\n\n__aicore__ inline void syncS2V(TPipe& pipe) {\n    const event_t event = static_cast<event_t>(pipe.FetchEventID(HardEvent::S_V));\n    SetFlag<HardEvent::S_V>(event);\n    WaitFlag<HardEvent::S_V>(event);\n}\n\n__aicore__ inline void syncV2S(TPipe& pipe) {\n    const event_t event = static_cast<event_t>(pipe.FetchEventID(HardEvent::V_S));\n    SetFlag<HardEvent::V_S>(event);\n    WaitFlag<HardEvent::V_S>(event);\n}\n\n__aicore__ inline void syncMte2ToS(TPipe& pipe) {\n    const event_t event = static_cast<event_t>(pipe.FetchEventID(HardEvent::MTE2_S));\n    SetFlag<HardEvent::MTE2_S>(event);\n    WaitFlag<HardEvent::MTE2_S>(event);\n}\n\n__aicore__ inline void syncMte2ToV(TPipe& pipe) {\n    const event_t event = static_cast<event_t>(pipe.FetchEventID(HardEvent::MTE2_V));\n    SetFlag<HardEvent::MTE2_V>(event);\n    WaitFlag<HardEvent::MTE2_V>(event);\n}\n\n__aicore__ inline void syncS2Mte2(TPipe& pipe) {\n    const event_t event = static_cast<event_t>(pipe.FetchEventID(HardEvent::S_MTE2));\n    SetFlag<HardEvent::S_MTE2>(event);\n    WaitFlag<HardEvent::S_MTE2>(event);\n}\n\n__aicore__ inline void syncMte3ToS(TPipe& pipe) {\n    const event_t event = static_cast<event_t>(pipe.FetchEventID(HardEvent::MTE3_S));\n    SetFlag<HardEvent::MTE3_S>(event);\n    WaitFlag<HardEvent::MTE3_S>(event);\n}\n\n__aicore__ inline void syncS2Mte3(TPipe& pipe) {\n    const event_t event = static_cast<event_t>(pipe.FetchEventID(HardEvent::S_MTE3));\n    SetFlag<HardEvent::S_MTE3>(event);\n    WaitFlag<HardEvent::S_MTE3>(event);\n}\n\n}  // namespace kda\n\nextern \"C\" __global__ __aicore__ void chunk_kda_fwd(\n    GM_ADDR q, GM_ADDR k, GM_ADDR v, GM_ADDR g, GM_ADDR beta,\n    GM_ADDR scale, GM_ADDR a_log, GM_ADDR dt_bias, GM_ADDR lower_bound,\n    GM_ADDR initial_state, GM_ADDR output, GM_ADDR final_state,\n    GM_ADDR workspace, GM_ADDR tiling) {\n    using namespace kda;\n    KERNEL_TASK_TYPE_DEFAULT(KERNEL_TYPE_AIV_ONLY);\n    (void)workspace;\n    (void)tiling;\n\n    const int32_t bid = static_cast<int32_t>(GetBlockIdx());\n    const int32_t head = bid / kVSplit;\n    const int32_t slice = bid - head * kVSplit;\n    if (head >= kHeads) {\n        return;\n    }\n\n    GlobalTensor<bfloat16_t> qGm;\n    GlobalTensor<bfloat16_t> kGm;\n    GlobalTensor<bfloat16_t> vGm;\n    GlobalTensor<bfloat16_t> gGm;\n    GlobalTensor<bfloat16_t> outGm;\n    GlobalTensor<float> betaGm;\n    GlobalTensor<float> scaleGm;\n    GlobalTensor<float> aLogGm;\n    GlobalTensor<float> biasGm;\n    GlobalTensor<float> lowerGm;\n    GlobalTensor<float> initGm;\n    GlobalTensor<float> finalGm;\n    qGm.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t*>(q));\n    kGm.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t*>(k));\n    vGm.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t*>(v));\n    gGm.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t*>(g));\n    outGm.SetGlobalBuffer(reinterpret_cast<__gm__ bfloat16_t*>(output));\n    betaGm.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(beta));\n    scaleGm.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(scale));\n    aLogGm.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(a_log));\n    biasGm.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(dt_bias));\n    lowerGm.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(lower_bound));\n    initGm.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(initial_state));\n    finalGm.SetGlobalBuffer(reinterpret_cast<__gm__ float*>(final_state));\n\n    TPipe pipe;\n    TBuf<TPosition::VECCALC> stateBuf;\n    TBuf<TPosition::VECCALC> stageBuf;\n    TBuf<TPosition::VECCALC> workBuf;\n    pipe.InitBuffer(stateBuf, kStateElems * sizeof(float));\n    pipe.InitBuffer(stageBuf, kStageElems * sizeof(float));\n    pipe.InitBuffer(workBuf, kWorkFloats * sizeof(float));\n    TQue<QuePosition::VECIN, 2> inQue;\n    TQue<QuePosition::VECOUT, 2> outQue;\n    pipe.InitBuffer(inQue, 2, kInBufferBytes);\n    pipe.InitBuffer(outQue, 2, kTB * kRows * sizeof(bfloat16_t));\n\n    LocalTensor<float> state = stateBuf.Get<float>();\n    LocalTensor<float> stage = stageBuf.Get<float>();\n    LocalTensor<float> work = workBuf.Get<float>();\n\n    LocalTensor<float> qf = work[kQF];\n    LocalTensor<float> kf = work[kKF];\n    LocalTensor<float> df = work[kDF];\n    LocalTensor<float> vf = work[kVF];\n    LocalTensor<float> bf = work[kBF];\n    LocalTensor<float> pred = work[kPF];\n    LocalTensor<float> outv = work[kOF];\n    LocalTensor<float> delta = work[kLF];\n    LocalTensor<float> a0 = work[kA0];\n    LocalTensor<float> a1 = work[kA1];\n    LocalTensor<float> a2 = work[kA2];\n    LocalTensor<float> ac = work[kAC];\n    LocalTensor<float> tmp = work[kTF];\n    LocalTensor<float> betaAux = work[kBA];\n    LocalTensor<float> rw = work[kRW];\n    LocalTensor<float> bP = work[kBP];\n    LocalTensor<float> bT = work[kBT];\n    LocalTensor<float> bX = work[kBX];\n    LocalTensor<float> bY = work[kBY];\n    LocalTensor<float> wk = work[kWK];\n    LocalTensor<float> wq = work[kWQ];\n    BrcbRepeatParams brcb;\n    brcb.dstBlkStride = 1;\n    brcb.dstRepStride = 8;\n\n    const float scaleVal = scaleGm.GetValue(0);\n    const float lowerVal = lowerGm.GetValue(0);\n    const float aLogVal = aLogGm.GetValue(head);\n\n    DataCopy(bf, biasGm[head * kDim], kDim);\n    const int32_t initBase = (head * kDim + slice * kRows) * kDim;\n\n    work.SetValue(kAC, aLogVal);\n    syncMte2ToS(pipe);\n    syncMte2ToV(pipe);\n    syncS2V(pipe);\n    Exp(work[kAC], work[kAC], 8);\n    syncV2S(pipe);\n    const float logGain = work.GetValue(kAC);\n\n    for (int32_t c = 0; c < kDim / kStageRows; ++c) {\n        if (c > 0) syncS2Mte2(pipe);\n        DataCopy(stage, initGm[initBase + c * kStageElems], kStageElems);\n        syncMte2ToS(pipe);\n        for (int32_t v = 0; v < kStageRows; ++v) {\n            for (int32_t kk = 0; kk < kDim; ++kk) {\n                state.SetValue(kk * kRows + c * kStageRows + v, stage.GetValue(v * kDim + kk));\n            }\n        }\n    }\n    syncS2V(pipe);\n\n    DataCopyParams pq;\n    pq.blockCount = static_cast<uint16_t>(kTB);\n    pq.blockLen = 8;\n    pq.srcStride = static_cast<uint16_t>(kPerTokBlocks - 8);\n    pq.dstStride = 0;\n    DataCopyParams pv;\n    pv.blockCount = static_cast<uint16_t>(kTB);\n    pv.blockLen = static_cast<uint16_t>(kRows * 2 / 32);\n    pv.srcStride = static_cast<uint16_t>(kPerTokBlocks - kRows * 2 / 32);\n    pv.dstStride = 0;\n    DataCopyParams pb;\n    pb.blockCount = static_cast<uint16_t>(kTB);\n    pb.blockLen = 1;\n    pb.srcStride = static_cast<uint16_t>(kHeads / 8 - 1);\n    pb.dstStride = 0;\n    DataCopyParams po;\n    po.blockCount = static_cast<uint16_t>(kTB);\n    po.blockLen = static_cast<uint16_t>(kRows * 2 / 32);\n    po.srcStride = 0;\n    po.dstStride = static_cast<uint16_t>(kPerTokBlocks - kRows * 2 / 32);\n\n    const int32_t headGroup = head & ~7;\n    const int32_t headLane = head - headGroup;\n    const int32_t qkBytes = 3 * kTB * kDim;\n\n    for (int32_t tb = 0; tb < kTokens; tb += kTB) {\n        const int32_t gBase = tb * kPerTok + head * kDim;\n        auto inT = inQue.AllocTensor<bfloat16_t>();\n        DataCopy(inT[0], qGm[gBase], pq);\n        DataCopy(inT[kTB * kDim], kGm[gBase], pq);\n        DataCopy(inT[2 * kTB * kDim], gGm[gBase], pq);\n        DataCopy(inT[qkBytes], vGm[gBase + slice * kRows], pv);\n        LocalTensor<float> betaF = inT.ReinterpretCast<float>();\n        DataCopy(betaF[kBetaOff], betaGm[tb * kHeads + headGroup], pb);\n        inQue.EnQue(inT);\n        auto inR = inQue.DeQue<bfloat16_t>();\n        auto outT = outQue.AllocTensor<bfloat16_t>();\n\n        syncV2S(pipe);\n        syncMte2ToS(pipe);\n        for (int32_t i = 0; i < kTB; ++i) {\n            betaAux.SetValue(i * 8, betaF.GetValue(kBetaOff + i * 8 + headLane));\n        }\n        syncS2V(pipe);\n\n        for (int32_t i = 0; i < kTB; ++i) {\n            Cast(qf, inR[i * kDim], RoundMode::CAST_NONE, kDim);\n            Cast(kf, inR[kTB * kDim + i * kDim], RoundMode::CAST_NONE, kDim);\n            Cast(df, inR[2 * kTB * kDim + i * kDim], RoundMode::CAST_NONE, kDim);\n            Cast(vf, inR[qkBytes + i * kRows], RoundMode::CAST_NONE, kRows);\n\n            Mul(tmp, qf, qf, kDim);\n            ReduceSum(a0, tmp, rw, kDim);\n            Mul(tmp, kf, kf, kDim);\n            ReduceSum(a1, tmp, rw, kDim);\n            Mul(tmp, qf, kf, kDim);\n            ReduceSum(a2, tmp, rw, kDim);\n\n            Muls(ac, betaAux[i * 8], 1.0f, 8);\n            Muls(ac, ac, -1.0f, 8);\n            Exp(ac, ac, 8);\n            Adds(ac, ac, 1.0f, 8);\n            Reciprocal(ac, ac, 8);\n\n            Add(df, df, bf, kDim);\n            Muls(df, df, logGain, kDim);\n            Muls(df, df, -1.0f, kDim);\n            Exp(df, df, kDim);\n            Adds(df, df, 1.0f, kDim);\n            Reciprocal(df, df, kDim);\n            Muls(df, df, lowerVal, kDim);\n            Exp(df, df, kDim);\n\n            Adds(a0, a0, kNormEps, 8);\n            Rsqrt(a0, a0, 8);\n            Adds(a1, a1, kNormEps, 8);\n            Rsqrt(a1, a1, 8);\n            syncV2S(pipe);\n\n            const float qFac = a0.GetValue(0) * scaleVal;\n            const float kFac = a1.GetValue(0);\n            const float kqDot = a2.GetValue(0) * qFac * kFac;\n            const float gain = ac.GetValue(0);\n\n            Muls(qf, qf, qFac, kDim);\n            Muls(kf, kf, kFac, kDim);\n\n            Duplicate(pred, 0.0f, kRows);\n            Duplicate(outv, 0.0f, kRows);\n            syncV2S(pipe);\n            Mul(wk, df, kf, kDim);\n            Mul(wq, df, qf, kDim);\n            Duplicate(bX, 0.0f, kChunkLanes);\n            Duplicate(bY, 0.0f, kChunkLanes);\n            for (int32_t c = 0; c < kDim / kChunk; ++c) {\n                Brcb(bP, wk[c * kChunk], static_cast<uint8_t>(kChunk / 8), brcb);\n                Brcb(bT, bP, static_cast<uint8_t>(kChunk), brcb);\n                Mul(bT, state[c * kChunk * kRows], bT, kChunkLanes);\n                Add(bX, bX, bT, kChunkLanes);\n                Brcb(bP, wq[c * kChunk], static_cast<uint8_t>(kChunk / 8), brcb);\n                Brcb(bT, bP, static_cast<uint8_t>(kChunk), brcb);\n                Mul(bT, state[c * kChunk * kRows], bT, kChunkLanes);\n                Add(bY, bY, bT, kChunkLanes);\n            }\n            for (int32_t s = kChunkLanes / 2; s >= kRows; s >>= 1) {\n                Add(bX, bX, bX[s], s);\n            }\n            Add(pred, pred, bX, kRows);\n            for (int32_t s = kChunkLanes / 2; s >= kRows; s >>= 1) {\n                Add(bY, bY, bY[s], s);\n            }\n            Add(outv, outv, bY, kRows);\n            Sub(delta, vf, pred, kRows);\n            Muls(delta, delta, gain, kRows);\n            Axpy(outv, delta, kqDot, kRows);\n            for (int32_t c = 0; c < kDim / kChunk; ++c) {\n                Brcb(bP, df[c * kChunk], static_cast<uint8_t>(kChunk / 8), brcb);\n                Brcb(bT, bP, static_cast<uint8_t>(kChunk), brcb);\n                Mul(state[c * kChunk * kRows], state[c * kChunk * kRows], bT, kChunkLanes);\n            }\n            for (int32_t kk = 0; kk < kDim; ++kk) {\n                const float knv = kf.GetValue(kk);\n                Axpy(state[kk * kRows], delta, knv, kRows);\n            }\n            Cast(outT[i * kRows], outv, RoundMode::CAST_RINT, kRows);\n        }\n\n        outQue.EnQue(outT);\n        auto outR = outQue.DeQue<bfloat16_t>();\n        DataCopy(outGm[gBase + slice * kRows], outR, po);\n        outQue.FreeTensor(outR);\n        inQue.FreeTensor(inR);\n    }\n\n    syncV2S(pipe);\n    const int32_t finalBase = (head * kDim + slice * kRows) * kDim;\n    for (int32_t c = 0; c < kDim / kStageRows; ++c) {\n        if (c > 0) syncMte3ToS(pipe);\n        for (int32_t v = 0; v < kStageRows; ++v) {\n            for (int32_t kk = 0; kk < kDim; ++kk) {\n                stage.SetValue(v * kDim + kk, state.GetValue(kk * kRows + c * kStageRows + v));\n            }\n        }\n        syncS2Mte3(pipe);\n        DataCopy(finalGm[finalBase + c * kStageElems], stage, kStageElems);\n    }\n}\n",
+    "solution/op_host/binding.cpp": "#include <torch/extension.h>\n#include <c10/core/DeviceGuard.h>\n#include <torch_npu/csrc/core/npu/NPUStream.h>\n#include \"op_host/launch.h\"\n\nvoid kernel(torch::Tensor q, torch::Tensor k, torch::Tensor v,\n            torch::Tensor g, torch::Tensor beta, torch::Tensor scale,\n            torch::Tensor a_log, torch::Tensor dt_bias, torch::Tensor lower_bound,\n            torch::Tensor initial_state, torch::Tensor output, torch::Tensor final_state) {\n    std::vector<torch::Tensor> inputs{q, k, v, g, beta, scale, a_log, dt_bias,\n                                      lower_bound, initial_state};\n    std::vector<torch::Tensor> outputs{output, final_state};\n    c10::DeviceGuard guard(q.device());\n    auto stream = c10_npu::getCurrentNPUStream(q.get_device()).stream(true);\n    launch(inputs, outputs, stream);\n}\n\nPYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {\n    module.def(\"kernel\", &kernel);\n}\n",
+    "solution/op_host/launch.cpp": "#include \"op_host/launch.h\"\n#include \"aclnn_chunk_kda_fwd.h\"\n\n#include <limits>\n\nnamespace {\n\nconstexpr int64_t kDim = 128;\nconstexpr int64_t kBatch = 1;\nconstexpr int64_t kTokens = 4096;\nconstexpr int64_t kHeads = 96;\n\nclass Descriptor {\npublic:\n    explicit Descriptor(const torch::Tensor& tensor) {\n        const auto shape = tensor.sizes().vec();\n        const auto strides = tensor.strides().vec();\n        const auto dtype = tensor.scalar_type() == at::kBFloat16 ? ACL_BF16 : ACL_FLOAT;\n        value_ = aclCreateTensor(shape.data(), shape.size(), dtype, strides.data(), 0,\n                                 ACL_FORMAT_ND, shape.data(), shape.size(), tensor.data_ptr());\n        TORCH_CHECK(value_ != nullptr, \"aclCreateTensor failed\");\n    }\n\n    ~Descriptor() {\n        if (value_ != nullptr) aclDestroyTensor(value_);\n    }\n\n    Descriptor(const Descriptor&) = delete;\n    Descriptor& operator=(const Descriptor&) = delete;\n\n    aclTensor* get() const { return value_; }\n\nprivate:\n    aclTensor* value_ = nullptr;\n};\n\nvoid require(const torch::Tensor& tensor, at::ScalarType dtype, const char* name) {\n    TORCH_CHECK(tensor.scalar_type() == dtype, name, \": wrong dtype\");\n    TORCH_CHECK(tensor.is_contiguous(), name, \": must be contiguous\");\n}\n\nvoid require_shape(const torch::Tensor& tensor, std::initializer_list<int64_t> shape,\n                   const char* name) {\n    TORCH_CHECK(tensor.sizes() == torch::IntArrayRef(shape), name, \": wrong shape\");\n}\n\n}  // namespace\n\nvoid launch(const std::vector<torch::Tensor>& inputs,\n            const std::vector<torch::Tensor>& outputs, aclrtStream stream) {\n    TORCH_CHECK(inputs.size() == 10, \"kda expects ten inputs\");\n    TORCH_CHECK(outputs.size() == 2, \"kda expects two outputs\");\n    const torch::Tensor& q = inputs[0];\n    const torch::Tensor& k = inputs[1];\n    const torch::Tensor& v = inputs[2];\n    const torch::Tensor& g = inputs[3];\n    const torch::Tensor& beta = inputs[4];\n    const torch::Tensor& scale = inputs[5];\n    const torch::Tensor& a_log = inputs[6];\n    const torch::Tensor& dt_bias = inputs[7];\n    const torch::Tensor& lower_bound = inputs[8];\n    const torch::Tensor& initial_state = inputs[9];\n    torch::Tensor output = outputs[0];\n    torch::Tensor final_state = outputs[1];\n\n    TORCH_CHECK(q.dim() == 4, \"q must be [batch, tokens, heads, dim]\");\n    const int64_t batch = q.size(0);\n    const int64_t tokens = q.size(1);\n    const int64_t heads = q.size(2);\n    TORCH_CHECK(batch == kBatch && tokens == kTokens && heads == kHeads &&\n                q.size(3) == kDim, \"unsupported KDA shape\");\n\n    for (const auto& tensor : inputs) {\n        TORCH_CHECK(tensor.device() == q.device(), \"all inputs must be on q's device\");\n    }\n    for (const auto& tensor : outputs) {\n        TORCH_CHECK(tensor.device() == q.device(), \"all outputs must be on q's device\");\n    }\n\n    for (const auto* pair : {&q, &k, &v, &g}) require(*pair, at::kBFloat16, \"q/k/v/g\");\n    for (const auto* pair : {&q, &k, &v, &g}) {\n        require_shape(*pair, {batch, tokens, heads, kDim}, \"q/k/v/g\");\n    }\n    require(output, at::kBFloat16, \"output\");\n    require_shape(output, {batch, tokens, heads, kDim}, \"output\");\n    require(beta, at::kFloat, \"beta\");\n    require_shape(beta, {batch, tokens, heads}, \"beta\");\n    require(scale, at::kFloat, \"scale\");\n    require_shape(scale, {}, \"scale\");\n    require(a_log, at::kFloat, \"a_log\");\n    require_shape(a_log, {heads}, \"a_log\");\n    require(dt_bias, at::kFloat, \"dt_bias\");\n    require_shape(dt_bias, {heads, kDim}, \"dt_bias\");\n    require(lower_bound, at::kFloat, \"lower_bound\");\n    require_shape(lower_bound, {}, \"lower_bound\");\n    require(initial_state, at::kFloat, \"initial_state\");\n    require_shape(initial_state, {batch, heads, kDim, kDim}, \"initial_state\");\n    require(final_state, at::kFloat, \"final_state\");\n    require_shape(final_state, {batch, heads, kDim, kDim}, \"final_state\");\n\n    Descriptor query_desc(q);\n    Descriptor key_desc(k);\n    Descriptor value_desc(v);\n    Descriptor gate_desc(g);\n    Descriptor beta_desc(beta);\n    Descriptor scale_desc(scale);\n    Descriptor a_log_desc(a_log);\n    Descriptor dt_bias_desc(dt_bias);\n    Descriptor lower_desc(lower_bound);\n    Descriptor state_desc(initial_state);\n    Descriptor output_desc(output);\n    Descriptor final_desc(final_state);\n\n    uint64_t workspace_size = 0;\n    aclOpExecutor* executor = nullptr;\n    const auto query_status = aclnnChunkKdaFwdGetWorkspaceSize(\n        query_desc.get(), key_desc.get(), value_desc.get(), gate_desc.get(),\n        beta_desc.get(), scale_desc.get(), a_log_desc.get(), dt_bias_desc.get(),\n        lower_desc.get(), state_desc.get(), output_desc.get(), final_desc.get(),\n        &workspace_size, &executor);\n    TORCH_CHECK(query_status == ACL_SUCCESS, \"ACLNN workspace query failed: \", query_status);\n    TORCH_CHECK(workspace_size <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),\n                \"ACLNN workspace too large\");\n\n    auto workspace = torch::empty({static_cast<int64_t>(workspace_size)},\n                                  q.options().dtype(at::kByte));\n    const auto launch_status = aclnnChunkKdaFwd(\n        workspace_size == 0 ? nullptr : workspace.data_ptr(), workspace_size,\n        executor, stream);\n    TORCH_CHECK(launch_status == ACL_SUCCESS, \"ACLNN launch failed: \", launch_status);\n\n    // Workspace allocation and ACLNN execution use the caller's stream, so\n    // the caching allocator can reuse its storage in stream order.\n}\n",
+    "solution/op_host/launch.h": "#pragma once\n#include <torch/extension.h>\n#include <acl/acl.h>\n\nvoid launch(const std::vector<torch::Tensor>& inputs,\n            const std::vector<torch::Tensor>& outputs,\n            aclrtStream stream);\n"
+  },
+  "validation": null
+}

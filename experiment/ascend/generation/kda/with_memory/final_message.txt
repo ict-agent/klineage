@@ -1,21 +1,17 @@
-Final bundle confirmed and gated.
-
 **Result**
-- `work/submission/config.toml` + `work/submission/solution/kernel.py` — triton-ascend, `entry_point = "kernel.py::kernel"`, correctness + profile passed, device kernel.
 
-**Kernel design**
-- Prep kernel: l2-normalises q/k, folds the query scale, builds `decay = exp(lb·sigmoid(exp(a_log)·(g+dt_bias)))` and `gain = sigmoid(beta)`, all staged head-major `[B,H,T,D]` so the recurrent kernel streams contiguous 512 B vectors per token.
-- Recurrent kernel: grid `(D/BV, H·B)` with `BV=64`, one `[D,BV]` fp32 state tile resident per program, single pass over T; both readouts contract the key axis as register-tree reductions.
+Landed and optimized an AscendC KDA kernel at `work/submission/` (`language = "ascendc"`, `entry_point = "op_host/binding.cpp::kernel"`), correct on the gate and verified byte-identical to the last successfully measured version.
 
-**Gated progression this session**
-- 24.51 ms (62.6x) — head-major staging instead of token-major
-- 24.24 ms (63.2x) — prep tiling `_PREP_TB` 32→64, `_PREP_WARPS` 4→2
-- 23.29 ms (65.8x) — hoist all per-token loads to the top of the loop body (biggest single win: hides load latency)
-- 23.15 ms (66.2x) — `_MAIN_WARPS=1`, `_PREP_WARPS=4`
-- 23.075 ms (66.44x) — reconfirmed best bundle
+**Journey**
+- Starter scalar kernel: 14558.8 ms → vectorized [key,value]-tile recurrence (192 blocks = 96 heads x 2 value halves): 42.53 ms.
+- Double-buffered token loads + beta prefetch: 42.10 ms.
+- Removed all redundant same-pipe `PipeBarrier<PIPE_V>` plus fused the delta broadcast into the outer-product `Mul` (6→5 full tile passes): 38.81 ms.
+- Delayed the `MTE3_V` wait so the output GM-write latency overlaps a full token of compute: **36.31 ms** (this was the biggest single win, ~6%).
+- Rejected after gating: `MulAddDst` state fusion (UB alignment fault), vectorized normalization with `Duplicate`/`Brcb` broadcasts (slower, 37.28 ms), and several pass-count restructurings that proved traffic-neutral.
 
-**Measured and reverted** (correctness failures or slower): 2x/4x loop unroll (both `loop_unroll_factor` and manual) → miscompiles to NaN; `BV=128` and two state tiles → silent wrong results; transposed `[BV,D]` state; 6-pass pre-decay readout (with and without precomputed `k·q`); predecayed `dk`/`dq` arrays; software prefetch with loop-carried vectors (24.97 ms); `max_contiguous` hints (240 ms); head-major output staging + transpose pass; head-major `v` staging; `num_stages` 2/3/4; `disallow_acc_multi_buffer`.
+**Delivery**
+- Kernel: `work/submission/solution/chunk_kda_fwd/op_kernel/chunk_kda_fwd.cpp` — 5 tile passes/token (state decay, `sdec*k` → fold, `delta⊗k` outer product, fused-add state update, `state*q` → fold), Brcb row broadcasts, double-buffered loads, deep output-store writeback.
+- Host ABI/tiling untouched beyond the block-dim wiring; reference math and tensor contract unchanged.
+- Note: the eval service began timing out (broken pipe) for every run after ~14:07, so two later verification attempts produced no result; the submission is the exact source that gated at 36.31/36.42 ms.
 
-**Diagnostics** (remote, outside the gate): main kernel ≈ 95 % of runtime, prep ≈ 0.75 ms; `num_warps` 1/2/4/8 are indistinguishable, and ablations removing loads run *slower* — the kernel is bound by per-iteration UB round-trips/latency rather than vector throughput or bandwidth. Measured run-to-run noise is ±0.2 %.
-
-Final measured latency: **23.0753 ms** (66.44x over the 1533.144 ms torch-npu baseline).
+**Final measured latency: 36.31 ms** (speedup 51.4× vs the 1867.39 ms torch-npu baseline).

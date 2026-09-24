@@ -1,8 +1,10 @@
 [solution]
-name = "kda-triton-chunked"
+name = "kda"
 definition = "kda"
-author = "codex"
+author = "klineage"
 
 [build]
-language = "python"
-entry_point = "kernel.py::kernel"
+language = "ascendc"
+entry_point = "op_host/binding.cpp::kernel"
+project = "chunk_kda_fwd"
+destination_passing_style = true

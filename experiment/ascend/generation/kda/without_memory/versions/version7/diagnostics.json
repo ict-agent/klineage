@@ -1,0 +1,5 @@
+{
+  "build/cann_project/build.log": "Reused CANN package /tmp/klineage-cann-project/c6a7afb4eee39de07f3f8e22ac022667487cf09f4d35861b1eb1d40add41130f\n",
+  "evaluations/evaluate-20260923T135346.685652Z-ca3709/eval-0001-stderr.log": "[W923 13:54:05.747424560 NPUCachingAllocator.cpp:202] Warning: The current CANN and HDK(driver) versions require processing for 32 padding size, with memory allocation. (function operator())\nCorrectness failed: torch.allclose failed: rtol=atol=0.01\n",
+  "evaluations/evaluate-20260923T135346.685652Z-ca3709/eval-0001-stdout.log": "{\"compile_passed\": true, \"correctness_passed\": false, \"profile_passed\": false, \"latency_ms\": null, \"reference_latency_ms\": null}\n"
+}

@@ -1,12 +1,14 @@
 {
   "kernel": "kda",
   "setting": "with_memory",
-  "device": "3",
-  "started_at": "2026-09-20T11:22:34.304172+00:00",
-  "api_response": 194,
-  "evaluate": 35,
-  "versions": 35,
-  "duration_s": 6202.5,
-  "finished_at": "2026-09-20T13:05:56.940424+00:00",
-  "status": "ok"
+  "device": "7",
+  "started_at": "2026-09-23T12:46:24.984601+00:00",
+  "api_response": 215,
+  "evaluate": 25,
+  "api_proxy_error": 5,
+  "versions": 20,
+  "duration_s": 7203.2,
+  "finished_at": "2026-09-23T15:54:46.939812+00:00",
+  "status": "ok",
+  "resumed_at": "2026-09-23T15:54:46.939801+00:00"
 }

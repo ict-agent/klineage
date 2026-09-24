@@ -1,0 +1,5 @@
+{
+  "build/cann_project/build.log": "Reused CANN package /tmp/klineage-cann-project/d202e80e75466118e1824b8137e6751917bd58973347d96c07554147ee6d1e13\n",
+  "evaluations/evaluate-20260923T132355.071667Z-aeeac8/eval-0001-stdout.log": "{\"compile_passed\": true, \"correctness_passed\": true, \"profile_passed\": true, \"latency_ms\": 38.57463836669922, \"reference_latency_ms\": null}\n",
+  "evaluations/evaluate-20260923T132355.071667Z-aeeac8/eval-0001-stderr.log": "[W923 13:24:07.541994720 NPUCachingAllocator.cpp:202] Warning: The current CANN and HDK(driver) versions require processing for 32 padding size, with memory allocation. (function operator())\nTiming evidence: {\"samples_ms\": [[38.55781936645508, 38.603641510009766, 38.57463836669922]], \"median_ms\": 38.57463836669922, \"backend_used\": \"npu-events\", \"details\": {\"policy\": {\"warmup\": 1, \"repeat\": 3, \"cold_l2\": false, \"trials\": 1}, \"scope\": \"current_stream_interval\", \"device_type\": \"npu\"}}\n"
+}
