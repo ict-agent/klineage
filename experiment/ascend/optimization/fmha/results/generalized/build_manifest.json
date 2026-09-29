@@ -1,0 +1,25 @@
+{
+  "tiling_key": 5000000000000200100,
+  "shape": [
+    16384,
+    64,
+    128
+  ],
+  "variant": "generalized",
+  "source_sha256": "13a33627a1413899a81d62592401c4997249a0aa687b76f7be61eead70efb538",
+  "compile_param_sha256": "b79b98d4bf56441ddb82850f7dcf3411a806277214c1eff2075203e7bcb30425",
+  "sequence_lengths": [
+    2048,
+    2048,
+    2048,
+    2048,
+    2048,
+    2048,
+    2048,
+    2048
+  ],
+  "soc": "Ascend910B1",
+  "cann": "/usr/local/Ascend/cann-9.1.0",
+  "baseline_sha256": "91644f785e1b618c1aa56f8b083d0523017091d5737fdb22ff13fdf5c21a80d3",
+  "candidate_sha256": "c6899f4a9ba8b63bcd13a380e2d28356afc50ba553d26e2ad989dbff32a7ed2d"
+}
