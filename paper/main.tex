@@ -23,6 +23,10 @@
 
 \usepackage{hyperref}
 \usepackage{url}
+\usepackage{xurl}
+\hypersetup{hidelinks,
+  pdftitle={KLineage: Recovering the Missing When of Kernel Optimization by Deoptimizing Experts},
+  pdfauthor={Shuoming Zhang, Qiuchu Yu, Ruiyuan Xu, Chenjing Zhang, Junjie Peng, Zhicheng Xie, Yangyu Zhang, Xiyu Shi, Ying Liu, Guangli Li, Xiaobing Feng, Huimin Cui, Xingjun Zhang, Jiacheng Zhao}}
 
 % Rename autoref labels (ported)
 \renewcommand{\sectionautorefname}{\S}
@@ -30,6 +34,7 @@
 \renewcommand{\subsubsectionautorefname}{\S}
 \renewcommand{\figureautorefname}{Figure}
 \renewcommand{\tableautorefname}{Table}
+\renewcommand{\appendixautorefname}{\S}
 
 % Inline TODO marker with visible note text.
 \newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
@@ -40,18 +45,35 @@
 % \title{Learning When to Optimize: Verified Optimization Skills from Expert GPU-Kernel Lineages}
 \title{\sys: Recovering the Missing \emph{When} of \\ Kernel Optimization by Deoptimizing Experts}
 
-% TODO(arXiv): 换成真实作者。多位作者用 \And 分列、\AND 换行。
-\author{First Author\\
-Institution\\
-\texttt{first@example.com}
-\And
-Second Author\\
-Institution\\
-\texttt{second@example.com}}
+\author{%
+\begin{minipage}[t]{\dimexpr\textwidth-2\tabcolsep\relax}
+\centering
+Shuoming Zhang\textsuperscript{1,2,*} \quad Qiuchu Yu\textsuperscript{1,2,*} \quad Ruiyuan Xu\textsuperscript{1,2} \quad Chenjing Zhang\textsuperscript{3} \\
+Junjie Peng\textsuperscript{3} \quad Zhicheng Xie\textsuperscript{3} \quad Yangyu Zhang\textsuperscript{1,2} \quad Xiyu Shi\textsuperscript{1} \\
+Ying Liu\textsuperscript{1,2} \quad Guangli Li\textsuperscript{1,2} \quad Xiaobing Feng\textsuperscript{1,2} \quad Huimin Cui\textsuperscript{1,2} \\
+Xingjun Zhang\textsuperscript{3} \quad Jiacheng Zhao\textsuperscript{1,2,\dag} \\[0.5em]
+{\normalfont\small
+\textsuperscript{1}State Key Laboratory of Processors, Institute of Computing Technology\\
+Chinese Academy of Sciences, Beijing, China\\
+\textsuperscript{2}University of Chinese Academy of Sciences, Beijing, China\\
+\textsuperscript{3}Xi'an Jiaotong University, Xi'an, China}
+\end{minipage}%
+}
 
 \begin{document}
+\raggedbottom
 
 \maketitle
+\lhead{}
+\renewcommand{\headrulewidth}{0pt}
+\begingroup
+\renewcommand{\thefootnote}{}
+\footnotetext{Preprint.}
+\renewcommand{\thefootnote}{*}
+\footnotetext{Equal contribution.}
+\renewcommand{\thefootnote}{\dag}
+\footnotetext{Corresponding to: \texttt{zhaojiacheng@ict.ac.cn}.}
+\endgroup
 
 \begin{abstract}
 \input{abstract}

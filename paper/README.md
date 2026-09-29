@@ -23,8 +23,7 @@ pdflatex main && bibtex main && pdflatex main && pdflatex main
 
 ## Before uploading
 
-- `main.tex` still carries a placeholder author block. Replace it.
-- The abstract does not yet point at this repository.
+The abstract does not yet point at this repository.
 
 Upload the whole directory as a tarball; arXiv compiles `main.tex` and needs no
 `figures/` or `sections/` subdirectories.
