@@ -1,0 +1,109 @@
+\documentclass{article} % For LaTeX2e
+\usepackage{preprint,times}
+
+% Optional math commands from https://github.com/goodfeli/dlbook_notation.
+\input{math_commands.tex}
+
+% ---- Ported from EMNLP1 (acl) preamble; content unchanged ----
+\usepackage{latexsym}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{inconsolata}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{xcolor}
+\usepackage{xspace}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, decorations.pathmorphing, shapes.symbols}
+
+\usepackage{hyperref}
+\usepackage{url}
+
+% Rename autoref labels (ported)
+\renewcommand{\sectionautorefname}{\S}
+\renewcommand{\subsectionautorefname}{\S}
+\renewcommand{\subsubsectionautorefname}{\S}
+\renewcommand{\figureautorefname}{Figure}
+\renewcommand{\tableautorefname}{Table}
+
+% Inline TODO marker with visible note text.
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+\newcommand{\sys}{\textsc{KLineage}\xspace}
+% Placeholder for a number that is not measured yet; renders as a red XX.
+\newcommand{\xx}{\textcolor{red}{XX}\xspace}
+
+% \title{Learning When to Optimize: Verified Optimization Skills from Expert GPU-Kernel Lineages}
+\title{\sys: Recovering the Missing \emph{When} of \\ Kernel Optimization by Deoptimizing Experts}
+
+% TODO(arXiv): 换成真实作者。多位作者用 \And 分列、\AND 换行。
+\author{First Author\\
+Institution\\
+\texttt{first@example.com}
+\And
+Second Author\\
+Institution\\
+\texttt{second@example.com}}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\input{abstract}
+\end{abstract}
+
+\input{introduction}
+\input{related_work}
+\input{method}
+\input{experiments}
+
+\input{conclusion}
+
+
+\section*{AI use statement}
+We used AI to construct conditioned skill memory for each of the three hardware platforms and to generate the final kernel code. We also used AI to polish the paper's writing. We reviewed the LLM-generated code and take responsibility for the final content of this paper.
+
+% ============================================================================
+% REMOVED 2026-09-25 at the author's request: the whole acknowledgements block
+% (AI assistants / potential risks / scientific artifacts / computational
+% budget).  Kept commented out so the artifact and budget wording is
+% recoverable.
+% ============================================================================
+% \section*{Acknowledgements}
+%
+% \paragraph{AI assistants.} This paper is written with the help of Claude Code.
+%
+% \paragraph{Potential risks.}
+% \sys generates GPU kernels, not language or content; it has no human-subject component, no scraped or user-derived data, and no demographic exposure. The main risk is that an automatically materialized kernel could be silently incorrect at deployment; we mitigate this with a compile/correctness/profile gate at every submission, and we recommend the same gate be applied before any downstream use of \sys-generated kernels.
+%
+% \paragraph{Scientific artifacts.}
+% We use publicly released open-source artifacts: PyTorch, TileLang, FlashInfer, FLA, CUTLASS, FlashQLA, CANN, Torch-NPU, KernelBench, AdaExplore, AccelOpt, and the LLM APIs listed above. All are used under their published licenses for non-commercial research, consistent with their intended use as kernel libraries, optimization frameworks, or research baselines. Workload statistics (five expert kernels and five transfer targets per platform, shapes and dtypes) are reported in \autoref{tab:workloads} and \autoref{app:workload-detail}.
+%
+% \paragraph{Computational budget.}
+% Every run is bounded by the per-workload optimization-cost budget stated in \autoref{sec:exp-setup}; total LLM cost across the full evaluation is on the order of \$$\xx$. Kernel benchmarking ran on a single H100 PCIe (SM90) node, a single RTX PRO 6000 Blackwell (SM120) node, and an Ascend 910B node.
+
+\bibliography{custom}
+\bibliographystyle{preprint}
+
+\appendix
+
+\input{extended_experiments}
+
+% \section{Action Library Details}
+% \label{sec:appendix-actions}
+% \todo{Full spec (precondition / inverse / validation) for all eight actions, plus the kernel list with per-language and per-platform expert availability.}
+
+% \section{Baseline Re-implementation Notes}
+% \label{sec:appendix-baselines}
+% \todo{Per-baseline schema and prompt templates: \texttt{adaexplore-style} (failure-rule memory), \texttt{kernelskill-style} (expert-skill memory). For each: schema, induction procedure, what is preserved from the published system and what is necessarily adapted to our harness.}
+
+% \section{Prompt Templates}
+% \label{sec:appendix-prompts}
+% \todo{Per-memory-condition prompt templates used in Experiments~2--5.}
+
+\end{document}

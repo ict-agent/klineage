@@ -9,6 +9,4 @@ dist/
 agent-workspace/
 baseline/
 .vscode/
-paper/
-!problems/definitions/paper/
-!problems/workloads/paper/
+.DS_Store
