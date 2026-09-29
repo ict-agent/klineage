@@ -9,12 +9,10 @@ Supports CUDA, Hygon HIP, and AscendC.
 ## Paper
 
 *KLineage: Recovering the Missing When of Kernel Optimization by Deoptimizing
-Experts.* Source and figures are in [`paper/`](paper); build it with
-`pdflatex main && bibtex main && pdflatex main && pdflatex main`.
+Experts* — [`KLineage.pdf`](KLineage.pdf).
 
-Its measurements live on several branches, one per operator study.
-[`docs/ARTIFACTS.md`](docs/ARTIFACTS.md) maps every reported number to the branch
-and directory that holds it.
+[`docs/ARTIFACTS.md`](docs/ARTIFACTS.md) maps every number the paper reports to
+the directory that holds it.
 
 ## Repository
 
@@ -24,7 +22,6 @@ and directory that holds it.
 | `problems/` | Five problem definitions, workloads, and fixed input samples |
 | `skillcards/` | Induced CUDA skill cards, one `SKILL.md` per optimization |
 | `experiment/` | Transfer runs, one directory per timestamped run |
-| `paper/` | arXiv source, flat layout |
 | `docs/` | Where the paper's results live |
 | `tests/` | Test suite |
 
