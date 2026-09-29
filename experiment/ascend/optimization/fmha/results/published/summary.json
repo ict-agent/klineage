@@ -1,0 +1,52 @@
+{
+  "shape": [
+    16384,
+    64,
+    128
+  ],
+  "sequence_lengths": [
+    2048,
+    2048,
+    2048,
+    2048,
+    2048,
+    2048,
+    2048,
+    2048
+  ],
+  "pairs": [
+    {
+      "seed": 20260921,
+      "bitwise_equal": true,
+      "baseline_us": 7517.8125,
+      "candidate_us": 6527.4737548828125,
+      "core_speedup": 1.1517185334336082,
+      "baseline_entrypoint_us": 7814.7406005859375,
+      "candidate_entrypoint_us": 6685.6536865234375,
+      "entrypoint_speedup": 1.1688820520779366
+    },
+    {
+      "seed": 123,
+      "bitwise_equal": true,
+      "baseline_us": 7530.430908203125,
+      "candidate_us": 6525.556640625,
+      "core_speedup": 1.1539905824006274,
+      "baseline_entrypoint_us": 7826.708984375,
+      "candidate_entrypoint_us": 6693.8714599609375,
+      "entrypoint_speedup": 1.169235028068596
+    },
+    {
+      "seed": 777,
+      "bitwise_equal": true,
+      "baseline_us": 7537.3577880859375,
+      "candidate_us": 6524.019775390625,
+      "core_speedup": 1.1553241785866044,
+      "baseline_entrypoint_us": 7823.212890625,
+      "candidate_entrypoint_us": 6697.52197265625,
+      "entrypoint_speedup": 1.168075733467478
+    }
+  ],
+  "core_geomean_speedup": 1.15367680427363,
+  "entrypoint_geomean_speedup": 1.1687308371465979,
+  "passed": true
+}

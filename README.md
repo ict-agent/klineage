@@ -6,6 +6,28 @@ The full workflow uses those skills to guide kernel optimization rounds.
 
 Supports CUDA, Hygon HIP, and AscendC.
 
+## Paper
+
+*KLineage: Recovering the Missing When of Kernel Optimization by Deoptimizing
+Experts.* Source and figures are in [`paper/`](paper); build it with
+`pdflatex main && bibtex main && pdflatex main && pdflatex main`.
+
+Its measurements live on several branches, one per operator study.
+[`docs/ARTIFACTS.md`](docs/ARTIFACTS.md) maps every reported number to the branch
+and directory that holds it.
+
+## Repository
+
+| Path | Contents |
+| --- | --- |
+| `src/klineage/` | Framework: actions, harness, memory, messages, per-language skills |
+| `problems/` | Five problem definitions, workloads, and fixed input samples |
+| `skillcards/` | Induced CUDA skill cards, one `SKILL.md` per optimization |
+| `experiment/` | Transfer runs, one directory per timestamped run |
+| `paper/` | arXiv source, flat layout |
+| `docs/` | Where the paper's results live |
+| `tests/` | Test suite |
+
 ## Build
 
 Requires Python 3.12+, uv, Codex, and the backend's hardware, toolchain, and

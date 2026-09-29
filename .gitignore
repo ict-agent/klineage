@@ -9,7 +9,6 @@ dist/
 agent-workspace/
 baseline/
 !experiment/ascend/optimization/baseline/
+!experiment/ascend/optimization/gemm/src/baseline/
 .vscode/
-paper/
-!problems/definitions/paper/
-!problems/workloads/paper/
+.DS_Store
