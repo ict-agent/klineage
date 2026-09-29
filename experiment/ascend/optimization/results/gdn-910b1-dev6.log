@@ -1,0 +1,53 @@
+INFO 09-24 12:49:04 [__init__.py:44] Available plugins for group vllm.platform_plugins:
+INFO 09-24 12:49:04 [__init__.py:46] - ascend -> vllm_ascend:register
+INFO 09-24 12:49:04 [__init__.py:49] All plugins in this group will be loaded. Set `VLLM_PLUGINS` to control which plugins to load.
+INFO 09-24 12:49:04 [__init__.py:238] Platform plugin ascend is activated
+INFO 09-24 12:49:04 [platform.py:60] Breakable cudagraph is force disabled on Ascend because DeepSeek V4 PIECEWISE cudagraph is not supported yet.
+/tmp/gdn-bench/experiment/ascend/optimization/baseline/fla/cumsum.py:96: UserWarning: Cannot create tensor with interal format while allow_internel_format=False, tensor will be created with base format. (Triggered internally at ../torch_npu/csrc/aten/common/TensorFactories.cpp:340.)
+  g_org, g = g, torch.empty_like(g, dtype=output_dtype or g.dtype)
+[2026-09-24 12:49:16] [WARNING] [29204] profiler.py: Incorrect schedule: Stop profiler while current state is RECORD which may result in incomplete parsed data.
+[2026-09-24 12:49:17] [INFO] [29279] profiler.py: Start parsing profiling data in sync mode at: /tmp/gdn-optimization/vllm/aicc-01_29204_20260924124916740_ascend_pt
+|/-\[2026-09-24 12:49:20] [INFO] [29288] profiler.py: CANN profiling data parsed in a total time of 0:00:03.038615
+|[2026-09-24 12:49:21] [INFO] [29279] profiler.py: All profiling data parsed in a total time of 0:00:04.384357
+[2026-09-24 12:49:22] [WARNING] [29204] profiler.py: Incorrect schedule: Stop profiler while current state is RECORD which may result in incomplete parsed data.
+[2026-09-24 12:49:23] [INFO] [29570] profiler.py: Start parsing profiling data in sync mode at: /tmp/gdn-optimization/ours/aicc-01_29204_20260924124922618_ascend_pt
+|/-\[2026-09-24 12:49:26] [INFO] [29579] profiler.py: CANN profiling data parsed in a total time of 0:00:03.033033
+|[2026-09-24 12:49:27] [INFO] [29570] profiler.py: All profiling data parsed in a total time of 0:00:04.361805
+
+shape: B1 T4096 HQ16 HV48 D128, q/k heads repeated x3, chunk 64
+
+correctness (atol = rtol = 1e-2)
+actual  expected    tensor           max_abs   |want|     viol  max_excess  ok
+ours    vllm        output         1.953e-03    0.020        0   -8.79e-03  yes
+ours    vllm        final_state    1.171e-02    0.214        0   -9.68e-04  yes
+vllm    fla         output         1.426e-03    0.020        0   -8.88e-03  yes
+vllm    fla         final_state    1.048e-02    0.214        0   -2.12e-03  yes
+ours    fla         output         2.004e-03    0.020        0   -8.87e-03  yes
+ours    fla         final_state    1.026e-02    0.214        0   -1.27e-03  yes
+
+latency (device kernel durations, us)
+vllm    4764.41  (14 kernels/iter)  4792.3 / 4744.0 / 4766.6 / 4748.8 / 4786.4 / 4773.7 / 4771.7 / 4761.0 / 4744.1 / 4762.3
+ours    3393.44  (12 kernels/iter)  3393.4 / 3378.7 / 3373.2 / 3374.5 / 3393.7 / 3416.9 / 3405.8 / 3379.1 / 3393.5 / 3402.5
+
+speedup vs vLLM-Ascend chain: 1.404x
+
+per-kernel means (us)
+  vllm
+     1662.40  chunk_gated_delta_rule_fwd_kernel_h_blockdim64
+     1083.61  recompute_w_u_fwd_kernel
+      737.83  chunk_fwd_kernel_o
+      736.93  merge_16x16_to_64x64_inverse_kernel
+      202.72  solve_tril_16x16_kernel
+      198.82  chunk_scaled_dot_kkt_fwd_kernel
+       84.29  aclnnInplaceCopy_TransposeAiCore_Transpose
+       50.80  aclnnInplaceCopy_CastAiCore_Cast
+        7.70  chunk_local_cumsum_scalar_kernel
+  ours
+     1083.32  recompute_w_u_fwd_kernel
+     1055.22  _fused_stage6_7_kernel
+      737.40  merge_16x16_to_64x64_inverse_kernel
+      202.94  solve_tril_16x16_kernel
+      194.71  chunk_scaled_dot_kkt_fwd_kernel
+       69.64  aclnnInplaceCopy_TransposeAiCore_Transpose
+       40.14  aclnnInplaceCopy_CastAiCore_Cast
+        7.78  chunk_local_cumsum_scalar_kernel

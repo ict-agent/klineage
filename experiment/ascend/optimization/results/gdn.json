@@ -1,0 +1,137 @@
+{
+  "axes": {
+    "B": 1,
+    "T": 4096,
+    "HQ": 16,
+    "HV": 48,
+    "D": 128
+  },
+  "repeats": 3,
+  "chunk_size": 64,
+  "tolerance": 0.01,
+  "checks": [
+    {
+      "actual": "ours",
+      "expected": "vllm",
+      "tensor": "output",
+      "max_abs_err": 0.001953125,
+      "max_rel_err": 594.1093139648438,
+      "mean_abs_expected": 0.019535552710294724,
+      "violations": 0,
+      "max_excess": -0.008785552345216274,
+      "allclose": true
+    },
+    {
+      "actual": "ours",
+      "expected": "vllm",
+      "tensor": "final_state",
+      "max_abs_err": 0.011705756187438965,
+      "max_rel_err": 579.5833129882812,
+      "mean_abs_expected": 0.21418270468711853,
+      "violations": 0,
+      "max_excess": -0.0009677233174443245,
+      "allclose": true
+    },
+    {
+      "actual": "vllm",
+      "expected": "fla",
+      "tensor": "output",
+      "max_abs_err": 0.00142592191696167,
+      "max_rel_err": 682.398681640625,
+      "mean_abs_expected": 0.019535565748810768,
+      "violations": 0,
+      "max_excess": -0.008877012878656387,
+      "allclose": true
+    },
+    {
+      "actual": "vllm",
+      "expected": "fla",
+      "tensor": "final_state",
+      "max_abs_err": 0.010480403900146484,
+      "max_rel_err": 501.5596618652344,
+      "mean_abs_expected": 0.2141813188791275,
+      "violations": 0,
+      "max_excess": -0.002115011215209961,
+      "allclose": true
+    },
+    {
+      "actual": "ours",
+      "expected": "fla",
+      "tensor": "output",
+      "max_abs_err": 0.002003878355026245,
+      "max_rel_err": 486.80230712890625,
+      "mean_abs_expected": 0.019535565748810768,
+      "violations": 0,
+      "max_excess": -0.008873158134520054,
+      "allclose": true
+    },
+    {
+      "actual": "ours",
+      "expected": "fla",
+      "tensor": "final_state",
+      "max_abs_err": 0.010261476039886475,
+      "max_rel_err": 593.5281372070312,
+      "mean_abs_expected": 0.2141813188791275,
+      "violations": 0,
+      "max_excess": -0.001269383355975151,
+      "allclose": true
+    }
+  ],
+  "timings": {
+    "vllm": {
+      "label": "vllm",
+      "samples_us": [
+        4792.336,
+        4743.994,
+        4766.574,
+        4748.797,
+        4786.436,
+        4773.736,
+        4771.736,
+        4761.015,
+        4744.134,
+        4762.255
+      ],
+      "median_us": 4764.4145,
+      "kernels_per_iteration": 14,
+      "by_name_us": {
+        "chunk_local_cumsum_scalar_kernel": 7.7021,
+        "aclnnInplaceCopy_TransposeAiCore_Transpose": 84.28960000000001,
+        "chunk_scaled_dot_kkt_fwd_kernel": 198.818,
+        "solve_tril_16x16_kernel": 202.71800000000002,
+        "merge_16x16_to_64x64_inverse_kernel": 736.9268,
+        "recompute_w_u_fwd_kernel": 1083.6117,
+        "chunk_gated_delta_rule_fwd_kernel_h_blockdim64": 1662.3951999999997,
+        "chunk_fwd_kernel_o": 737.8349,
+        "aclnnInplaceCopy_CastAiCore_Cast": 50.804999999999986
+      }
+    },
+    "ours": {
+      "label": "ours",
+      "samples_us": [
+        3393.408,
+        3378.748,
+        3373.207,
+        3374.548,
+        3393.688,
+        3416.8869999999997,
+        3405.829,
+        3379.107,
+        3393.467,
+        3402.468
+      ],
+      "median_us": 3393.4375,
+      "kernels_per_iteration": 12,
+      "by_name_us": {
+        "chunk_local_cumsum_scalar_kernel": 7.780099999999999,
+        "aclnnInplaceCopy_TransposeAiCore_Transpose": 69.6351,
+        "chunk_scaled_dot_kkt_fwd_kernel": 194.708,
+        "solve_tril_16x16_kernel": 202.93809999999996,
+        "merge_16x16_to_64x64_inverse_kernel": 737.401,
+        "recompute_w_u_fwd_kernel": 1083.3176,
+        "_fused_stage6_7_kernel": 1055.2151000000001,
+        "aclnnInplaceCopy_CastAiCore_Cast": 40.1407
+      }
+    }
+  }
+}
