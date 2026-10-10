@@ -1,0 +1,23 @@
+.md-typeset .diagram {
+  margin: 1.25em 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  border-radius: 12px;
+  scrollbar-width: thin;
+}
+
+.md-typeset .diagram img {
+  display: block;
+  width: 100%;
+  min-width: 640px;
+  max-width: none;
+  height: auto;
+}
+
+.md-typeset .diagram:focus-visible {
+  outline: 2px solid var(--md-accent-fg-color);
+  outline-offset: 3px;
+}
+
+[data-md-color-scheme="default"] .diagram img { color-scheme: light; }
+[data-md-color-scheme="slate"] .diagram img { color-scheme: dark; }

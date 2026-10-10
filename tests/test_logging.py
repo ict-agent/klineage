@@ -12,7 +12,8 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.request import Request, urlopen
 
-from klineage.logging import (
+from klineage.serialization import raw_text
+from klineage.harness.logging import (
     LOG_ENV,
     UsageProxy,
     complete_events,
@@ -66,14 +67,10 @@ def events(directory: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-class FakeKernel:
-    """The shape `kernel_fields` reads: name, fingerprint, problem.platform."""
+def fake_kernel():
+    from kernel_fixtures import kernel
 
-    name = "k"
-    fingerprint = "fp"
-
-    class problem:
-        platform = "p"
+    return kernel("k", platform="sm120")
 
 
 class LoggingTests(unittest.TestCase):
@@ -95,6 +92,82 @@ class LoggingTests(unittest.TestCase):
         with patch.dict(os.environ, environment, clear=True):
             record("ignored")
         self.assertFalse((self.target / "events.jsonl").exists())
+
+    def test_disabled_skips_metadata(self):
+        @observed("evaluate")
+        def evaluate(value):
+            return value
+
+        with (
+            patch.dict(os.environ, {LOG_ENV: ""}),
+            patch("klineage.harness.logging.kernel_fields", side_effect=AssertionError("unused metadata")),
+        ):
+            self.assertEqual(evaluate("result"), "result")
+
+    def test_metadata_without_problem(self):
+        from klineage.artifact import json_node
+        from klineage.harness.logging import kernel_fields
+
+        current = fake_kernel()
+        metadata = json.loads(raw_text(current.node("metadata.json")))
+        metadata["problem"]["path"] = str(self.root / "missing-problem")
+        current = type(current)(current.tree.with_child(json_node("metadata.json", metadata)))
+        self.assertEqual(kernel_fields(current), {"kernel_name": "k", "platform": "sm120"})
+
+    def test_no_symlink_log_file(self):
+        outside = self.root / "host-file"
+        outside.write_text("private")
+        self.target.mkdir()
+        (self.target / "events.jsonl").symlink_to(outside)
+        record("attack", directory=self.target)
+        self.assertEqual(outside.read_text(), "private")
+
+    def test_no_symlink_log_parent(self):
+        outside = self.root / "host-directory"
+        outside.mkdir()
+        self.target.symlink_to(outside, target_is_directory=True)
+        record("attack", directory=self.target / "nested")
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_no_hardlink_log_file(self):
+        outside = self.root / "host-file"
+        outside.write_text("private")
+        self.target.mkdir()
+        (self.target / "events.jsonl").hardlink_to(outside)
+        record("attack", directory=self.target)
+        self.assertEqual(outside.read_text(), "private")
+
+    def test_log_directory_race(self):
+        outside = self.root / "host-directory"
+        outside.mkdir()
+        self.target.mkdir()
+        moved = self.root / "original-stats"
+        original_open = os.open
+
+        def replace_parent(path, flags, mode=0o777, *, dir_fd=None):
+            if path == "events.jsonl" and not moved.exists():
+                self.target.rename(moved)
+                self.target.symlink_to(outside, target_is_directory=True)
+            return original_open(path, flags, mode, dir_fd=dir_fd)
+
+        with patch("klineage.utils.os.open", side_effect=replace_parent):
+            record("race", directory=self.target)
+        self.assertEqual(list(outside.iterdir()), [])
+        self.assertEqual(events(moved)[0]["event"], "race")
+
+    def test_referenced_metadata(self):
+        from klineage.artifact import Node, file_ref
+        from klineage.harness.logging import kernel_fields
+
+        current = fake_kernel()
+        path = self.root / "metadata.json"
+        path.write_text(raw_text(current.node("metadata.json")))
+        referenced = type(current)(
+            current.tree.with_child(
+                Node.file("metadata.json", reference=file_ref(path))
+            )
+        )
+        self.assertEqual(kernel_fields(referenced), {"kernel_name": "k", "platform": "sm120"})
 
     def test_record_targets_an_explicit_directory(self):
         with self.collecting():
@@ -124,8 +197,8 @@ class LoggingTests(unittest.TestCase):
 
         with self.collecting():
             with self.assertRaises(RuntimeError):
-                fails(FakeKernel())
-            self.assertEqual(succeeds(FakeKernel()).latency_ms, 2.0)
+                fails(fake_kernel())
+            self.assertEqual(succeeds(fake_kernel()).latency_ms, 2.0)
 
         failure, success = events(self.target)
         self.assertEqual(failure["error"], "RuntimeError: boom")
@@ -135,7 +208,7 @@ class LoggingTests(unittest.TestCase):
         # A record's shape stays fixed: no reference latency or derived ratio.
         self.assertEqual(
             list(success),
-            ["event", "at", "finished_at", "kernel_name", "fingerprint",
+            ["event", "at", "finished_at", "kernel_name",
              "platform", "compile_passed", "correctness_passed",
              "profile_passed", "latency_ms"],
         )
@@ -147,6 +220,15 @@ class LoggingTests(unittest.TestCase):
         self.assertEqual(usage["response_id"], "r1")
         self.assertEqual(usage["cached_tokens"], 4)
         self.assertEqual(usage["reasoning_tokens"], 1)
+
+    def test_malformed_usage_details(self):
+        payload = json.loads(completed_frame().split(b"data: ")[1].strip())
+        payload["response"]["usage"]["input_tokens_details"] = 7
+        payload["response"]["usage"]["output_tokens_details"] = ["unexpected"]
+        usage = usage_from_event(json.dumps(payload).encode())
+        self.assertEqual(usage["total_tokens"], 12)
+        self.assertIsNone(usage["cached_tokens"])
+        self.assertIsNone(usage["reasoning_tokens"])
 
     def test_complete_events_holds_a_partial_frame(self):
         frames, pending = complete_events(b"data: a\n\ndata: par")
@@ -186,6 +268,17 @@ class UsageProxyTests(unittest.TestCase):
             urlopen(Request(proxy.url + "/v1/responses", data=b"{}"), timeout=10).read()
         self.assertTrue((named / "events.jsonl").is_file())
         self.assertFalse(untouched.exists())
+
+    def test_proxy_log_link_no_write(self):
+        target = self.root / "stats"
+        target.mkdir()
+        outside = self.root / "host-file"
+        outside.write_text("keep host content")
+        with UsageProxy(self.url, directory=target) as proxy:
+            (target / "events.jsonl").symlink_to(outside)
+            body = urlopen(Request(proxy.url + "/v1/responses", data=b"{}"), timeout=10).read()
+        self.assertIn(b"response.completed", body)
+        self.assertEqual(outside.read_text(), "keep host content")
 
 
 if __name__ == "__main__":

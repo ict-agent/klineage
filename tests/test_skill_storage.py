@@ -1,7 +1,11 @@
+import json
+import os
 import tempfile
 import unittest
-from dataclasses import replace
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
+from unittest.mock import patch
 
 import yaml
 
@@ -12,6 +16,7 @@ from klineage.memory import (
     save_skill,
 )
 from klineage.prompts import render_prompt
+from klineage.serialization import to_json
 
 SKILL_BODY = """# Overview
 
@@ -65,9 +70,40 @@ class SkillStorageTests(unittest.TestCase):
         self.assertNotIn("Before", frontmatter)
         self.assertEqual(body.strip(), self.card.body)
 
+    def test_concurrent_saves(self):
+        path = self.root / "SKILL.md"
+        barrier = Barrier(2)
+        replace = os.replace
+        cards = (self.card, self.card.replace(body="An updated recipe."))
+
+        def publish(source, destination):
+            barrier.wait(timeout=5)
+            return replace(source, destination)
+
+        with (
+            patch("klineage.memory.storage.os.replace", publish),
+            ThreadPoolExecutor(max_workers=2) as executor,
+        ):
+            futures = [executor.submit(save_skill, card, path) for card in cards]
+            self.assertEqual([future.result() for future in futures], [path, path])
+
+        self.assertIn(load_skill(path), cards)
+        self.assertEqual(list(self.root.iterdir()), [path])
+
+    def test_failed_publish_keeps_file(self):
+        path = save_skill(self.card, self.root / "SKILL.md")
+        with (
+            patch("klineage.memory.storage.os.replace", side_effect=OSError("failed")),
+            self.assertRaisesRegex(OSError, "failed"),
+        ):
+            save_skill(self.card.replace(body="An updated recipe."), path)
+
+        self.assertEqual(load_skill(path), self.card)
+        self.assertEqual(list(self.root.iterdir()), [path])
+
     def test_intent_is_single_line(self):
         with self.assertRaisesRegex(ValueError, "intent"):
-            replace(self.card, intent=self.card.intent + "\n\n" + SKILL_BODY)
+            self.card.replace(intent=self.card.intent + '\n\n' + SKILL_BODY)
 
     def test_rejects_extra_payload(self):
         path = self.root / "SKILL.md"
@@ -79,11 +115,7 @@ class SkillStorageTests(unittest.TestCase):
             load_skill(path)
 
     def test_multiline_roundtrip(self):
-        card = replace(
-            self.card,
-            body=self.card.body + "\n\n## Notes\n\n```text\n---\n```",
-            preconditions=('Layouts: "row-major".\nKeep strides.',),
-        )
+        card = self.card.replace(body=self.card.body + '\n\n## Notes\n\n```text\n---\n```', preconditions=('Layouts: "row-major".\nKeep strides.',))
         path = self.root / "SKILL.md"
         save_skill(card, path)
         self.assertEqual(load_skill(path), card)
@@ -94,17 +126,17 @@ class SkillStorageTests(unittest.TestCase):
             {"body": None},
             {"preconditions": "shared"},
             {"preconditions": [1]},
-            {"scope": {**self.card.scope.to_dict(), "languages": "cuda"}},
+            {"scope": {**json.loads(to_json(self.card.scope)), "languages": "cuda"}},
             {"unexpected": True},
         ):
             with (
                 self.subTest(changes=changes),
                 self.assertRaises((TypeError, ValueError)),
             ):
-                SkillCard.from_dict({**self.card.to_dict(), **changes})
+                self.card.replace(**changes)
 
     def test_prompt_example_roundtrip(self):
-        prompt = render_prompt("decompose_gemm")
+        prompt = render_prompt("cuda/decompose_gemm")
         document = prompt.split("````markdown\n", 1)[1].rsplit("\n````", 1)[0]
         path = self.root / "SKILL.md"
         path.write_text(document)

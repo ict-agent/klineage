@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from problem_fixtures import problem_spec
-
-from klineage import contract
-from klineage.artifact.kernel import Kernel
+from klineage.backend import get_backend
+from klineage.backend.runtime import OutputStyle, bundle_entry
 
 _CONFIG = """[solution]
 name = "gemm"
@@ -24,10 +22,14 @@ def source_bundle(config: str = _CONFIG) -> dict[str, str]:
 
 
 def kernel_metadata(sources):
-    return Kernel("test", problem_spec(), source_files=sources)
+    return bundle_entry(sources, get_backend("cuda"))
 
 
 class CudaContractTests(unittest.TestCase):
+    def test_requires_host_entry(self):
+        with self.assertRaisesRegex(ValueError, "config.toml"):
+            kernel_metadata({"kernel.cu": "__global__ void kernel() {}"})
+
     def test_cuda_requires_native(self):
         sources = {
             "config.toml": _CONFIG.replace("kernel.cu::run", "binding.py::run"),
@@ -41,10 +43,9 @@ class CudaContractTests(unittest.TestCase):
         build = kernel_metadata(source_bundle())
 
         self.assertEqual(build.language, "cuda")
-        self.assertEqual(build.entry_point, "kernel.cu::run")
         self.assertEqual(build.source_path, "solution/kernel.cu")
         self.assertEqual(build.symbol, "run")
-        self.assertIs(build.output_style, contract.OutputStyle.DESTINATION)
+        self.assertIs(build.output_style, OutputStyle.DESTINATION)
 
     def test_python_entry_and_defaults(self):
         config = _CONFIG.replace("kernel.cu::run", "nested/kernel.py::run").replace(
@@ -59,7 +60,7 @@ class CudaContractTests(unittest.TestCase):
 
         self.assertEqual(build.source_path, "solution/nested/kernel.py")
         self.assertEqual(build.language, "python")
-        self.assertIs(build.output_style, contract.OutputStyle.RETURN)
+        self.assertIs(build.output_style, OutputStyle.RETURN)
 
     def test_cuda_return_style(self):
         for config in (
@@ -70,7 +71,7 @@ class CudaContractTests(unittest.TestCase):
         ):
             with self.subTest(config=config):
                 build = kernel_metadata(source_bundle(config))
-                self.assertIs(build.output_style, contract.OutputStyle.RETURN)
+                self.assertIs(build.output_style, OutputStyle.RETURN)
 
     def test_accepts_additional_fields(self):
         sources = source_bundle(_CONFIG + "\n[benchmark]\nrepeat = 1\n")
@@ -167,7 +168,7 @@ class CudaContractTests(unittest.TestCase):
 
     def test_aux_config_needs_entry(self):
         sources = source_bundle("block_size = 128\n")
-        with self.assertRaises(KeyError):
+        with self.assertRaisesRegex(ValueError, "submission/config.toml"):
             kernel_metadata(sources)
 
 

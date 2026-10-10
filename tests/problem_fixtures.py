@@ -1,6 +1,6 @@
 """Small FlashInfer Trace contracts for tests."""
 
-from klineage.contract import ProblemSpec
+from klineage.artifact.problem import Problem
 
 
 def problem_spec(
@@ -13,7 +13,7 @@ def problem_spec(
     size=128,
     dtype="float16",
 ):
-    return ProblemSpec(
+    return Problem(
         name=name,
         language=language,
         platform=platform,
@@ -29,33 +29,35 @@ def problem_spec(
             "outputs": {"output": {"shape": ["M", "N"], "dtype": dtype}},
             "reference": "def run(a, b):\n    return a @ b\n",
         },
-        workload={
+        workloads=({
             "uuid": "3ec7cc7a-bdd8-44f4-8a68-bda263c44fd0",
             "axes": {"M": size, "N": size, "K": size},
             "inputs": {"a": {"type": "random"}, "b": {"type": "random"}},
-        },
+        },),
     )
 
 
 def io_problem(
-    inputs=(), outputs=(), *, name="gemm", language="cuda", platform="sm120"
+    inputs=None, outputs=None, *, name="gemm", language="cuda", platform="sm120"
 ):
+    inputs, outputs = inputs or {}, outputs or {}
     axes = {}
     specs = {}
     for role, values in (("inputs", inputs), ("outputs", outputs)):
         specs[role] = {}
-        for value in values:
-            shape = []
-            for index, size in enumerate(value.shape):
-                axis = f"{role}_{value.name}_{index}"
+        for tensor_name, value in values.items():
+            dimensions = value.get("shape", [])
+            shape = None if dimensions is None else []
+            for index, size in enumerate(dimensions or ()):
+                axis = f"{role}_{tensor_name}_{index}"
                 axes[axis] = {"type": "const", "value": size}
                 shape.append(axis)
-            specs[role][value.name] = {
-                "dtype": value.dtype,
+            specs[role][tensor_name] = {
+                **value,
+                "dtype": value.get("dtype"),
                 "shape": shape,
-                "description": value.description,
             }
-    return ProblemSpec(
+    return Problem(
         name=name,
         language=language,
         platform=platform,
@@ -66,9 +68,9 @@ def io_problem(
             **specs,
             "reference": "def run(*args): pass\n",
         },
-        workload={
+        workloads=({
             "uuid": "3ec7cc7a-bdd8-44f4-8a68-bda263c44fd0",
             "axes": {},
-            "inputs": {value.name: {"type": "random"} for value in inputs},
-        },
+            "inputs": {name: {"type": "random"} for name in inputs},
+        },),
     )

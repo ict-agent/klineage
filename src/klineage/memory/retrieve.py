@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 
 from klineage.artifact.kernel import Kernel
-from klineage.contract import ProblemSpec
+from klineage.artifact.problem import Problem, load_problem
 from klineage.memory.skillcard import SkillCard
 from klineage.utils import string_tuple
 
@@ -12,14 +12,14 @@ WILDCARD = "*"
 
 def retrieve(
     skills: Sequence[SkillCard],
-    target: Kernel | ProblemSpec,
+    target: Kernel | Problem,
     *,
     exclude_skills: Sequence[str] = (),
 ) -> tuple[SkillCard, ...]:
     """Filter by scope; the caller checks source prerequisites."""
 
-    if not isinstance(target, (Kernel, ProblemSpec)):
-        raise TypeError("target must be a Kernel or ProblemSpec")
+    if not isinstance(target, (Kernel, Problem)):
+        raise TypeError("target must be a Kernel or Problem")
     if isinstance(skills, (str, bytes)) or not isinstance(skills, Sequence):
         raise TypeError("skills must be a sequence of SkillCards")
     if isinstance(exclude_skills, (str, bytes)) or not isinstance(
@@ -29,7 +29,7 @@ def retrieve(
 
     excluded = set(string_tuple(exclude_skills, "exclude_skills"))
     selected: dict[str, SkillCard] = {}
-    problem = target.problem if isinstance(target, Kernel) else target
+    problem = load_problem(target) if isinstance(target, Kernel) else target
     for card in skills:
         if not isinstance(card, SkillCard):
             raise TypeError("skills contains a non-SkillCard value")

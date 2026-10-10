@@ -1,1 +1,1 @@
-"""Verified optimization skills from expert GPU kernels."""
+"""Accelerator kernel generation and reusable optimization skills."""

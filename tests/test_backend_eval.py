@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from contextlib import nullcontext
@@ -8,26 +9,27 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from klineage.backend.runtime import bench_events
 from klineage.harness import eval as worker
 from klineage.harness import timing
+from klineage.serialization import to_json
 
 
 class EventTimingTests(unittest.TestCase):
-    def test_factory_uses_backend(self):
-        from klineage.backend import get_backend
-
-        for language in ("cuda", "hip", "ascendc"):
-            with self.subTest(language=language):
-                backend = get_backend(language)
-                policy = timing.timing_policy(backend)
-                timer = timing.make_timer(backend, policy)
-                expected = (
-                    timing.FlashInferCuptiTimer
-                    if language == "cuda"
-                    else timing.DeviceEventTimer
-                )
-                self.assertIsInstance(timer, expected)
-                self.assertEqual(policy.cold_l2, language == "cuda")
+    def setUp(self):
+        self.enterContext(
+            patch(
+                "klineage.backend.runtime.device_runtime",
+                side_effect=lambda backend: backend.runtime(),
+            )
+        )
+        self.enterContext(
+            patch(
+                "klineage.backend.runtime.load_torch",
+                side_effect=lambda backend: backend.torch(),
+            )
+        )
+        self.enterContext(patch("klineage.backend.runtime.current_device", side_effect=lambda backend: backend.device()))
 
     def backend(self, name="hip-events"):
         calls = []
@@ -55,7 +57,7 @@ class EventTimingTests(unittest.TestCase):
         )
         backend = SimpleNamespace(
             kind="hygon" if name == "hip-events" else "ascend",
-            timing_backend=name,
+            timing=SimpleNamespace(NAME=name, DEFAULT_POLICY=timing.TimingPolicy(cold_l2=False)),
             device_type="cuda" if name == "hip-events" else "npu",
             device=lambda: "device:0",
             runtime=lambda: runtime,
@@ -70,9 +72,11 @@ class EventTimingTests(unittest.TestCase):
                 policy = timing.TimingPolicy(
                     warmup=1, repeat=2, trials=2, cold_l2=False
                 )
-                timer = timing.DeviceEventTimer(backend, policy)
-                result = timer.measure(
-                    lambda value, calls=calls: calls.append(value), args=("run",)
+                result = bench_events(
+                    lambda value, calls=calls: calls.append(value),
+                    backend=backend,
+                    args=("run",),
+                    policy=policy,
                 )
                 self.assertEqual(result.samples_ms, ((2.0, 2.0), (2.0, 2.0)))
                 self.assertEqual(result.backend_used, name)
@@ -83,20 +87,42 @@ class EventTimingTests(unittest.TestCase):
                 self.assertLess(calls.index("event-sync"), calls.index("elapsed"))
                 self.assertTrue(timing.verify_performance(result, result))
 
+    def test_backend_bench_dispatch(self):
+        from klineage.backend import get_backend
+
+        for language in ("hip", "ascendc"):
+            backend = get_backend(language)
+            fake, calls, stream = self.backend(backend.timing.NAME)
+            policy = timing.TimingPolicy(warmup=1, repeat=2, trials=1, cold_l2=False)
+            with (
+                self.subTest(language=language),
+                patch(
+                    "klineage.backend.runtime.device_runtime",
+                    return_value=fake.runtime(),
+                ),
+                patch("klineage.backend.runtime.load_torch", return_value=fake.torch()),
+                patch(
+                    "klineage.backend.runtime.current_device",
+                    return_value=fake.device(),
+                ),
+            ):
+                result = backend.bench(
+                    lambda value: calls.append(value), args=("run",), policy=policy
+                )
+            self.assertEqual(result.backend_used, backend.timing.NAME)
+            self.assertEqual(result.samples_ms, ((2.0, 2.0),))
+            self.assertEqual(calls.count("run"), 3)
+            self.assertIn(("record", stream), calls)
+
     def test_events_reject_cold_cache(self):
         backend, calls, _ = self.backend()
         with self.assertRaisesRegex(ValueError, "cold_l2"):
-            timing.DeviceEventTimer(backend, timing.TimingPolicy())
+            bench_events(lambda: None, backend=backend, policy=timing.TimingPolicy())
         self.assertEqual(calls, [])
-
-    def test_events_reject_cuda(self):
-        backend, _, _ = self.backend("cupti")
-        with self.assertRaisesRegex(ValueError, "CUPTI"):
-            timing.DeviceEventTimer(backend)
 
     def test_event_backend_mismatch(self):
         backend, _, _ = self.backend()
-        result = timing.DeviceEventTimer(backend).measure(lambda: None)
+        result = bench_events(lambda: None, backend=backend)
         other = replace(result, backend_used="npu-events")
         self.assertFalse(timing.verify_performance(result, other))
         bad_scope = replace(
@@ -109,7 +135,7 @@ class EventTimingTests(unittest.TestCase):
         runtime = backend.runtime()
         runtime.device = Mock(return_value=nullcontext())
         value = SimpleNamespace(device="npu:2")
-        timing.DeviceEventTimer(backend).measure(lambda value: None, args=(value,))
+        bench_events(lambda value: None, backend=backend, args=(value,))
         runtime.device.assert_called_once_with("npu:2")
 
 
@@ -117,21 +143,20 @@ class BackendWorkerTests(unittest.TestCase):
     def test_rejects_empty_reference(self):
         from kernel_fixtures import kernel
 
-        from klineage.backend import Backend
 
         with (
             tempfile.TemporaryDirectory() as directory,
-            patch.object(Backend, "runtime"),
+            patch.object(worker, "device_runtime"),
             patch.object(
                 worker,
                 "trace_module",
                 side_effect=AssertionError("Malformed reference reached execution"),
             ),
-            self.assertRaises(KeyError),
+            self.assertRaisesRegex(ValueError, "artifact envelope"),
         ):
             worker.evaluate_request(
                 {
-                    "kernel": kernel().to_dict(),
+                    "kernel": json.loads(to_json(kernel())),
                     "reference": {},
                     "config": {"build_root": directory},
                 }
@@ -165,16 +190,17 @@ class BackendWorkerTests(unittest.TestCase):
             calls.append((seed, device))
             return {"x": value}
 
-        with patch.object(worker, "require_tensor", return_value=value):
+        with patch.object(worker, "require_tensor", return_value=value), patch.object(worker, "current_device", return_value="npu:1"):
             worker.load_inputs(SimpleNamespace(make_inputs=make_inputs), 7, backend)
         self.assertEqual(calls, [(7, "npu:1")])
 
     def test_trace_inputs_use_device(self):
         backend = SimpleNamespace(device=lambda: "npu:1")
         value = object()
-        module = SimpleNamespace(definition={}, workload={})
+        module = SimpleNamespace(definition={}, workloads=({},))
         with (
             patch.object(worker, "trace_inputs", return_value={"x": value}) as inputs,
+            patch.object(worker, "current_device", return_value="npu:1"),
             patch.object(worker, "require_tensor", return_value=value) as require,
         ):
             self.assertEqual(worker.load_inputs(module, 7, backend), {"x": value})
@@ -185,34 +211,36 @@ class BackendWorkerTests(unittest.TestCase):
         payload = {
             "problem_name": "add",
             "definition": {},
-            "workload": {},
+            "workloads": ({},),
             "language": "ascendc",
             "platform": "ascend-910b-cann8",
         }
         with (
             patch.object(worker.EvaluationRuntime, "inspect", return_value=payload),
-            patch.object(worker, "ProblemSpec") as problem,
+            patch.object(worker, "Problem") as problem,
         ):
             worker.inspect_problem(Path("reference.py"), Path("work"))
         self.assertEqual(problem.call_args.kwargs["language"], "ascendc")
 
     def test_worker_dispatches_timer(self):
-        from klineage.artifact.kernel import Kernel
+        from kernel_fixtures import kernel as kernel_fixture
+
 
         for name in ("hip-events", "npu-events"):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
-                backend = SimpleNamespace(timing_backend=name, runtime=Mock())
-                kernel = Mock()
+                backend = SimpleNamespace(timing=SimpleNamespace(NAME=name, DEFAULT_POLICY=timing.TimingPolicy(cold_l2=False)))
+                kernel = kernel_fixture()
                 accepted = worker.ValidationResult(True, True, True, 1.0)
                 with (
-                    patch.object(Kernel, "from_dict", return_value=kernel),
-                    patch.object(worker, "kernel_backend", return_value=backend),
+                    patch.object(worker, "restore", return_value=kernel),
+                    patch.object(type(kernel), "build_kernel", return_value=lambda: None),
+                    patch.object(worker, "get_backend", return_value=backend),
                     patch.object(worker, "trace_module"),
                     patch.object(worker, "load_inputs", return_value={}) as inputs,
                     patch.object(worker, "compute_reference"),
                     patch.object(worker, "check_problem"),
                     patch.object(worker, "tensor_strides", return_value={}),
-                    patch.object(worker, "make_timer") as timer,
+                    patch.object(worker, "device_runtime") as runtime,
                     patch.object(worker, "CallableKernelEvaluator") as evaluator,
                 ):
                     evaluator.return_value.evaluate.return_value = accepted
@@ -223,10 +251,71 @@ class BackendWorkerTests(unittest.TestCase):
                         }
                     )
                 self.assertEqual(result, accepted)
-                self.assertIs(timer.call_args.args[0], backend)
-                self.assertFalse(timer.call_args.args[1].cold_l2)
+                self.assertFalse(evaluator.call_args.kwargs["policy"].cold_l2)
                 self.assertIs(inputs.call_args.args[2], backend)
-                backend.runtime.assert_called_once()
+                runtime.assert_called_once_with(backend)
+
+
+class TimingDispatchTests(unittest.TestCase):
+    def test_detects_then_benches(self):
+        from kernel_fixtures import kernel
+
+        from klineage.backend import backends, registry
+        from klineage.backend.timing import TimingPolicy, TimingResult, bench
+
+        for backend in backends():
+            current = kernel(language=backend.language, platform=backend.kind)
+            object.__setattr__(current, "function", lambda value: value)
+            policy = TimingPolicy(warmup=1, repeat=1, trials=1, cold_l2=False)
+            expected = TimingResult(((1.0,),), 1.0, backend.timing.NAME)
+            events = []
+            with (
+                self.subTest(backend=backend.kind),
+                patch.object(
+                    registry,
+                    "detect_backend",
+                    side_effect=lambda: events.append("detect") or backend,
+                ),
+                patch.object(
+                    type(backend),
+                    "bench",
+                    side_effect=lambda *args, **kwargs: (
+                        events.append("bench") or expected
+                    ),
+                ) as measure,
+            ):
+                self.assertIs(bench(current, args=(3,), policy=policy), expected)
+            self.assertEqual(events, ["detect", "bench"])
+            measure.assert_called_once_with(current, args=(3,), policy=policy)
+
+    def test_rejects_target_mismatch(self):
+        from kernel_fixtures import kernel
+
+        from klineage.backend import get_backend, registry
+        from klineage.backend.timing import bench
+
+        backend = get_backend("hip")
+        with (
+            patch.object(registry, "detect_backend", return_value=backend),
+            patch.object(type(backend), "bench") as measure,
+            self.assertRaisesRegex(ValueError, "kernel target"),
+        ):
+            bench(kernel())
+        measure.assert_not_called()
+
+    def test_detection_failure(self):
+        from kernel_fixtures import kernel
+
+        from klineage.backend import registry
+        from klineage.backend.timing import bench
+
+        with (
+            patch.object(
+                registry, "detect_backend", side_effect=RuntimeError("no backend")
+            ),
+            self.assertRaisesRegex(RuntimeError, "no backend"),
+        ):
+            bench(kernel())
 
 
 if __name__ == "__main__":

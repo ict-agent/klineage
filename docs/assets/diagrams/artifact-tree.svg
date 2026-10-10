@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="392" viewBox="0 0 800 392" role="img" aria-labelledby="title desc">
+  <title id="title">Artifact and Node fields</title>
+  <desc id="desc">An Artifact has a kind identifier and a root directory Node. A Node is a file or a directory. Files contain text or a FileRef; directories contain child Nodes. All nodes may carry description and one_shot annotations.</desc>
+  <defs>
+    <style>
+      :root { --paper:#f8fbff; --surface:#ffffff; --ink:#1b2d43; --muted:#5e728b; --rule:#b9ccdf; --grid:#dce8f3; --blue:#3377cc; --violet:#7b61b5; --green:#26846b; --amber:#b37b37; }
+      @media(prefers-color-scheme:dark) { :root { --paper:#152233; --surface:#1b2b40; --ink:#e5edf7; --muted:#a0b6cf; --rule:#526982; --grid:#293c52; --blue:#83b7f1; --violet:#b3a0e2; --green:#82cbb4; --amber:#e5bd83; } }
+      text { font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill:var(--ink); text-rendering:geometricPrecision; }
+      .title { font-size:20px; font-weight:650; }
+      .body { font-size:16px; fill:var(--muted); }
+      .mono { font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace; font-size:15px; }
+      .label { font-size:14px; fill:var(--muted); paint-order:stroke; stroke:var(--paper); stroke-width:5px; stroke-linejoin:round; }
+      .eyebrow { font-family:"SFMono-Regular",Consolas,monospace; font-size:14px; letter-spacing:1.25px; fill:var(--muted); }
+      .paper { fill:var(--paper); }
+      .surface { fill:var(--surface); stroke:var(--rule); stroke-width:1.3; }
+      .plate { fill:var(--blue); fill-opacity:.035; stroke:var(--rule); stroke-width:1; stroke-dasharray:4 5; }
+      .wire { fill:none; stroke:var(--rule); stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; marker-end:url(#arrow); }
+      .return { stroke-dasharray:4 5; }
+      .blue { color:var(--blue); }
+      .violet { color:var(--violet); }
+      .green { color:var(--green); }
+      .amber { color:var(--amber); }
+      .tone { fill:currentColor; }
+      .trace { fill:none; stroke:currentColor; stroke-width:1.65; stroke-linecap:round; stroke-linejoin:round; }
+      .disc { fill:var(--surface); stroke:currentColor; stroke-width:1.7; }
+      .halo { fill:currentColor; fill-opacity:.065; }
+      .rule { fill:none; stroke:var(--rule); stroke-width:1; }
+    </style>
+    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M 20 0 H 0 V 20" fill="none" stroke="var(--grid)" stroke-width=".65"/></pattern>
+    <pattern id="major" width="100" height="100" patternUnits="userSpaceOnUse"><rect width="100" height="100" fill="url(#grid)"/><path d="M 100 0 H 0 V 100" fill="none" stroke="var(--grid)" stroke-width="1.1"/></pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 1 1 L 8 5 L 1 9" fill="none" stroke="var(--muted)" stroke-width="1.4" stroke-linejoin="round"/></marker>
+    <g id="terminal" class="trace"><path d="m -10 -7 7 7 -7 7 M 2 7 H 11"/></g>
+    <g id="chip" class="trace"><rect x="-23" y="-23" width="46" height="46" rx="3"/><rect x="-12" y="-12" width="24" height="24" rx="1"/><path d="M -13 -23 V -32 M 0 -23 V -32 M 13 -23 V -32 M -13 23 V 32 M 0 23 V 32 M 13 23 V 32 M -23 -13 H -32 M -23 0 H -32 M -23 13 H -32 M 23 -13 H 32 M 23 0 H 32 M 23 13 H 32"/></g>
+    <g id="file" class="trace"><path d="M -13 -18 H 5 L 13 -10 V 18 H -13 Z M 5 -18 V -10 H 13 M -6 -1 H 6 M -6 6 H 6"/></g>
+    <g id="check" class="trace"><path d="m -8 0 5 5 11 -11"/></g>
+    <g id="braces" class="trace"><path d="M -5 -12 H -9 V -4 L -13 0 -9 4 V 12 H -5 M 5 -12 H 9 V -4 L 13 0 9 4 V 12 H 5"/></g>
+  </defs>
+
+  <rect class="paper" width="800" height="392" rx="10"/>
+  <rect width="800" height="392" rx="10" fill="url(#major)"/>
+  <text class="mono label" x="32" y="33">ARTIFACT OBJECT</text>
+  <text class="mono label" x="384" y="33">NODE</text>
+
+  <path class="surface" d="M 32 98 H 260 L 284 122 V 328 H 32 Z"/>
+  <path class="rule" d="M 260 98 V 122 H 284"/>
+  <path d="M 33 99 H 258" stroke="var(--violet)" stroke-width="3"/>
+  <text class="title" x="54" y="142">Artifact</text>
+  <path class="rule" d="M 52 158 H 264"/>
+  <text class="mono" x="54" y="190">kind: str</text>
+  <text class="body" x="54" y="219">Artifact type ID</text>
+  <path class="rule" d="M 52 238 H 264"/>
+  <text class="mono violet tone" x="54" y="273">tree: Node(".")</text>
+  <text class="body" x="54" y="303">Root directory</text>
+
+  <path class="wire" d="M 284 268 H 378"/>
+  <text class="mono label" x="331" y="253" text-anchor="middle">root</text>
+
+  <path class="surface" d="M 384 98 H 426 L 450 122 V 177 H 384 Z"/>
+  <path class="rule" d="M 426 98 V 122 H 450 M 396 140 H 438 M 396 154 H 428"/>
+  <text class="title" x="472" y="117">File</text>
+  <text class="mono" x="472" y="144">content: text</text>
+  <text class="mono" x="472" y="170">or reference: FileRef</text>
+  <path class="rule" d="M 384 203 H 768"/>
+
+  <path class="surface" d="M 384 246 V 232 H 409 L 420 243 H 454 V 294 H 384 Z"/>
+  <path class="rule" d="M 384 246 H 454 M 397 263 H 441 M 397 276 H 432"/>
+  <text class="title" x="472" y="257">Directory</text>
+  <text class="mono" x="472" y="284">children: (Node, ...)</text>
+
+  <text class="mono label" x="384" y="338">Each Node: description · one_shot</text>
+</svg>

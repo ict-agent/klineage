@@ -1,96 +1,107 @@
-"""Run kernel optimization rounds with optional skill memory."""
+"""Optimize a kernel with optional skill memory; return an Artifact."""
 
 import argparse
-import json
 import os
 from collections.abc import Sequence
 from pathlib import Path
 
-from klineage.action.apply import Apply
-from klineage.artifact.kernel import Kernel, load_kernel
-from klineage.cli.common import add_run_options, read_step
+from klineage.action import Apply, same_implementation
+from klineage.artifact import (
+    Artifact,
+    Kernel,
+    load_artifact,
+)
+from klineage.artifact.kernel import capture_kernel, latest_kernel
+from klineage.cli.common import action_arguments, add_run_options
 from klineage.constants import (
-    KERNEL_FILE,
+    KERNELS_DIRECTORY,
     MAX_APPLY_STEPS,
     MAX_RETRIES,
     TIMEOUT,
     RunKind,
 )
+from klineage.harness import AgentRuntime
+from klineage.serialization import to_json
+from klineage.server import Client
+from klineage.server.client import SERVER_ENV
 from klineage.utils import optional_directory
 
 
 def optimize(
-    start_kernel: str | os.PathLike[str],
-    memory_dir: str | os.PathLike[str] | None = None,
-    workdir: str | os.PathLike[str] | None = None,
+    start_kernel,
+    memory_dir=None,
+    workdir=None,
     *,
     max_apply_step: int = MAX_APPLY_STEPS,
-    enable_verifier: bool = True,
     timeout: int = TIMEOUT,
     max_retries: int = MAX_RETRIES,
-) -> Kernel:
+    evaluation: Client | None = None,
+    agent: AgentRuntime | None = None,
+) -> Artifact:
     if type(max_apply_step) is not int or max_apply_step < 0:
         raise ValueError("max_apply_step must be a nonnegative integer")
     if workdir is None:
         raise ValueError("workdir is required")
-
-    current_dir = Path(start_kernel).expanduser().resolve()
-    if current_dir.is_file():
-        if current_dir.name != KERNEL_FILE:
-            raise ValueError(
-                f"start_kernel must be a kernel directory or {KERNEL_FILE}"
-            )
-        current_dir = current_dir.parent
-    if not (current_dir / KERNEL_FILE).is_file():
-        raise FileNotFoundError(current_dir / KERNEL_FILE)
-
+    current = start_kernel
+    if not isinstance(current, Artifact):
+        path = Path(current).expanduser()
+        if path.is_dir() and (path / KERNELS_DIRECTORY).exists():
+            path = latest_kernel(path)
+        if path.is_dir() and evaluation is None and os.environ.get(SERVER_ENV):
+            evaluation = Client()
+        if not path.is_dir():
+            current = load_artifact(path)
+        elif evaluation is not None:
+            current = Kernel.from_tree(evaluation.info()["kernel_kind"], capture_kernel(path))
+        else:
+            current = load_artifact(path, Kernel)
     memory = optional_directory(memory_dir)
     work = Path(workdir).expanduser().resolve()
     if memory is not None and work.is_relative_to(memory):
         raise ValueError("workdir must be outside memory_dir")
-
     work.mkdir(parents=True, exist_ok=False)
     return apply_steps(
-        current_dir,
+        current,
         memory,
         workdir=work,
         max_apply_step=max_apply_step,
-        enable_verifier=enable_verifier,
         timeout=timeout,
         max_retries=max_retries,
+        evaluation=evaluation,
+        agent=agent,
     )
 
 
 def apply_steps(
-    current_dir: Path,
+    current: Artifact,
     memory_dir: Path | None,
     *,
     workdir: Path,
     max_apply_step: int,
-    enable_verifier: bool,
     timeout: int,
     max_retries: int,
-) -> Kernel:
-    """Run optimization rounds until unchanged or the invocation budget is spent."""
-
-    current = load_kernel(current_dir)
+    evaluation: Client | None = None,
+    agent: AgentRuntime | None = None,
+) -> Artifact:
+    before = (
+        current if isinstance(current, Kernel) else
+        Kernel.from_tree(current.kind, current.tree) if current.kind.startswith("kernel.") else
+        current.part("kernel", Kernel)
+    )
     for step in range(max_apply_step):
-        apply_dir = workdir / RunKind.APPLY / str(step)
-        Apply(
-            current_dir,
+        candidate = Apply(
+            current,
             memory=memory_dir,
-            workdir=apply_dir,
-            enable_verifier=enable_verifier,
+            workdir=workdir / RunKind.APPLY / str(step),
             timeout=timeout,
             max_retries=max_retries,
+            evaluation=evaluation,
+            agent=agent,
         ).run()
-
-        candidate, _ = read_step(current, apply_dir, RunKind.APPLY)
-        if candidate.fingerprint == current.fingerprint:
+        after = candidate.part("kernel", Kernel)
+        if same_implementation(before, after):
             return candidate
-
-        current = candidate
-        current_dir = apply_dir
+        current, before = candidate, after
     return current
 
 
@@ -98,23 +109,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--start_kernel", "--start-kernel", type=Path, required=True)
     parser.add_argument(
-        "--memory_dir",
-        "--memory-dir",
-        help="SkillCard directory; omitted or blank runs the independent baseline",
+        "--memory_dir", "--memory-dir", help="Optional SkillCard directory"
     )
     parser.add_argument(
         "--workdir", type=Path, required=True, help="Fresh run directory"
     )
-    parser.add_argument(
-        "--max-apply-step",
-        type=int,
-        default=MAX_APPLY_STEPS,
-        help="Maximum number of optimization rounds",
-    )
+    parser.add_argument("--max-apply-step", type=int, default=MAX_APPLY_STEPS)
     add_run_options(parser)
-    parser.set_defaults(enable_verifier=True)
-    kernel = optimize(**vars(parser.parse_args(argv)))
-    print(json.dumps(kernel.to_dict(), ensure_ascii=False))
+    print(to_json(optimize(**action_arguments(parser.parse_args(argv)))))
 
 
 if __name__ == "__main__":

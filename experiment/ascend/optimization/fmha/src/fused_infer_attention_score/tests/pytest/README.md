@@ -1,5 +1,8 @@
 # GQA算子测试框架
 
+此文档与测试来自保留的 [CANN 源码快照](../../../../UPSTREAM_COMMIT)。
+它们需要匹配上游的测试环境，不属于本仓库 FMHA wrapper 的验收入口。
+
 ## 文件结构
 
 ```text
@@ -51,7 +54,7 @@ pytest框架作为一个轻量化精度对比的测试框架，提供了简单�
 ### 前置要求
 
 1. TorchNPU安装包下载路径（需及时更换为最新版本）：[TorchNPU安装教程](https://gitcode.com/Ascend/pytorch)
-2. 完成环境安装和环境变量配置，具体操作请参考：[ops-transformer](../../../../README.md)
+2. 配置匹配上游版本的 CANN、TorchNPU 和 torchair。此快照不包含完整的上游安装流程；本仓库复现入口见 [FMHA 实验说明](../../../../README.md)。
 
 ### Custom包调用
 

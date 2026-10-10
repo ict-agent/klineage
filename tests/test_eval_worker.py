@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import gc
 import importlib.util
 import io
 import json
 import os
 import tempfile
 import unittest
+import warnings
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,21 +20,53 @@ TORCH_AVAILABLE = importlib.util.find_spec("torch") is not None
 if TORCH_AVAILABLE:
     import torch
 
-    from klineage.artifact import tensor
-    from klineage.backend import Backend, get_backend
-    from klineage.contract import ABIValue, OutputStyle
+    from klineage.backend import get_backend
+    from klineage.backend import runtime as tensor
+    from klineage.backend.runtime import OutputStyle
     from klineage.harness import eval as worker
 
 
 @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is unavailable")
 class EvalWorkerTests(unittest.TestCase):
+    def setUp(self):
+        # Exercise tensor contracts on CPU; backend tests cover device selection.
+        runtime = SimpleNamespace(device=lambda device: nullcontext())
+        self.enterContext(
+            patch("klineage.backend.runtime.device_runtime", return_value=runtime)
+        )
+        self.enterContext(patch("klineage.backend.runtime.current_device", return_value=torch.device("cpu")))
+
+    def test_numeric_error_details(self):
+        expected = torch.tensor([1.0, 2.0, 3.0])
+        for value in (2.1, float("nan")):
+            with self.subTest(value=value):
+                actual = torch.tensor([1.0, value, 3.0])
+                with self.assertRaises(AssertionError) as caught:
+                    worker.check_close(actual, expected)
+                message = str(caught.exception)
+                self.assertIn("Mismatched elements:", message)
+                self.assertIn("Greatest absolute difference:", message)
+                self.assertIn("index (1,)", message)
+
+    def test_numeric_gate_unchanged(self):
+        expected = torch.tensor([[1.0, 2.0], [3.0, 4.0]]).T
+        for value in (1.005, 1.1, float("nan"), float("inf")):
+            actual = expected.contiguous()
+            actual[0, 0] = value
+            with self.subTest(value=value):
+                if torch.allclose(actual, expected, rtol=worker.NUMERICAL_TOLERANCE, atol=worker.NUMERICAL_TOLERANCE):
+                    worker.check_close(actual, expected)
+                else:
+                    with self.assertRaises(AssertionError):
+                        worker.check_close(actual, expected)
+
     def test_bundle_destination_outputs(self):
         problem = io_problem(
-            inputs=(ABIValue("x", "float32", (2,)),),
-            outputs=(
-                ABIValue("sum", "float32", (2,)),
-                ABIValue("product", "float32", (2,)),
-            ),
+            inputs={"x": {"dtype": "float32", "shape": [2]}},
+            outputs={
+                "sum": {"dtype": "float32", "shape": [2]},
+                "product": {"dtype": "float32", "shape": [2]},
+            },
         )
         calls = []
 
@@ -57,8 +91,8 @@ class EvalWorkerTests(unittest.TestCase):
 
     def test_bundle_return_contract(self):
         problem = io_problem(
-            inputs=(ABIValue("x", "float32", (2,)),),
-            outputs=(ABIValue("output", "float32", (2,)),),
+            inputs={"x": {"dtype": "float32", "shape": [2]}},
+            outputs={"output": {"dtype": "float32", "shape": [2]}},
         )
         with (
             patch.object(
@@ -79,9 +113,9 @@ class EvalWorkerTests(unittest.TestCase):
                 bad(torch.tensor([2.0, 3.0]))
 
     def test_bundle_tuple_outputs(self):
-        value = ABIValue("x", "float32", (2,))
+        value = {"dtype": "float32", "shape": [2]}
         problem = io_problem(
-            inputs=(value,), outputs=(value, ABIValue("other", "float32", (2,)))
+            inputs={"x": value}, outputs={"x": value, "other": value}
         )
         with (
             patch.object(
@@ -108,10 +142,9 @@ class EvalWorkerTests(unittest.TestCase):
                 return torch.device("cuda:0")
 
         output = torch.ones(2).as_subclass(DeviceTensor)
-        problem = io_problem(outputs=(ABIValue("output", "float32", (2,)),))
+        problem = io_problem(outputs={"output": {"dtype": "float32", "shape": [2]}})
         with (
-            patch.object(torch.cuda, "current_device", return_value=0),
-            patch.object(torch.cuda, "device", return_value=nullcontext()),
+            patch("klineage.backend.runtime.current_device", return_value=output.device),
             patch.object(tensor, "allocate", return_value=output),
         ):
             for style in OutputStyle:
@@ -130,7 +163,7 @@ class EvalWorkerTests(unittest.TestCase):
             patch.object(worker, "load_inputs", return_value={}),
             patch.object(worker, "compute_reference", return_value=torch.ones(1)),
             patch.object(worker, "detect_backend", return_value=get_backend("cuda")),
-            patch.object(Backend, "platform", return_value="sm80"),
+            patch.object(type(get_backend("cuda")), "info", return_value={"platform": "sm80"}),
             patch.object(
                 worker, "require_tensor", side_effect=lambda value, *args: value
             ),
@@ -186,11 +219,11 @@ def torch_ref(z, a):
                 patch.object(
                     worker, "detect_backend", return_value=get_backend("cuda")
                 ),
-                patch.object(Backend, "platform", return_value="sm90"),
+                patch.object(type(get_backend("cuda")), "info", return_value={"platform": "sm90"}),
             ):
                 self.assertEqual(worker.main(), 0)
             result = json.loads(stdout.getvalue())
-            definition, workload = result["definition"], result["workload"]
+            definition, workload = result["definition"], result["workloads"][0]
             self.assertEqual(list(definition["inputs"]), ["z", "a"])
             self.assertEqual(list(definition["outputs"]), ["z_out", "a_out"])
             self.assertEqual(workload["axes"], {})
@@ -209,8 +242,8 @@ def torch_ref(z, a):
         x = torch.arange(6, dtype=torch.float32).reshape(2, 3).T
         expected = x + 1
         problem = io_problem(
-            inputs=(ABIValue("x", "float32", tuple(x.shape)),),
-            outputs=(ABIValue("output", "float32", tuple(expected.shape)),),
+            inputs={"x": {"dtype": "float32", "shape": list(x.shape)}},
+            outputs={"output": {"dtype": "float32", "shape": list(expected.shape)}},
         )
         layouts = worker.tensor_strides({"x": x}, expected, problem)
         with (
@@ -295,18 +328,23 @@ def torch_ref(z, a):
 
     def test_descriptor_stdout_diverts_native_writes(self):
         # os.write reaches descriptor 1 directly, unlike a print statement.
-        read_fd, write_fd = os.pipe()
-        real_stdout = os.dup(1)
-        os.dup2(os.open(os.devnull, os.O_WRONLY), 1)
-        try:
-            with worker._descriptor_stdout(os.fdopen(write_fd, "w", buffering=1)):
-                os.write(1, b"native kernel output\n")
-            captured = os.read(read_fd, 1024).decode()
-        finally:
-            os.dup2(real_stdout, 1)
-            os.close(real_stdout)
-            os.close(read_fd)
+        with warnings.catch_warnings(record=True) as notices:
+            warnings.simplefilter("always", ResourceWarning)
+            read_fd, write_fd = os.pipe()
+            real_stdout = os.dup(1)
+            try:
+                with os.fdopen(write_fd, "w", buffering=1) as stream, open(os.devnull, "w") as sink:
+                    os.dup2(sink.fileno(), 1)
+                    with worker._descriptor_stdout(stream):
+                        os.write(1, b"native kernel output\n")
+                    captured = os.read(read_fd, 1024).decode()
+            finally:
+                os.dup2(real_stdout, 1)
+                os.close(real_stdout)
+                os.close(read_fd)
+            gc.collect()
         self.assertEqual(captured, "native kernel output\n")
+        self.assertFalse([item for item in notices if issubclass(item.category, ResourceWarning)])
 
 
 if __name__ == "__main__":

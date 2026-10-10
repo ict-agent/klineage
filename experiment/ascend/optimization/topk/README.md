@@ -1,12 +1,16 @@
 # TopK on Ascend: B=64 S=4096 K=512, FP32
 
+Historical paper benchmark. Run the scripts below from this directory in the
+recorded Ascend environment; its timing policy is independent of the current
+KLineage evaluation service.
+
 ## 1. Operator
 
 - Compute: row-wise largest-K selection, unsorted.
 - Input: `values` FP32 `[B, S]`, contiguous row-major.
 - Outputs: `top_values` FP32 `[B, K]`, `indices` int64 `[B, K]`.
 - Test shape: `B=64`, `S=4096`, `K=512`; FP32, from
-  `problems/definitions/topk.json` and `problems/workloads/topk.jsonl`.
+  `problems/topk/definition.json` and `problems/topk/workloads.jsonl`.
 - Correctness: the definition compares the *sorted* selected-value sets, so the
   descending order of this implementation is fine. `src/ours/topk-triton.py`
   checks that set plus `x.gather(1, indices) == values` at rtol/atol 1e-3.

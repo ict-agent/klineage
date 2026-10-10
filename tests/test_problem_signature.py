@@ -1,12 +1,18 @@
 import unittest
-from dataclasses import replace
 
 from problem_fixtures import problem_spec
 
-from klineage.contract import ABIValue, ValueRole
-
 
 class ProblemSignatureTests(unittest.TestCase):
+    def test_fields_are_detached(self):
+        problem = problem_spec()
+        values = problem.values("inputs")
+        values["a"]["shape"][0] = 1
+        values["a"]["dtype"] = "int32"
+        self.assertEqual(problem.values("inputs")["a"]["shape"], [128, 128])
+        self.assertEqual(problem.definition["inputs"]["a"]["shape"], ["M", "K"])
+        self.assertEqual(problem.definition["inputs"]["a"]["dtype"], "float16")
+
     def test_resolves_axes_in_order(self):
         problem = problem_spec()
         definition = {
@@ -22,23 +28,20 @@ class ProblemSignatureTests(unittest.TestCase):
             },
             "outputs": {"result": {"shape": ["N"], "dtype": "float32"}},
         }
-        problem = replace(
-            problem,
-            definition=definition,
-            workload={**problem.workload, "axes": {"N": 7}},
-        )
+        problem = problem.replace(definition=definition, workloads=({**problem.workloads[0], 'axes': {'N': 7}},))
         self.assertEqual(
-            problem.values(ValueRole.INPUTS),
-            (
-                ABIValue("z", "float32", (7, 16), "Matrix."),
-                ABIValue("a", "int32"),
-            ),
+            problem.values("inputs"),
+            {
+                "z": {"dtype": "float32", "shape": [7, 16], "description": "Matrix."},
+                "a": {"dtype": "int32", "shape": None, "description": None},
+            },
         )
+        self.assertEqual(tuple(problem.values("inputs")), ("z", "a"))
         self.assertEqual(
-            problem.values(ValueRole.OUTPUTS), (ABIValue("result", "float32", (7,)),)
+            problem.values("outputs"), {"result": {"dtype": "float32", "shape": [7]}}
         )
-        smaller = replace(problem, workload={**problem.workload, "axes": {"N": 0}})
-        self.assertEqual(smaller.values(ValueRole.INPUTS)[0].shape, (0, 16))
+        smaller = problem.replace(workloads=({**problem.workloads[0], 'axes': {'N': 0}},))
+        self.assertEqual(smaller.values("inputs")["z"]["shape"], [0, 16])
 
     def test_rejects_invalid_axes(self):
         problem = problem_spec()
@@ -49,8 +52,8 @@ class ProblemSignatureTests(unittest.TestCase):
             {"M": "8", "N": 8, "K": 8},
         ):
             with self.subTest(axes=axes), self.assertRaises(ValueError):
-                replace(problem, workload={**problem.workload, "axes": axes}).values(
-                    ValueRole.INPUTS
+                problem.replace(workloads=({**problem.workloads[0], 'axes': axes},)).values(
+                    "inputs"
                 )
 
         for axes in (
@@ -59,9 +62,7 @@ class ProblemSignatureTests(unittest.TestCase):
             {"M": {"type": "const", "value": 8}},
         ):
             with self.subTest(axes=axes), self.assertRaises(ValueError):
-                replace(
-                    problem, definition={**problem.definition, "axes": axes}
-                ).values(ValueRole.INPUTS)
+                problem.replace(definition={**problem.definition, 'axes': axes}).values("inputs")
 
     def test_keeps_empty_and_rank_zero(self):
         problem = problem_spec()
@@ -70,8 +71,8 @@ class ProblemSignatureTests(unittest.TestCase):
             "inputs": {},
             "outputs": {"result": {"shape": [], "dtype": "float32"}},
         }
-        problem = replace(problem, definition=definition)
-        self.assertEqual(problem.values(ValueRole.INPUTS), ())
+        problem = problem.replace(definition=definition)
+        self.assertEqual(problem.values("inputs"), {})
         self.assertEqual(
-            problem.values(ValueRole.OUTPUTS), (ABIValue("result", "float32"),)
+            problem.values("outputs"), {"result": {"dtype": "float32", "shape": []}}
         )

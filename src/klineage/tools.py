@@ -8,23 +8,22 @@ import os
 import stat
 import sys
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING, Any
 
 from klineage.constants import (
-    AGENTS_TEMPLATE,
     AGENT_FILES,
     AGENT_MODULES,
+    AGENTS_TEMPLATE,
     FUNCTION_END,
     FUNCTION_START,
     SKILL_FILE,
 )
-from klineage.logging import observed
+from klineage.utils import operation_id, safe_directory, safe_file
 
 if TYPE_CHECKING:
     from klineage.artifact.kernel import Kernel
-    from klineage.harness.profiling import ProfileOptions
     from klineage.memory import SkillCard
 
 _FUNCTIONS: dict[str, Callable[..., Any]] = {}
@@ -42,15 +41,22 @@ def agent_function[**P, R](function: Callable[P, R]) -> Callable[P, R]:
         raise ValueError("agent functions must belong to an importable module or class")
     if not inspect.getdoc(function):
         raise ValueError("agent functions require a docstring")
-    _FUNCTIONS[f"{function.__module__}.{function.__qualname__}"] = function
+    _FUNCTIONS[f"{api_module(function)}.{function.__qualname__}"] = function
     return function
 
 
-def function_docs() -> str:
+def api_module(function) -> str:
+    """Expose documented functions through package APIs."""
+    module = function.__module__
+    if module.startswith(("klineage.artifact.", "klineage.backend.", "klineage.harness.", "klineage.server.")):
+        return module.rpartition(".")[0]
+    return module
+
+
+def function_docs(*, client=None) -> str:
     """Load built-in functions and render the registered API catalog."""
     for module in AGENT_MODULES:
         importlib.import_module(module)
-
     sections = [
         FUNCTION_START,
         AGENTS_TEMPLATE.rstrip(),
@@ -58,52 +64,59 @@ def function_docs() -> str:
         "Import and call these functions from Python. Follow their documented contracts.",
     ]
     for name, function in sorted(_FUNCTIONS.items()):
+        if client is not None and not name.startswith("klineage.server.Client."):
+            continue
         # Resolve descriptors after class creation so factories omit the bound cls.
         parts = function.__qualname__.split(".")
-        target: Any = sys.modules[function.__module__]
+        module = api_module(function)
+        target: Any = sys.modules[module]
         for part in parts:
             target = getattr(target, part)
         signature = str(inspect.signature(target))
         sections.append(
             f"### {name}\n\n"
-            f"`from {function.__module__} import {parts[0]}`\n\n"
+            f"`from {module} import {parts[0]}`\n\n"
             f"Signature: `{function.__qualname__}{signature}`\n\n"
             f"{inspect.getdoc(target)}"
         )
     return "\n\n".join((*sections, FUNCTION_END))
 
 
-def write_agent_docs(workdir: Path):
+def write_agent_docs(workdir: Path, *, client=None):
     """Refresh the generated block, preserving other workspace instructions."""
 
-    block = function_docs()
+    block = function_docs(client=client)
     updates = []
     for name in AGENT_FILES:
         path = workdir / name
         if path.is_symlink():
             raise ValueError(f"agent instructions must not be a symlink: {path}")
-        original = path.read_bytes().decode("utf-8") if path.exists() else ""
+        mode = None
+        try:
+            with safe_file(path) as stream:
+                original = stream.read()
+                mode = stat.S_IMODE(os.fstat(stream.fileno()).st_mode)
+        except FileNotFoundError:
+            original = ""
         if name != AGENT_FILES[0] and not original.strip():
             continue
         updated = _replace_block(original, block)
         if updated != original:
-            updates.append((path, updated))
+            updates.append((path, updated, mode))
 
     # An existing override takes precedence over AGENTS.md; update both.
-    for path, updated in updates:
-        temporary = None
-        try:
-            with NamedTemporaryFile(
-                dir=workdir, mode="w", encoding="utf-8", delete=False
-            ) as stream:
-                temporary = Path(stream.name)
-                stream.write(updated)
-            if path.exists():
-                temporary.chmod(stat.S_IMODE(path.stat().st_mode))
-            os.replace(temporary, path)
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
+    with safe_directory(workdir) as directory:
+        for path, updated, mode in updates:
+            temporary = operation_id("agent-docs") + ".tmp"
+            try:
+                with safe_file(workdir / temporary, "w") as stream:
+                    stream.write(updated)
+                    if mode is not None:
+                        os.fchmod(stream.fileno(), mode)
+                os.replace(temporary, path.name, src_dir_fd=directory, dst_dir_fd=directory)
+            finally:
+                with suppress(FileNotFoundError):
+                    os.unlink(temporary, dir_fd=directory)
 
 
 def _replace_block(original: str, block: str) -> str:
@@ -117,32 +130,6 @@ def _replace_block(original: str, block: str) -> str:
     if end < start:
         raise ValueError("malformed generated agent-function block")
     return original[:start] + block + original[end + len(FUNCTION_END) :]
-
-
-@agent_function
-@observed("profile")
-def profile(
-    kernel: Kernel,
-    workdir: Path | None = None,
-    *,
-    options: ProfileOptions | None = None,
-) -> dict[str, Any]:
-    """Capture CUDA NCU metrics for a Kernel's frozen sources.
-
-    Write build artifacts and evaluation evidence under workdir (default: cwd).
-    Use klineage.harness.profiling.ProfileOptions for custom options.
-    Return metrics, device metadata, and report paths. Hygon/Ascend counter
-    profiling is unsupported. Inspect the source and metrics to diagnose
-    bottlenecks; use klineage.harness.evaluate for correctness and latency.
-    """
-    from klineage.artifact.kernel import Kernel
-    from klineage.harness.eval import capture
-    from klineage.harness.profiling import ProfileOptions
-
-    if not isinstance(kernel, Kernel):
-        raise TypeError("kernel must be a Kernel")
-    work = Path.cwd() if workdir is None else workdir.expanduser().resolve()
-    return capture(kernel, work, options or ProfileOptions())
 
 
 def retrieve(
@@ -183,7 +170,6 @@ def retrieve(
 __all__ = [
     "agent_function",
     "function_docs",
-    "profile",
     "retrieve",
     "write_agent_docs",
 ]

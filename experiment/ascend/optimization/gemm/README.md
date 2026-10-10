@@ -1,5 +1,9 @@
 # GEMM on Ascend: M=N=K=4096, BF16
 
+Historical paper benchmark. Run the scripts below from this directory in the
+recorded Ascend environment; its timing policy is independent of the current
+KLineage evaluation service.
+
 ## 1. Operator
 
 - Compute: `C = A @ B`, both 2-D ND.

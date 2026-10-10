@@ -3,26 +3,6 @@
 import json
 import re
 
-from kernel_fixtures import kernel
-
-
-def task_contexts():
-    current = kernel().to_dict()
-    return {
-        "init": {
-            "problem": "/problem.json",
-            "repository": "/repo",
-            "expert_kernel": "kernel.cu",
-        },
-        "decompose": {"input_kernel": current},
-        "apply": {
-            "current_kernel": current,
-            "memory": "/workdir/.agents/skills/memory",
-            "exclude_skills": [],
-        },
-    }
-
-
 def prompt_inputs(prompt):
     return {
         (

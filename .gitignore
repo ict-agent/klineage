@@ -1,4 +1,6 @@
 .venv/
+.venv-docs/
+site/
 __pycache__/
 *.py[cod]
 .ruff_cache/

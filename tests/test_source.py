@@ -4,7 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import chdir
 from pathlib import Path
 
-from klineage.artifact.source import read_source_tree, snapshot
+from klineage.artifact.tree import read_source_tree
+from klineage.backend.runtime import snapshot
 from klineage.errors import StructuredOutputError
 
 

@@ -1,5 +1,5 @@
+from klineage.artifact.problem import load_problem
 import unittest
-from dataclasses import replace
 
 from kernel_fixtures import kernel, skill
 from problem_fixtures import problem_spec
@@ -17,7 +17,7 @@ class RetrievalTests(unittest.TestCase):
 
     def test_applicable_card_is_returned(self):
         self.assertEqual(retrieve((self.card,), self.target), (self.card,))
-        self.assertEqual(retrieve((self.card,), self.target.problem), (self.card,))
+        self.assertEqual(retrieve((self.card,), load_problem(self.target)), (self.card,))
 
     def test_exclusion_and_duplicates(self):
         other = skill("mma")
@@ -34,7 +34,7 @@ class RetrievalTests(unittest.TestCase):
     def test_conflicting_ids_fail(self):
         with self.assertRaisesRegex(ValueError, "conflicting duplicate"):
             retrieve(
-                (self.card, replace(self.card, intent="different edit")), self.target
+                (self.card, self.card.replace(intent='different edit')), self.target
             )
 
     def test_scope_matches_target(self):

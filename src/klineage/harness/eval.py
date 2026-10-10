@@ -4,57 +4,64 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import importlib
 import inspect
 import json
 import os
+import shutil
 import subprocess
 import sys
-import tempfile
+import time
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
-from klineage.artifact.kernel import ValidationResult, save_kernel
+from klineage.artifact.kernel import ValidationResult, snapshot_kernel
 from klineage.artifact.problem import (
+    Problem,
+    load_problem,
     load_problem_module,
     trace_definition,
     trace_inputs,
     trace_module,
     trace_workload,
 )
-from klineage.artifact.tensor import require_tensor, tensor_dtype, tensor_values
-from klineage.backend import Backend, BackendKind, detect_backend, get_backend
+from klineage.artifact.tree import json_node
+from klineage.backend import Backend, detect_backend, get_backend
+from klineage.backend.runtime import (
+    current_device,
+    device_runtime,
+    load_torch,
+    require_tensor,
+    tensor_dtype,
+    tensor_values,
+)
+from klineage.backend.timing import bench
 from klineage.constants import (
     BUILD_DIRECTORY,
-    EVALUATIONS_DIRECTORY,
+    KERNEL_METADATA,
     NUMERICAL_TOLERANCE,
-    VERSIONS_DIRECTORY,
-    RunKind,
 )
-from klineage.contract import ProblemSpec, ValueRole
-from klineage.errors import ActionError
+from klineage.harness.logging import observed
 from klineage.harness.process import run_process
 from klineage.harness.timing import (
-    KernelTimer,
     TimingPolicy,
-    make_timer,
-    ncu_command,
-    parse_metrics,
-    profile_launch,
     timing_evidence,
-    timing_policy,
     verify_performance,
 )
-from klineage.logging import observed
+from klineage.serialization import raw_text, restore, to_json
 from klineage.tools import agent_function
 from klineage.utils import (
     existing_dir,
     make_log_dir,
+    mapping,
     operation_id,
     resolve_path,
+    safe_file,
     write_json,
 )
 
@@ -62,11 +69,10 @@ if TYPE_CHECKING:
     import torch
 
     from klineage.artifact.kernel import Kernel
-    from klineage.harness.profiling import ProfileOptions
 
 
 WORKER_ENTRY = "from klineage.harness.eval import main; raise SystemExit(main())"
-# Default worker deadline; enclosing action deadlines are independent.
+# Default evaluation deadline; enclosing action deadlines are independent.
 _TIMEOUT_SECONDS = 900.0
 _SEED = 20260903
 _MAX_JOBS = 4
@@ -74,15 +80,13 @@ _ERROR_TAIL = 2000
 _DEFAULT_SEED = 0
 
 
-class KernelEvaluator(Protocol):
-    def evaluate(
-        self, kernel: Kernel, *, reference: Kernel | None = None
-    ) -> ValidationResult: ...
-
-
 @dataclass(frozen=True, slots=True)
 class CallInputs:
-    """Positional arguments for one kernel invocation."""
+    """Positional arguments for one kernel invocation.
+
+    Attributes:
+        args: Input values in the problem contract's declared order.
+    """
 
     args: tuple[Any, ...] = ()
 
@@ -99,6 +103,11 @@ class ProblemRuntime:
     ``None`` is treated as success to support assertion-style checkers. The
     problem reference is always the correctness oracle; a supplied Kernel
     reference is only the performance baseline.
+
+    Attributes:
+        make_inputs: Create positional inputs for each correctness or timing phase.
+        reference: Compute expected outputs from the problem's input arguments.
+        check_outputs: Compare candidate and oracle outputs.
     """
 
     make_inputs: Callable[[], CallInputs]
@@ -112,20 +121,45 @@ class ProblemRuntime:
 
 
 class CallableKernelEvaluator:
-    """Check a built Kernel against the oracle, then measure it."""
+    """Check a built kernel against the problem oracle, then measure it.
 
-    def __init__(self, runtime: ProblemRuntime, *, timer: KernelTimer):
+    This evaluator runs in the calling process and does not compile kernels or
+    create a sandbox.
+
+    Args:
+        runtime: Problem-owned input, oracle and comparison callbacks.
+        policy: Timing policy; `None` selects the detected backend's default.
+    """
+
+    def __init__(self, runtime: ProblemRuntime, *, policy: TimingPolicy | None = None):
         self.runtime = runtime
-        self.timer = timer
+        self.policy = policy
 
     def evaluate(
-        self, kernel: Kernel, *, reference: Kernel | None = None
+        self, kernel: Kernel, *, reference: Kernel | None = None,
+        workload: Mapping[str, Any] | None = None,
     ) -> ValidationResult:
+        """Record build readiness, correctness and timing gates.
+
+        Args:
+            kernel: Candidate with its callable already built.
+            reference: Optional built kernel used only as a timing baseline.
+            workload: Selected workload binding the kernel's tensor contract.
+
+        Returns:
+            Gate results and measured latency. Ordinary evaluation failures are
+            recorded as failed gates; interrupts propagate.
+        """
         try:
-            inputs = kernel.problem.values(ValueRole.INPUTS)
-            outputs = kernel.problem.values(ValueRole.OUTPUTS)
+            problem = load_problem(kernel)
+            if workload is None:
+                if len(problem.workloads) != 1:
+                    raise ValueError("callable evaluation requires one selected workload")
+                workload = problem.workloads[0]
+            inputs = problem.values("inputs", workload)
+            outputs = problem.values("outputs", workload)
             if reference is not None:
-                require_compatible_contracts(kernel, reference)
+                require_compatible_contracts(kernel, reference, workload)
             if kernel.function is None or (
                 reference is not None and reference.function is None
             ):
@@ -149,14 +183,14 @@ class CallableKernelEvaluator:
 
         try:
             original = require_call_inputs(self.runtime.make_inputs(), len(inputs))
-            timing = self.timer.measure(kernel, args=clone_inputs(original).args)
-            timing_evidence(timing.to_dict(), timing.median_ms)
-            print("Timing evidence: " + json.dumps(timing.to_dict()), file=sys.stderr)
+            timing = bench(kernel, args=clone_inputs(original).args, policy=self.policy)
+            timing_evidence(asdict(timing), timing.median_ms)
+            print("Timing evidence: " + to_json(timing, indent=None), file=sys.stderr)
             reference_latency_ms = None
             passed = True
             if reference is not None:
-                baseline = self.timer.measure(
-                    reference, args=clone_inputs(original).args
+                baseline = bench(
+                    reference, args=clone_inputs(original).args, policy=self.policy
                 )
                 reference_latency_ms = baseline.median_ms
                 passed = verify_performance(timing, baseline)
@@ -172,13 +206,15 @@ class CallableKernelEvaluator:
         )
 
 
-def require_compatible_contracts(candidate: Kernel, reference: Kernel):
-    for role in ValueRole:
-        if candidate.problem.values(role) != reference.problem.values(role):
+def require_compatible_contracts(
+    candidate: Kernel, reference: Kernel, workload: Mapping[str, Any] | None = None,
+):
+    candidate_problem, reference_problem = load_problem(candidate), load_problem(reference)
+    for role in ("inputs", "outputs"):
+        if tuple(candidate_problem.values(role, workload).items()) != tuple(
+            reference_problem.values(role, workload).items()
+        ):
             raise ValueError("candidate and reference signatures do not match")
-
-    candidate_problem = candidate.problem
-    reference_problem = reference.problem
     if candidate_problem != reference_problem:
         raise ValueError("candidate and reference problem contracts do not match")
 
@@ -239,7 +275,7 @@ def clone_tensor(value: torch.Tensor) -> torch.Tensor:
     span = 0
     if value.numel():
         span = 1 + sum(
-            (size - 1) * step for size, step in zip(value.shape, value.stride())
+            (size - 1) * step for size, step in zip(value.shape, value.stride(), strict=True)
         )
     storage = value.as_strided((span,), (1,)).clone()
     return storage.as_strided(value.shape, value.stride())
@@ -250,8 +286,51 @@ class WorkerError(RuntimeError):
 
 
 class EvaluationRuntime:
-    def __init__(self, *, timeout: float = _TIMEOUT_SECONDS):
+    """Run inspection, metadata queries and evaluation in Python subprocesses.
+
+    Each request records its input, stdout, stderr and process status. The base
+    runtime does not sandbox workers; `WorkerRuntime` adds the server's process
+    boundary and supports only evaluation and metadata queries.
+
+    Args:
+        timeout: Total evaluation budget in seconds, or the deadline for one
+            inspection or metadata request.
+        python: Interpreter executable used for every worker.
+        environment: Complete worker environment, or `None` to inherit the host
+            environment. The runtime adds its Python path and default build limit.
+        worker_plugins: Modules imported in the controller and each worker to
+            register additional artifact or backend implementations.
+    """
+
+    def __init__(
+        self, *, timeout: float = _TIMEOUT_SECONDS,
+        python: str | Path = sys.executable,
+        environment: Mapping[str, str] | None = None,
+        worker_plugins: Sequence[str] = (),
+    ):
         self.timeout = timeout
+        self.python = str(python)
+        self.environment = dict(environment) if environment is not None else None
+        self.worker_plugins = tuple(worker_plugins)
+        for name in self.worker_plugins:
+            importlib.import_module(name)
+
+    def info(self, backend: Backend, *, build_root: Path, log_dir: Path) -> dict[str, Any]:
+        """Inspect device and toolchain metadata in the configured worker runtime."""
+        build = make_log_dir(build_root)
+        logs = make_log_dir(log_dir)
+        request = {
+            "operation": "info", "backend": backend.language,
+            "config": {"build_root": str(resolve_path(build)), "include_paths": []},
+        }
+        payload = self.invoke(request, logs, "info")
+        if not isinstance(payload, Mapping) or payload.get("backend") != str(backend.kind):
+            raise WorkerError("worker info returned a different backend")
+        device = payload.get("device")
+        if not isinstance(device, Mapping) or type(device.get("available")) is not bool:
+            raise WorkerError("worker info requires device availability")
+        write_json(logs / "info-result.json", payload)
+        return dict(device)
 
     def inspect(
         self,
@@ -289,126 +368,78 @@ class EvaluationRuntime:
         build_root: Path,
         log_dir: Path,
         reference: Kernel | None = None,
+        timeout: float | None = None,
     ) -> ValidationResult:
-        """Run the callable evaluator with the selected backend's timing policy."""
+        """Evaluate every workload in a separate worker under one deadline.
 
+        Args:
+            kernel: Candidate artifact; an existing host callable is not reused.
+            include_paths: Additional compiler include directories.
+            build_root: Worker build directory.
+            log_dir: Directory for request, process and result records.
+            reference: Optional artifact used only as a performance baseline.
+            timeout: Optional total budget for this call, capped by the runtime's
+                configured timeout. Does not change later calls.
+
+        Returns:
+            Aggregate gates and each workload's result. Worker failures and
+            expired workloads remain explicit failed entries; no workloads fails.
+        """
+
+        budget = self.timeout if timeout is None else min(timeout, self.timeout)
+        deadline = time.monotonic() + budget
         includes = tuple(resolve_path(path) for path in include_paths)
         host_build_root = Path(build_root).expanduser().absolute()
         host_build_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         build = resolve_path(host_build_root)
 
+        problem = load_problem(kernel)
+        backend = get_backend(problem.language, problem.platform)
         config = {
             "seed": _SEED,
-            "timing": timing_policy(kernel_backend(kernel)).to_dict(),
+            "timing": asdict(backend.timing.DEFAULT_POLICY),
             "correctness": {"rtol": NUMERICAL_TOLERANCE, "atol": NUMERICAL_TOLERANCE},
             "include_paths": [str(path) for path in includes],
-            "build_root": str(build),
         }
         logs = make_log_dir(log_dir)
-        stem = "eval-0001"
-        request = {
-            "operation": "evaluate",
-            "kernel": self.kernel_payload(kernel),
-            "reference": (
-                self.kernel_payload(reference) if reference is not None else None
-            ),
-            "config": config,
-        }
-        payload = self.invoke(request, logs, stem)
-        if not isinstance(payload, Mapping):
-            raise WorkerError("evaluator worker result must be a JSON object")
+        workloads = problem.workloads
+        results = {}
+        if not workloads:
+            (logs / "error.log").write_text("problem has no workloads to evaluate\n")
+        for index, workload in enumerate(workloads, start=1):
+            # Isolate each build and its evidence; UUIDs are data, never paths.
+            case = f"workload-{index:04d}"
+            case_logs = make_log_dir(logs / case)
+            case_build = make_log_dir(build / case / "build")
+            stem = "eval-0001"
+            request = {
+                "operation": "evaluate", "workload_id": workload["uuid"],
+                "kernel": kernel,
+                "reference": reference,
+                "config": {**config, "build_root": str(case_build)},
+            }
+            try:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    write_json(case_logs / f"{stem}-request.json", request)
+                    raise WorkerError("evaluation deadline expired before workload")
+                payload = self.invoke(request, case_logs, stem, timeout=remaining)
+                if time.monotonic() >= deadline:
+                    raise WorkerError("evaluation deadline expired during workload")
+                if not isinstance(payload, Mapping):
+                    raise WorkerError("evaluator worker result must be a JSON object")
+                result = restore(payload, ValidationResult)
+                if result.workloads:
+                    raise WorkerError("workload worker must return a leaf result")
+            except Exception as error:  # noqa: BLE001 - Retain completed cases.
+                (case_logs / "error.log").write_text(f"{type(error).__name__}: {error}\n")
+                result = ValidationResult(False, False, False)
+            results[workload["uuid"]] = result
+            write_json(case_logs / f"{stem}-result.json", result)
 
-        try:
-            result = ValidationResult.from_dict(payload)
-        except (KeyError, TypeError, ValueError) as error:
-            raise WorkerError(
-                "evaluator worker did not emit a ValidationResult"
-            ) from error
-
-        write_json(logs / f"{stem}-result.json", result.to_dict())
+        result = ValidationResult.combine(results) if results else ValidationResult(False, False, False)
+        write_json(logs / "result.json", result)
         return result
-
-    def profile(
-        self,
-        kernel: Kernel,
-        *,
-        build_root: Path,
-        log_dir: Path,
-        include_paths: Sequence[Path] = (),
-        options: ProfileOptions,
-    ) -> dict[str, Any]:
-        require_profile_backend(kernel_backend(kernel))
-        logs = make_log_dir(log_dir)
-        try:
-            return self.collect_profile(
-                kernel, build_root, logs, include_paths, options
-            )
-        except (OSError, ValueError, TypeError, WorkerError) as exc:
-            write_json(logs / "profile-error.json", {"error": str(exc)})
-            raise ActionError(f"NCU profiling failed: {exc}; see {logs}") from exc
-
-    def collect_profile(self, kernel, build_root, logs, include_paths, options):
-        build = make_log_dir(build_root)
-        # Separate reports prevent a failed rerun from reusing stale metrics.
-        reports = Path(tempfile.mkdtemp(prefix="ncu-", dir=logs))
-        raw, report = reports / "metrics.csv", reports / "profile.ncu-rep"
-        output = resolve_path(reports)
-        request = {
-            "operation": "profile",
-            "kernel": self.kernel_payload(kernel),
-            "config": {
-                "build_root": str(resolve_path(build)),
-                "seed": _SEED,
-                "include_paths": [str(resolve_path(path)) for path in include_paths],
-            },
-        }
-        try:
-            payload = self.invoke(
-                request,
-                reports,
-                "profile",
-                command_prefix=ncu_command(
-                    options, output / raw.name, output / report.name
-                ),
-                timeout=options.timeout_seconds,
-            )
-        except WorkerError as exc:
-            if raw.is_file():
-                try:
-                    parse_metrics(raw.read_text(encoding="utf-8"))
-                except ValueError as diagnostic:
-                    raise WorkerError(f"{exc}; {diagnostic}") from exc
-            raise
-
-        if not isinstance(payload, Mapping) or "error" in payload:
-            raise WorkerError(f"invalid profile worker result: {payload}")
-        if (
-            not isinstance(payload.get("tool_version"), str)
-            or not payload["tool_version"].strip()
-            or not isinstance(payload.get("device"), Mapping)
-        ):
-            raise WorkerError("profile worker metadata is incomplete")
-        if not raw.is_file():
-            raise WorkerError("NCU did not produce raw CSV")
-        metrics = parse_metrics(raw.read_text(encoding="utf-8"))
-        if not report.is_file() or not report.stat().st_size:
-            raise WorkerError("NCU did not produce a report")
-        result = {
-            "tool": "ncu",
-            "tool_version": payload["tool_version"],
-            "device": payload["device"],
-            "metrics": metrics,
-            "report_path": str(report),
-            "raw_path": str(raw),
-            "collected_at": now(),
-        }
-        write_json(reports / "profile-result.json", result)
-        return result
-
-    def kernel_payload(self, kernel: Kernel) -> dict[str, Any]:
-        payload = kernel.to_dict()
-        payload.pop("validation")
-        return payload
 
     def invoke(
         self,
@@ -416,36 +447,41 @@ class EvaluationRuntime:
         log_dir: Path,
         stem: str,
         *,
-        command_prefix: Sequence[str] = (),
         timeout: float | None = None,
     ) -> Any:
+        timeout = self.timeout if timeout is None else timeout
+        deadline = time.monotonic() + timeout
         write_json(log_dir / f"{stem}-request.json", request)
         stdout_path = log_dir / f"{stem}-stdout.log"
         stderr_path = log_dir / f"{stem}-stderr.log"
         process_path = log_dir / f"{stem}-process.json"
-        command = (*command_prefix, sys.executable, "-c", WORKER_ENTRY)
-        environment = os.environ.copy()
+        entry = WORKER_ENTRY
+        if self.worker_plugins:
+            imports = "\n".join(
+                f"importlib.import_module({name!r})" for name in self.worker_plugins
+            )
+            entry = f"import importlib\n{imports}\n{entry}"
+        command = (self.python, "-c", entry)
+        environment = dict(os.environ if self.environment is None else self.environment)
         environment.setdefault("MAX_JOBS", str(_MAX_JOBS))
         source_root = str(Path(__file__).resolve().parents[2])
         environment["PYTHONPATH"] = os.pathsep.join(
             value for value in (source_root, environment.get("PYTHONPATH")) if value
         )
         started = now()
-        timeout = self.timeout if timeout is None else timeout
         try:
-            result = run_process(
-                command,
-                payload=json.dumps(request),
-                timeout=timeout,
-                environment=environment,
-            )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            timeout = remaining
+            result = self.launch(command, request, timeout, environment)
         except subprocess.TimeoutExpired as error:
             stdout_path.write_text(text(error.stdout), encoding="utf-8")
             stderr_path.write_text(text(error.stderr), encoding="utf-8")
             write_json(
                 process_path,
                 {
-                    "command": command,
+                    "command": error.cmd or command,
                     "started_at": started,
                     "finished_at": now(),
                     "timed_out": True,
@@ -463,7 +499,7 @@ class EvaluationRuntime:
         write_json(
             process_path,
             {
-                "command": command,
+                "command": result.args or command,
                 "started_at": started,
                 "finished_at": now(),
                 "returncode": result.returncode,
@@ -487,15 +523,16 @@ class EvaluationRuntime:
                 f"stdout leads with {result.stdout.strip()[:200]!r}; see {stdout_path}"
             ) from error
 
-
-def kernel_backend(kernel: Kernel) -> Backend:
-    return get_backend(kernel.problem.language, kernel.problem.platform)
-
-
-def require_profile_backend(backend: Backend):
-    if backend.kind is not BackendKind.CUDA:
-        raise ActionError(
-            f"{backend.kind.value} hardware-counter profiling is unsupported"
+    def launch(self, command, request, timeout, environment):
+        """Start one worker; server runtimes override the process boundary."""
+        deadline = time.monotonic() + timeout
+        payload = to_json(request, indent=None)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(command, timeout)
+        return run_process(
+            command, payload=payload, timeout=remaining,
+            environment=environment,
         )
 
 
@@ -511,58 +548,32 @@ def now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def inspect_problem(problem: Path, work: Path) -> ProblemSpec:
-    """Inspect a Trace definition or Python reference on the available backend.
+@agent_function
+def inspect_problem(problem: Path, work: Path) -> Problem:
+    """Inspect a problem directory or Python reference on the available backend.
 
-    Return its ProblemSpec with ordered tensor signatures, oracle, and workload.
-    Write inspection evidence and captured inputs under work/evaluations.
-    Preserve workload input files referenced by the returned contract.
+    Return its Problem with ordered tensor signatures, oracle, and workloads.
+    Keep logs temporary and preserve newly captured inputs under work/inputs.
     """
-    description = EvaluationRuntime().inspect(
-        problem, log_dir=work / EVALUATIONS_DIRECTORY
-    )
-    return ProblemSpec(
-        name=description["problem_name"],
-        definition=description["definition"],
-        workload=description["workload"],
-        language=description["language"],
-        platform=description["platform"],
-    )
-
-
-def next_version(work: Path) -> int:
-    """The number a kernel snapshot taken now would take.
-
-    Versions count evaluations: the first snapshot is 1, and the highest number
-    already present sets the next, so a directory left by an earlier run is not
-    reused and a gap is filled rather than skipped.
-    """
-
-    versions = work / VERSIONS_DIRECTORY
-    highest = 0
-    if versions.is_dir():
-        for entry in versions.iterdir():
-            if entry.is_dir() and entry.name.isdigit():
-                highest = max(highest, int(entry.name))
-    return highest + 1
-
-
-def snapshot_kernel(kernel: Kernel, work: Path) -> Path:
-    """Save one numbered copy of a kernel under work/.klineage/versions.
-
-    Evaluating a candidate is what advances the record, so the copy is taken
-    before the run: the version always names the sources that were measured,
-    whether the measurement then passes or fails. Snapshots are evidence, so a
-    failure to write one must not fail the evaluation it describes.
-    """
-
-    version = work / VERSIONS_DIRECTORY / str(next_version(work))
-    try:
-        version.mkdir(parents=True, exist_ok=True)
-        save_kernel(kernel, version)
-    except OSError:
-        pass
-    return version
+    with TemporaryDirectory(prefix="klineage-inspect-") as temporary:
+        logs = Path(temporary)
+        description = EvaluationRuntime().inspect(problem, log_dir=logs)
+        captured = logs / "inputs.safetensors"
+        if captured.exists():
+            destination = Path(work) / "inputs" / (operation_id("inspect") + ".safetensors")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(captured, destination)
+            for workload in description["workloads"]:
+                for source in workload.get("inputs", {}).values():
+                    if source.get("type") == "safetensors" and Path(source["path"]) == captured:
+                        source["path"] = str(destination.absolute())
+        return Problem(
+            name=description["problem_name"],
+            definition=description["definition"],
+            workloads=description["workloads"],
+            language=description["language"],
+            platform=description["platform"],
+        )
 
 
 @agent_function
@@ -575,36 +586,57 @@ def evaluate(
     include_paths: Sequence[Path] = (),
     timeout: float | None = None,
 ) -> ValidationResult:
-    """Build frozen Kernel sources, check correctness, and measure device latency.
+    """Build and measure frozen Kernel sources for every problem workload.
 
-    Write build artifacts and evidence under work/build and work/evaluations.
+    Write builds under work/build and results into kernels/<N>/metadata.json.
     The problem oracle checks correctness; optional reference supplies only the
     performance baseline and must share the problem contract. include_paths
-    supplies build headers. Return ValidationResult; accepted requires every gate.
-    Rebuild Kernel.source_files after edits. Omit reference for standalone checks.
-    timeout overrides the worker deadline in seconds; it changes neither the
+    supplies build headers. Return ValidationResult with each workload's results;
+    accepted requires every workload and gate to pass.
+    Reconstruct the Kernel tree after source edits. Omit reference for standalone checks.
+    timeout overrides the shared workload budget in seconds; it changes neither the
     sampling policy nor the enclosing action deadline. None uses the default.
-    Each call also saves the kernel under work/.klineage/versions/<N>, numbered
-    by call order.
+    Each call also snapshots the input tree under work/kernels/<N>, numbered
+    from zero before evaluation.
     """
-    snapshot_kernel(kernel, work)
-    runtime = EvaluationRuntime(timeout=_TIMEOUT_SECONDS if timeout is None else timeout)
-    return runtime.evaluate(
-        kernel,
-        reference=reference,
-        include_paths=include_paths,
-        build_root=work / BUILD_DIRECTORY,
-        log_dir=work / EVALUATIONS_DIRECTORY / operation_id(RunKind.EVALUATE),
-    )
-
-
-def capture(kernel: Kernel, work: Path, options: ProfileOptions) -> dict[str, Any]:
-    return EvaluationRuntime().profile(
-        kernel,
-        options=options,
-        build_root=work / BUILD_DIRECTORY,
-        log_dir=work / EVALUATIONS_DIRECTORY,
-    )
+    metadata = json.loads(raw_text(kernel.node(KERNEL_METADATA)))
+    metadata["validation"] = None
+    metadata.pop("evaluation", None)
+    kernel = type(kernel)(kernel.tree.with_child(json_node(KERNEL_METADATA, metadata)))
+    snapshot = snapshot_kernel(kernel, work)
+    validation = ValidationResult(False, False, False)
+    error = None
+    with TemporaryDirectory(prefix="klineage-evaluate-") as temporary:
+        logs = Path(temporary)
+        try:
+            runtime = EvaluationRuntime(timeout=_TIMEOUT_SECONDS if timeout is None else timeout)
+            validation = runtime.evaluate(
+                kernel,
+                reference=reference,
+                include_paths=include_paths,
+                build_root=work / BUILD_DIRECTORY,
+                log_dir=logs,
+            )
+            return validation
+        except Exception as failure:
+            error = f"{type(failure).__name__}: {failure}"
+            raise
+        finally:
+            diagnostics = {}
+            for path in sorted(logs.rglob("*")):
+                if path.is_symlink() or not path.is_file():
+                    continue
+                if path.suffix != ".log" and not path.name.endswith("-process.json"):
+                    continue
+                try:
+                    with safe_file(path, errors="replace") as stream:
+                        diagnostics[path.relative_to(logs).as_posix()] = stream.read()
+                except OSError:
+                    continue
+            metadata["validation"] = validation
+            metadata["evaluation"] = {"error": error, "diagnostics": diagnostics}
+            with safe_file(snapshot / KERNEL_METADATA, "w") as stream:
+                stream.write(to_json(metadata) + "\n")
 
 
 @dataclass(frozen=True, slots=True)
@@ -622,32 +654,35 @@ def inspect_reference(
     seed: int = _DEFAULT_SEED,
     backend: Backend | None = None,
 ) -> dict[str, Any]:
-    """Load a Trace definition or inspect a Python reference."""
+    """Inspect every Trace workload, or capture one Python-reference workload."""
 
     backend = backend or detect_backend()
-    backend.torch()
+    load_torch(backend)
     module, path = load_problem_module(problem_path)
-    inputs = load_inputs(module, seed, backend)
-    expected = compute_reference(module, inputs)
-
     name = problem_name(module, path)
     operator = getattr(module, "OPERATOR", name)
     if not isinstance(operator, str) or not operator.strip():
         raise ValueError("problem OPERATOR must be a non-empty string")
     if path.suffix == ".json":
-        platform = backend.platform()
-        problem = ProblemSpec(
-            name, module.definition, module.workload, backend.language, platform
+        platform = backend.info()["platform"]
+        problem = Problem(
+            name, module.definition, module.workloads,
+            language=backend.language, platform=platform,
         )
-        check_problem(problem, inputs, expected)
+        for workload in problem.resolve_inputs():
+            inputs = load_inputs(module, seed, backend, workload=workload)
+            expected = compute_reference(module, inputs)
+            check_problem(problem, inputs, expected, workload)
         return {
             "problem_name": name,
             "operator": operator.strip(),
             "definition": module.definition,
-            "workload": module.workload,
+            "workloads": module.workloads,
             "platform": platform,
             "language": backend.language,
         }
+    inputs = load_inputs(module, seed, backend)
+    expected = compute_reference(module, inputs)
     return {
         "problem_name": name,
         "operator": operator.strip(),
@@ -664,80 +699,81 @@ def inspect_reference(
                 )
             ),
         ),
-        "workload": trace_workload(inputs, workload_path),
-        "platform": backend.platform(),
+        "workloads": (trace_workload(inputs, workload_path),),
+        "platform": backend.info()["platform"],
         "language": backend.language,
     }
 
 
 def evaluate_request(request: Mapping[str, Any]) -> ValidationResult:
-    """Evaluate one serialized candidate request."""
+    """Evaluate one selected workload and return its leaf result."""
     from klineage.artifact.kernel import Kernel
 
-    kernel_value = require_mapping(request.get("kernel"), "kernel")
+    kernel_payload = mapping(request.get("kernel"), "kernel")
     reference_value = request.get("reference")
     if reference_value is not None:
-        reference_value = require_mapping(reference_value, "reference")
-    kernel = Kernel.from_dict(kernel_value)
-    backend = kernel_backend(kernel)
-    backend.runtime()
-    config = parse_config(require_mapping(request.get("config"), "config"), backend)
+        reference_value = mapping(reference_value, "reference")
+    kernel = restore(kernel_payload, Kernel)
+    problem = load_problem(kernel)
+    backend = get_backend(problem.language, problem.platform)
+    device_runtime(backend)
+    config = parse_config(mapping(request.get("config"), "config"), backend)
     reference = (
-        Kernel.from_dict(reference_value) if reference_value is not None else None
+        restore(reference_value, Kernel) if reference_value is not None else None
     )
+    selected = problem.resolve_inputs(request.get("workload_id"))
+    if len(selected) != 1:
+        raise ValueError("worker evaluation requires one selected workload")
+    workload = selected[0]
     if reference is not None:
-        require_compatible_contracts(kernel, reference)
-    module = trace_module(kernel.problem.definition, kernel.problem.workload)
-    problem_inputs = load_inputs(module, config.seed, backend)
+        require_compatible_contracts(kernel, reference, workload)
+    module = trace_module(problem.definition, selected)
+    problem_inputs = load_inputs(module, config.seed, backend, workload=workload)
     expected = compute_reference(module, problem_inputs)
-    check_problem(kernel.problem, problem_inputs, expected)
+    check_problem(problem, problem_inputs, expected, workload)
 
-    strides = tensor_strides(problem_inputs, expected, kernel.problem)
+    strides = tensor_strides(problem_inputs, expected, problem, workload)
     try:
-        kernel.build(
-            config.build_root, include_paths=config.include_paths, strides=strides
+        object.__setattr__(
+            kernel,
+            "function",
+            kernel.build_kernel(
+                config.build_root,
+                include_paths=config.include_paths,
+                strides=strides,
+                workload=workload,
+            ),
         )
         if reference is not None:
-            reference.build(
-                config.build_root, include_paths=config.include_paths, strides=strides
+            object.__setattr__(
+                reference,
+                "function",
+                reference.build_kernel(
+                    config.build_root,
+                    include_paths=config.include_paths,
+                    strides=strides,
+                    workload=workload,
+                ),
             )
     except Exception as error:  # noqa: BLE001 - Record builds; propagate interrupts.
         print(f"Build failed: {error}", file=sys.stderr)
         return ValidationResult(False, False, False)
     evaluator = CallableKernelEvaluator(
-        problem_runtime(module, config.seed, backend),
-        timer=make_timer(backend, config.timing),
+        problem_runtime(module, config.seed, backend, workload=workload),
+        policy=config.timing,
     )
-    return evaluator.evaluate(kernel, reference=reference)
-
-
-def profile_request(request: Mapping[str, Any]) -> dict[str, Any]:
-    from klineage.artifact.kernel import Kernel
-
-    kernel = Kernel.from_dict(require_mapping(request.get("kernel"), "kernel"))
-    backend = kernel_backend(kernel)
-    require_profile_backend(backend)
-    config = parse_config(require_mapping(request.get("config"), "config"))
-    module = trace_module(kernel.problem.definition, kernel.problem.workload)
-    inputs = load_inputs(module, config.seed, backend)
-    device = next(iter(inputs.values())).device
-    expected = compute_reference(module, inputs)
-    kernel.build(
-        config.build_root,
-        include_paths=config.include_paths,
-        strides=tensor_strides(inputs, expected, kernel.problem),
-    )
-    return profile_launch(kernel, args=tuple(inputs.values()), device=device)
+    return evaluator.evaluate(kernel, reference=reference, workload=workload)
 
 
 def problem_runtime(
-    module: ModuleType, seed: int, backend: Backend | None = None
+    module: ModuleType, seed: int, backend: Backend | None = None,
+    *, workload: Mapping[str, Any] | None = None,
 ) -> ProblemRuntime:
     inputs = {}
 
     def make_inputs() -> CallInputs:
         nonlocal inputs
-        inputs = load_inputs(module, seed, backend)
+        inputs = load_inputs(module, seed, backend, workload=workload)
         return CallInputs(args=tuple(inputs.values()))
 
     def reference(*args: torch.Tensor):
@@ -779,12 +815,14 @@ def check_close(actual: Any, expected: Any):
         expected.device,
     ):
         raise ValueError("Output shape, dtype or device differs from the reference")
-    if not torch.allclose(
-        actual, expected, rtol=NUMERICAL_TOLERANCE, atol=NUMERICAL_TOLERANCE
-    ):
-        raise AssertionError(
-            f"torch.allclose failed: rtol=atol={NUMERICAL_TOLERANCE:g}"
-        )
+    # Include mismatch counts, error magnitudes and indices in worker diagnostics.
+    torch.testing.assert_close(
+        actual,
+        expected,
+        rtol=NUMERICAL_TOLERANCE,
+        atol=NUMERICAL_TOLERANCE,
+        check_stride=False,
+    )
 
 
 def check_topk(actual: Any, expected: Any, inputs: torch.Tensor):
@@ -815,12 +853,17 @@ def check_topk(actual: Any, expected: Any, inputs: torch.Tensor):
 
 
 def load_inputs(
-    module: ModuleType, seed: int, backend: Backend | None = None
+    module: ModuleType, seed: int, backend: Backend | None = None,
+    *, workload: Mapping[str, Any] | None = None,
 ) -> Mapping[str, torch.Tensor]:
     backend = backend or detect_backend()
     if hasattr(module, "definition"):
+        if workload is None:
+            if len(module.workloads) != 1:
+                raise ValueError("trace inputs require one selected workload")
+            workload = module.workloads[0]
         raw = trace_inputs(
-            module.definition, module.workload, seed=seed, device=backend.device()
+            module.definition, workload, seed=seed, device=current_device(backend)
         )
     else:
         parameters = inspect.signature(module.make_inputs).parameters
@@ -828,7 +871,7 @@ def load_inputs(
         if "seed" in parameters:
             arguments["seed"] = seed
         if "device" in parameters:
-            arguments["device"] = backend.device()
+            arguments["device"] = current_device(backend)
         raw = module.make_inputs(**arguments)
     if not isinstance(raw, Mapping):
         raise TypeError("problem.make_inputs() must return a mapping")
@@ -883,14 +926,15 @@ def output_names(value: Any) -> tuple[str, ...]:
 def tensor_strides(
     inputs: Mapping[str, torch.Tensor],
     output: Any,
-    problem: ProblemSpec,
+    problem: Problem,
+    workload: Mapping[str, Any] | None = None,
 ) -> dict[tuple[str, str], tuple[int, ...]]:
     result = {("input", name): tuple(value.stride()) for name, value in inputs.items()}
     result.update(
         {
-            ("output", spec.name): tuple(value.stride())
-            for spec, value in zip(
-                problem.values(ValueRole.OUTPUTS), output_tensors(output), strict=True
+            ("output", name): tuple(value.stride())
+            for name, value in zip(
+                problem.values("outputs", workload), output_tensors(output), strict=True
             )
         }
     )
@@ -898,27 +942,28 @@ def tensor_strides(
 
 
 def check_problem(
-    problem: ProblemSpec,
+    problem: Problem,
     inputs: Mapping[str, torch.Tensor],
     output: Any,
+    workload: Mapping[str, Any] | None = None,
 ):
     backend = get_backend(problem.language, problem.platform)
     if tuple(inputs) != tuple(problem.definition["inputs"]):
         raise ValueError("problem input names or order do not match definition")
     for role, tensors in (
-        (ValueRole.INPUTS, tuple(inputs.values())),
-        (ValueRole.OUTPUTS, output_tensors(output, backend)),
+        ("inputs", tuple(inputs.values())),
+        ("outputs", output_tensors(output, backend)),
     ):
-        values = tensor_values(problem, role)
+        values = tensor_values(problem, role, workload)
         if len(values) != len(tensors):
             raise ValueError(f"problem {role} count does not match definition")
-        for spec, tensor in zip(values, tensors, strict=True):
+        for (name, spec), tensor in zip(values.items(), tensors, strict=True):
             if (
-                tensor.dtype != tensor_dtype(spec.dtype)
-                or tuple(tensor.shape) != spec.shape
+                tensor.dtype != tensor_dtype(spec["dtype"])
+                or tuple(tensor.shape) != tuple(spec["shape"])
             ):
                 raise ValueError(
-                    f"problem {role} {spec.name!r} does not match definition"
+                    f"problem {role} {name!r} does not match definition"
                 )
 
 
@@ -947,7 +992,7 @@ def parse_config(
     timing_value = value.get("timing", {})
     if not isinstance(timing_value, Mapping):
         raise TypeError("config.timing must be an object")
-    defaults = timing_policy(backend).to_dict() if backend else TimingPolicy().to_dict()
+    defaults = asdict(backend.timing.DEFAULT_POLICY if backend else TimingPolicy())
     timing = TimingPolicy(**{**defaults, **timing_value})
     seed = value.get("seed", _DEFAULT_SEED)
     if isinstance(seed, bool) or not isinstance(seed, int):
@@ -960,16 +1005,10 @@ def parse_config(
     )
 
 
-def require_mapping(value: Any, label: str) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise TypeError(f"{label} must be an object")
-    return value
-
-
 def request_operation(request: Mapping[str, Any]) -> str:
     value = request.get("operation")
-    if value not in {"inspect", "evaluate", "profile"}:
-        raise ValueError("operation must be 'inspect', 'evaluate' or 'profile'")
+    if value not in {"info", "inspect", "evaluate"}:
+        raise ValueError("operation must be 'info', 'inspect' or 'evaluate'")
     return value
 
 
@@ -1008,15 +1047,14 @@ def _descriptor_stdout(stream):
         os.close(saved)
 
 
-def _emit(result: Any, *, sort_keys: bool = False) -> None:
+def _emit(result: Any) -> None:
     """Write the result frame as the final line of stdout.
 
     Insertion order is preserved by default: a definition's input order is part
     of its contract, and sorting it would silently reorder the ABI.
     """
 
-    json.dump(result, sys.stdout, ensure_ascii=False, sort_keys=sort_keys)
-    sys.stdout.write("\n")
+    sys.stdout.write(to_json(result, indent=None) + "\n")
     sys.stdout.flush()
 
 
@@ -1028,29 +1066,30 @@ def main() -> int:
     # stderr for the duration. `sys.stdout` is restored before the reply, which
     # therefore still lands on the descriptor the caller reads.
     try:
-        request = require_mapping(json.load(sys.stdin), "worker request")
+        request = mapping(json.load(sys.stdin), "worker request")
         operation = request_operation(request)
         with _descriptor_stdout(sys.stderr), contextlib.redirect_stdout(sys.stderr):
-            if operation == "inspect":
+            if operation == "info":
+                backend = get_backend(request["backend"])
+                result: Any = {"backend": str(backend.kind), "device": backend.info()}
+            elif operation == "inspect":
                 seed = request.get("seed", _DEFAULT_SEED)
                 if isinstance(seed, bool) or not isinstance(seed, int):
                     raise TypeError("seed must be an integer")
-                result: Any = inspect_reference(
+                result = inspect_reference(
                     request["problem_path"],
                     workload_path=Path(request["workload_path"]),
                     seed=seed,
                 )
-            elif operation == "profile":
-                result = profile_request(request)
             else:
-                result = evaluate_request(request).to_dict()
+                result = evaluate_request(request)
     except Exception as exc:  # noqa: BLE001 - worker failures cross a JSON boundary
         message = str(exc).strip() or type(exc).__name__
         print(f"{type(exc).__name__}: {message}", file=sys.stderr, flush=True)
         if operation == "evaluate":
-            result = ValidationResult(False, False, False).to_dict()
+            result = ValidationResult(False, False, False)
         else:
-            _emit({"error_type": type(exc).__name__, "error": message}, sort_keys=True)
+            _emit({"error_type": type(exc).__name__, "error": message})
             return 1
     _emit(result)
     return 0
@@ -1059,10 +1098,8 @@ def main() -> int:
 __all__ = [
     "CallInputs",
     "CallableKernelEvaluator",
-    "KernelEvaluator",
     "ProblemRuntime",
     "ValidationResult",
-    "capture",
     "evaluate",
     "inspect_problem",
 ]

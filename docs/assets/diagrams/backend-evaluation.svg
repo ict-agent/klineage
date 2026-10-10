@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="392" viewBox="0 0 800 392" role="img" aria-labelledby="title desc">
+  <title id="title">Backend evaluation and recorded results</title>
+  <desc id="desc">Kernel sources are submitted to the evaluation service. The service owns the fixed problem, policy, queue, and results. An isolated worker builds, checks, and benchmarks the kernel, then returns measurements to the service. The service records a measured Kernel with per-workload results.</desc>
+  <defs>
+    <style>
+      :root { --paper:#f8fbff; --surface:#ffffff; --ink:#1b2d43; --muted:#5e728b; --rule:#b9ccdf; --grid:#dce8f3; --blue:#3377cc; --violet:#7b61b5; --green:#26846b; --amber:#b37b37; }
+      @media(prefers-color-scheme:dark) { :root { --paper:#152233; --surface:#1b2b40; --ink:#e5edf7; --muted:#a0b6cf; --rule:#526982; --grid:#293c52; --blue:#83b7f1; --violet:#b3a0e2; --green:#82cbb4; --amber:#e5bd83; } }
+      text { font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill:var(--ink); text-rendering:geometricPrecision; }
+      .title { font-size:20px; font-weight:650; }
+      .body { font-size:16px; fill:var(--muted); }
+      .mono { font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace; font-size:15px; }
+      .label { font-size:14px; fill:var(--muted); paint-order:stroke; stroke:var(--paper); stroke-width:5px; stroke-linejoin:round; }
+      .eyebrow { font-family:"SFMono-Regular",Consolas,monospace; font-size:14px; letter-spacing:1.25px; fill:var(--muted); }
+      .paper { fill:var(--paper); }
+      .surface { fill:var(--surface); stroke:var(--rule); stroke-width:1.3; }
+      .plate { fill:var(--blue); fill-opacity:.035; stroke:var(--rule); stroke-width:1; stroke-dasharray:4 5; }
+      .wire { fill:none; stroke:var(--rule); stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; marker-end:url(#arrow); }
+      .return { stroke-dasharray:4 5; }
+      .blue { color:var(--blue); }
+      .violet { color:var(--violet); }
+      .green { color:var(--green); }
+      .amber { color:var(--amber); }
+      .tone { fill:currentColor; }
+      .trace { fill:none; stroke:currentColor; stroke-width:1.65; stroke-linecap:round; stroke-linejoin:round; }
+      .disc { fill:var(--surface); stroke:currentColor; stroke-width:1.7; }
+      .halo { fill:currentColor; fill-opacity:.065; }
+      .rule { fill:none; stroke:var(--rule); stroke-width:1; }
+    </style>
+    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M 20 0 H 0 V 20" fill="none" stroke="var(--grid)" stroke-width=".65"/></pattern>
+    <pattern id="major" width="100" height="100" patternUnits="userSpaceOnUse"><rect width="100" height="100" fill="url(#grid)"/><path d="M 100 0 H 0 V 100" fill="none" stroke="var(--grid)" stroke-width="1.1"/></pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 1 1 L 8 5 L 1 9" fill="none" stroke="var(--muted)" stroke-width="1.4" stroke-linejoin="round"/></marker>
+    <g id="terminal" class="trace"><path d="m -10 -7 7 7 -7 7 M 2 7 H 11"/></g>
+    <g id="chip" class="trace"><rect x="-23" y="-23" width="46" height="46" rx="3"/><rect x="-12" y="-12" width="24" height="24" rx="1"/><path d="M -13 -23 V -32 M 0 -23 V -32 M 13 -23 V -32 M -13 23 V 32 M 0 23 V 32 M 13 23 V 32 M -23 -13 H -32 M -23 0 H -32 M -23 13 H -32 M 23 -13 H 32 M 23 0 H 32 M 23 13 H 32"/></g>
+    <g id="file" class="trace"><path d="M -13 -18 H 5 L 13 -10 V 18 H -13 Z M 5 -18 V -10 H 13 M -6 -1 H 6 M -6 6 H 6"/></g>
+    <g id="check" class="trace"><path d="m -8 0 5 5 11 -11"/></g>
+    <g id="braces" class="trace"><path d="M -5 -12 H -9 V -4 L -13 0 -9 4 V 12 H -5 M 5 -12 H 9 V -4 L 13 0 9 4 V 12 H 5"/></g>
+  </defs>
+
+  <rect class="paper" width="800" height="392" rx="10"/>
+  <rect width="800" height="392" rx="10" fill="url(#major)"/>
+  <text class="mono" x="28" y="32" fill="var(--muted)">BACKEND / EVALUATION</text>
+
+  <path class="surface" d="M 32 111 H 148 L 166 129 V 231 H 32 Z"/>
+  <path class="rule" d="M 148 111 V 129 H 166"/>
+  <g class="blue">
+    <path class="trace" d="M 47 188 H 146 M 47 203 H 110 M 47 215 H 137"/>
+  </g>
+  <text class="mono" x="47" y="149">config.toml</text>
+  <text class="mono" x="47" y="175">solution/</text>
+  <text class="title" x="99" y="260" text-anchor="middle">Sources</text>
+  <text class="mono" x="99" y="284" text-anchor="middle">Client.evaluate</text>
+  <path class="wire" d="M 174 165 H 251"/>
+  <text class="label" x="213" y="151" text-anchor="middle">submit</text>
+
+  <text class="title" x="363" y="81" text-anchor="middle">Evaluation service</text>
+  <rect class="surface" x="260" y="106" width="206" height="126" rx="2"/>
+  <path d="M 260 107 H 466" stroke="var(--violet)" stroke-width="3"/>
+  <text class="mono" x="276" y="127">SERVER</text>
+  <circle cx="445" cy="120" r="3" fill="var(--violet)"/>
+  <path class="rule" d="M 260 137 H 466"/>
+  <text class="body" x="277" y="161">Fixed problem</text>
+  <text class="body" x="277" y="184">Owns the policy</text>
+  <path class="rule" d="M 277 196 H 448"/>
+  <text class="body" x="277" y="219">Queue + results</text>
+
+  <rect class="plate" x="510" y="64" width="262" height="208" rx="2"/>
+  <text class="mono" x="528" y="89">ISOLATED WORKER</text>
+  <path class="wire" d="M 474 165 H 599"/>
+  <text class="label" x="536" y="150" text-anchor="middle">job</text>
+  <g class="amber" transform="translate(640 165)">
+    <circle class="halo" r="42"/>
+    <use href="#chip"/>
+  </g>
+  <text class="body" x="640" y="225" text-anchor="middle">Build · check · bench</text>
+  <text class="mono" x="640" y="251" text-anchor="middle">backend.bench(fn)</text>
+
+  <path class="wire return" d="M 674 165 H 774 Q 786 165 786 177 V 286 Q 786 298 774 298 H 433 Q 421 298 421 286 V 240"/>
+  <text class="label" x="601" y="287" text-anchor="middle">measurements</text>
+  <path class="wire" d="M 321 240 V 313"/>
+  <path class="surface" d="M 272 321 H 448 L 466 339 V 372 H 272 Z"/>
+  <path class="rule" d="M 448 321 V 339 H 466"/>
+  <g class="green" transform="translate(292 345)">
+    <circle class="disc" r="13"/>
+    <use href="#check" transform="scale(.7)"/>
+  </g>
+  <text class="mono" x="315" y="343">Measured Kernel</text>
+  <text class="label" x="315" y="364">Per-case results</text>
+</svg>

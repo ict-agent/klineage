@@ -1,48 +1,103 @@
-"""Kernel source bundles and their problem contracts."""
+"""Kernel artifact interface and measured validation."""
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
-import keyword
 import math
-import tomllib
+import os
+import shutil
+import stat
+from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
-from klineage.backend import get_backend
+from klineage.artifact.tree import (
+    MAX_INLINE_BYTES,
+    Artifact,
+    ArtifactKind,
+    FileRef,
+    Node,
+    NodeKind,
+    read_source_tree,
+)
 from klineage.constants import (
     BUILD_DIRECTORY,
     BUNDLE_CONFIG,
     BUNDLE_SOLUTION,
-    KERNEL_FILE,
+    KERNEL_DIRECTORY,
+    KERNEL_METADATA,
+    KERNELS_DIRECTORY,
+    STATE_DIRECTORY,
+    SUBMISSION_DIRECTORY,
 )
-from klineage.contract import (
-    OutputStyle,
-    ProblemSpec,
-    relative_source_path,
-)
+from klineage.serialization import raw_bytes, raw_text, restore
 from klineage.tools import agent_function
-from klineage.utils import boolean, mapping, nonempty
+from klineage.utils import DirectoryMode, operation_id, safe_directory, safe_file
+
+VALIDATION_GATES = ("compile_passed", "correctness_passed", "profile_passed")
 
 
 @dataclass(frozen=True, slots=True)
 class ValidationResult:
-    """Measured validation attached to a kernel."""
+    """Compilation, correctness and timing results attached to a kernel.
+
+    Attributes:
+        compile_passed: Whether the implementation built successfully.
+        correctness_passed: Whether measured outputs passed correctness checks.
+        profile_passed: Whether the timing/performance gate passed. This does
+            not represent a vendor-profiler report.
+        latency_ms: Positive finite candidate latency for a single workload.
+            A multi-workload report leaves this unset.
+        reference_latency_ms: Optional positive finite reference latency.
+        workloads: Individual results keyed by workload UUID. Empty for a
+            single worker's result; populated for a complete evaluation report.
+
+    Constructing this value checks field types and latency ranges; it does not
+    run evaluation or establish service measurements.
+    """
 
     compile_passed: bool
     correctness_passed: bool
     profile_passed: bool
     latency_ms: float | None = None
     reference_latency_ms: float | None = None
+    workloads: Mapping[str, ValidationResult] = field(default_factory=dict, hash=False)
 
     def __post_init__(self):
-        for name in ("compile_passed", "correctness_passed", "profile_passed"):
+        for name in VALIDATION_GATES:
             if type(getattr(self, name)) is not bool:
                 raise TypeError(f"{name} must be a bool")
-        if self.profile_passed and self.latency_ms is None:
+        if not isinstance(self.workloads, Mapping):
+            raise TypeError("workloads must map UUIDs to validation results")
+        workloads = dict(self.workloads)
+        for name, result in workloads.items():
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("workload UUID must be nonempty text")
+            if not isinstance(result, ValidationResult):
+                raise TypeError("workload result must be a ValidationResult")
+            if result.workloads:
+                raise ValueError("nested workload reports are not allowed")
+        object.__setattr__(self, "workloads", MappingProxyType(workloads))
+
+        if workloads:
+            for name in VALIDATION_GATES:
+                passed = all(getattr(result, name) for result in workloads.values())
+                if getattr(self, name) != passed:
+                    raise ValueError(f"workload summary differs from {name} results")
+            single = next(iter(workloads.values())) if len(workloads) == 1 else None
+            for name in ("latency_ms", "reference_latency_ms"):
+                expected = getattr(single, name) if single is not None else None
+                if getattr(self, name) != expected:
+                    raise ValueError(
+                        f"workload summary {name} must match the single case or be unset"
+                    )
+        elif self.profile_passed and self.latency_ms is None:
             raise ValueError("successful timing requires latency_ms")
         for name in ("latency_ms", "reference_latency_ms"):
             latency = getattr(self, name)
@@ -55,244 +110,322 @@ class ValidationResult:
 
     @property
     def accepted(self) -> bool:
+        """Whether all three validation gates passed."""
         return self.compile_passed and self.correctness_passed and self.profile_passed
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "compile_passed": self.compile_passed,
-            "correctness_passed": self.correctness_passed,
-            "profile_passed": self.profile_passed,
-            "latency_ms": self.latency_ms,
-            "reference_latency_ms": self.reference_latency_ms,
-        }
-
     @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> ValidationResult:
+    def combine(cls, workloads: Mapping[str, ValidationResult]) -> ValidationResult:
+        """Summarize nonempty workload results without averaging their latencies."""
+        if not isinstance(workloads, Mapping):
+            raise TypeError("workloads must map UUIDs to validation results")
+        if not workloads:
+            raise ValueError("cannot summarize an empty set of workload results")
+        if any(not isinstance(value, cls) for value in workloads.values()):
+            raise TypeError("workload result must be a ValidationResult")
+        single = next(iter(workloads.values())) if len(workloads) == 1 else None
         return cls(
-            compile_passed=boolean(value["compile_passed"], "compile_passed"),
-            correctness_passed=boolean(
-                value["correctness_passed"], "correctness_passed"
-            ),
-            profile_passed=boolean(value["profile_passed"], "profile_passed"),
-            latency_ms=value.get("latency_ms"),
-            reference_latency_ms=value.get("reference_latency_ms"),
+            **{
+                name: all(getattr(value, name) for value in workloads.values())
+                for name in VALIDATION_GATES
+            },
+            latency_ms=single.latency_ms if single is not None else None,
+            reference_latency_ms=single.reference_latency_ms if single is not None else None,
+            workloads=workloads,
         )
 
 
-@dataclass(frozen=True, slots=True)
-class Kernel:
-    name: str
-    problem: ProblemSpec
-    source_files: Mapping[str, str] | None = None
-    validation: ValidationResult | None = None
-    compile_flags: tuple[str, ...] = ()
-    language: str | None = field(init=False)
-    entry_point: str | None = field(init=False)
-    output_style: OutputStyle | None = field(init=False)
-    function: Callable[..., Any] | None = field(
-        default=None, init=False, repr=False, compare=False
-    )
+KERNEL = Node.directory(
+    ".",
+    description="\n".join(
+        (
+            "A kernel source tree with a checked reference to its problem.",
+            "Kernel files live under build_root. The framework saves measured versions under kernels/<N>/.",
+            "The agent submits this directory with klineage.server.Client.evaluate; the service checks kernel_spec and builds it.",
+            "After source edits reconstruct the Kernel before evaluating it.",
+            "The client automatically saves returned Kernels under kernels/<N>; the service owns validation.",
+        )
+    ),
+    children=(
+        Node.file(
+            KERNEL_METADATA,
+            description="\n".join(
+                (
+                    "Kernel name, problem directory reference {path, name, language, platform}, validation and optional compile_flags.",
+                    "Compiled runtime handles are never serialized.",
+                    "Validation stores compile_passed, correctness_passed, profile_passed and per-workload results keyed by UUID.",
+                    "All workloads must pass. Each workload retains its finite positive latency in milliseconds; multi-workload summaries leave latency fields unset.",
+                    "Attach only measured validation; clear it when the implementation changes.",
+                    "Preserve native compile_flags through builds, comparisons and handoffs.",
+                )
+            ),
+        ),
+        Node.directory(
+            "submission",
+            description="\n".join(
+                (
+                    "All bundle paths and their exact source text.",
+                    "config.toml and solution/ follow the selected bundle format.",
+                    "The host entry source supplies bindings and all launch parameters.",
+                )
+            ),
+        ),
+    ),
+)
+
+
+class Kernel(Artifact, ABC):
+    """A kernel source artifact that becomes callable after ``load_kernel``.
+
+    Backend subclasses define ``kernel_spec`` and ``build_kernel``. The tree
+    contains metadata and submission sources; ``metadata.json`` references the
+    original problem directory and its execution target. Constructing or restoring
+    a tree does not compile it. ``load_kernel`` builds the entry callable, whose
+    source supplies bindings and device launch parameters.
+
+    Args:
+        tree: Kernel tree rooted at ``.`` and matching the backend's specification.
+
+    Attributes:
+        function (Callable[..., Any] | None): Built entry callable, or ``None``
+            until loaded. Not serialized.
+        validation (ValidationResult | None): Attached measurements, or ``None``
+            if unmeasured.
+    """
+
+    __slots__ = ("function",)
+
+    def __init__(self, tree: Node):
+        Artifact.__init__(self, self.artifact_kind, tree)
 
     def __post_init__(self):
-        object.__setattr__(self, "name", nonempty(self.name, "kernel name"))
-        if not isinstance(self.problem, ProblemSpec):
-            raise TypeError("kernel problem must be a ProblemSpec")
-        if self.validation is not None and not isinstance(
-            self.validation, ValidationResult
-        ):
-            raise TypeError("kernel validation must be a ValidationResult")
-        object.__setattr__(self, "compile_flags", tuple(self.compile_flags))
+        errors = []
+        for layout in kernel_layouts(type(self)):
+            try:
+                layout.check(self.tree)
+            except ValueError as error:
+                errors.append(str(error))
+                continue
+            break
+        else:
+            raise ValueError(f"{self.kind}: no kernel layout matches; " + "; ".join(dict.fromkeys(errors)))
+        Artifact.__post_init__(self)
+        object.__setattr__(self, "function", None)
 
-        sources = {}
-        for name, text in mapping(self.source_files or {}, "kernel source_files").items():
-            path = relative_source_path(name, "kernel source path")
-            if not isinstance(text, str):
-                raise TypeError("kernel source contents must be strings")
-            if "\x00" in text:
-                raise ValueError("kernel sources must not contain NUL bytes")
-            sources[path] = text
-        object.__setattr__(self, "source_files", sources)
-        self.read_build()
+    @classmethod
+    def from_tree(cls, kind: str, tree: Node):
+        """Restore a concrete Kernel; the abstract interface uses known backends."""
+        if cls is Kernel:
+            from klineage.backend import backends
 
-    def read_build(self):
-        # A source-free placeholder carries only the problem contract. Its build
-        # identity stays unknown until the caller supplies sources.
-        if not self.source_files:
-            for name in ("language", "entry_point", "output_style"):
-                object.__setattr__(self, name, None)
-            return
+            for backend in backends():
+                if backend.kernel_type.artifact_kind == kind:
+                    return backend.kernel_type.from_tree(kind, tree)
+            raise TypeError(f"{kind} is not a Kernel of a known backend")
+        return super().from_tree(kind, tree)
 
-        if BUNDLE_CONFIG not in self.source_files:
-            backend = get_backend(self.problem.language, self.problem.platform)
-            object.__setattr__(self, "language", self.problem.language)
-            object.__setattr__(
-                self, "entry_point", f"{backend.raw_source}::klineage_launch"
-            )
-            object.__setattr__(self, "output_style", OutputStyle.DESTINATION)
-            return
+    @classmethod
+    @abstractmethod
+    @agent_function
+    def kernel_spec(cls) -> Node:
+        """Return this backend's kernel file structure, constraints and examples.
 
-        config = tomllib.loads(self.source_files[BUNDLE_CONFIG])
-        for name in self.source_files:
-            if name != BUNDLE_CONFIG and not name.startswith(f"{BUNDLE_SOLUTION}/"):
-                raise ValueError(
-                    "bundles contain only config.toml and solution/ sources"
-                )
-        solution = mapping(config[BUNDLE_SOLUTION], "solution metadata")
-        for key in ("name", "definition", "author"):
-            nonempty(solution[key], f"solution {key}")
-        build = mapping(config["build"], "build metadata")
-        language = build["language"]
-        suffixes = (".py",)
-        if language != "python":
-            backend = get_backend(self.problem.language, self.problem.platform)
-            if language != backend.language:
-                raise ValueError(
-                    f"build language must be {backend.language} or python for {backend.kind}"
-                )
-            suffixes = backend.entry_suffixes
-        entry = nonempty(build["entry_point"], "build entry_point")
-        parts = entry.split("::")
-        if entry != build["entry_point"] or len(parts) != 2:
-            raise ValueError("entry_point must be relative/source::symbol")
-        path, symbol = parts
-        relative_source_path(path, "build entry source")
-        if PurePosixPath(path).suffix not in suffixes:
-            raise ValueError("entry source suffix is incompatible with build language")
-        if not symbol.isidentifier() or keyword.iskeyword(symbol):
-            raise ValueError("entry symbol must be an identifier")
-        destination = build.get("destination_passing_style", False)
-        if type(destination) is not bool:
-            raise TypeError("destination_passing_style must be a boolean")
-        object.__setattr__(self, "language", language)
-        object.__setattr__(self, "entry_point", entry)
-        object.__setattr__(
-            self,
-            "output_style",
-            OutputStyle.DESTINATION if destination else OutputStyle.RETURN,
-        )
-        if self.source_path not in self.source_files:
-            raise ValueError(f"missing entry source: {self.source_path}")
-        nonempty(self.source_files[self.source_path], "bundle entry source")
-
-    @property
-    def source_path(self) -> str:
-        path = self.entry_point.split("::")[0]
-        return (
-            f"{BUNDLE_SOLUTION}/{path}" if BUNDLE_CONFIG in self.source_files else path
-        )
-
-    @property
-    def symbol(self) -> str:
-        return self.entry_point.split("::")[1]
+        Subclasses implement this specification; construction and loading use
+        it to reject malformed subtrees with path-specific errors.
+        """
+        raise NotImplementedError
 
     @classmethod
     @agent_function
-    def from_sources(
-        cls,
-        source_files: Mapping[str, str],
-        problem: ProblemSpec,
-        *,
-        name: str | None = None,
-        build_root: Path = BUILD_DIRECTORY,
-        include_paths: Sequence[Path] = (),
+    def load_kernel(
+        cls, build_root: Path = KERNEL_DIRECTORY, *, include_paths: Sequence[Path] = ()
     ) -> Kernel:
-        """Construct and build a callable kernel from its complete sources."""
-        kernel = cls(name or problem.name, problem, source_files)
-        kernel.build(build_root, include_paths=include_paths)
-        return kernel
+        """Read a kernel directory, check its specification and build its callable.
 
-    @agent_function
-    def build(
+        Args:
+            build_root: Directory containing ``metadata.json`` and ``submission/``.
+            include_paths: Additional compiler include directories. They remain
+                external dependencies and are not added to the artifact.
+
+        Returns:
+            A backend-specific ``Kernel`` callable with the problem's ordered
+            input ABI: call it as ``outputs = kernel(*inputs)``. Destination-passing
+            outputs are allocated by the adapter. Calling ``Kernel.load_kernel`` selects the backend from
+            the referenced problem; subclass calls require a matching target.
+
+        Raises:
+            NotADirectoryError: ``build_root`` is not a directory.
+            ValueError: The tree, problem reference or target is invalid.
+                Structural errors identify the failing subtree.
+
+        Builds use ``.klineage/build`` beside ``build_root``. JSON representations
+        are read separately with ``load_artifact`` and do not carry compiled code.
+        """
+        from klineage.artifact.problem import load_problem
+        from klineage.backend import get_backend
+
+        root = Path(build_root).expanduser().absolute()
+        if not root.is_dir():
+            raise NotADirectoryError(f"{root}: expected a Kernel directory")
+        tree = capture_kernel(root)
+        value = Artifact(ArtifactKind.KERNEL, tree) if cls is Kernel else cls(tree)
+        problem = load_problem(value)
+        try:
+            backend = get_backend(problem.language, problem.platform)
+        except ValueError as error:
+            raise ValueError(f"{KERNEL_METADATA}/problem: {error}") from error
+        if cls is Kernel:
+            value = backend.kernel_type(tree)
+        elif not isinstance(value, backend.kernel_type):
+            raise ValueError(
+                f"{KERNEL_METADATA}/problem: target differs from {cls.__name__}"
+            )
+        cache = root.parent / STATE_DIRECTORY / BUILD_DIRECTORY
+        function = value.build_kernel(cache, include_paths=include_paths)
+        object.__setattr__(value, "function", function)
+        return value
+
+    @abstractmethod
+    def build_kernel(
         self,
         build_root: Path = BUILD_DIRECTORY,
         *,
         include_paths: Sequence[Path] = (),
         strides: Mapping[tuple[str, str], tuple[int, ...]] | None = None,
-    ):
-        """Build in this process; serialized kernels contain no runtime handles."""
-        object.__setattr__(self, "function", None)
-        from klineage.artifact.bundle import BundleLoader
+        workload: Mapping[str, Any] | None = None,
+    ) -> Callable[..., Any]:
+        """Build this tree and return its entry callable without attaching it.
 
-        function = BundleLoader(build_root, include_paths=include_paths).build(
-            self, strides=strides
-        )
-        object.__setattr__(self, "function", function)
+        Args:
+            build_root: Directory for staged sources and build outputs.
+            include_paths: External compiler include directories.
+            strides: Optional tensor element strides keyed by ``(role, name)``,
+                with role ``input`` or ``output``, for the entry adapter.
+            workload: Optional workload used to bind the entry's tensor ABI.
+                Without a binding, dynamic axes are inferred from call inputs.
 
-    def __call__(self, *inputs: Any) -> Any:
-        if self.function is None:
-            raise RuntimeError("Kernel is not built; use from_sources() or build()")
-        return self.function(*inputs)
+        Returns:
+            An entry callable accepting the problem's ordered inputs. Subclasses
+            own compilation and loading; ``load_kernel`` stores this callable.
+        """
+        raise NotImplementedError
 
     @property
-    def fingerprint(self) -> str:
-        value = {
-            "problem": self.problem.to_dict(),
-            "definition_io": [
-                list(self.problem.definition[role]) for role in ("inputs", "outputs")
-            ],
-            "source_files": dict(sorted(self.source_files.items())),
-        }
-        return hashlib.sha256(
-            json.dumps(
-                value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-            ).encode()
-        ).hexdigest()
+    def validation(self):
+        """Return stored measurements, or ``None`` when no validation is attached."""
+        value = json.loads(raw_text(self.node(KERNEL_METADATA)))["validation"]
+        return restore(value, ValidationResult) if value is not None else None
 
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize sources, problem, and validation; omit compiled runtime handles."""
-        payload = {
-            "name": self.name,
-            "problem": self.problem.to_dict(),
-            "source_files": dict(sorted(self.source_files.items())),
-            "validation": self.validation.to_dict() if self.validation else None,
-        }
-        if self.compile_flags:
-            payload["compile_flags"] = list(self.compile_flags)
-        return payload
+    def __call__(self, *inputs: Any) -> Any:
+        """Run with ordered problem inputs and return outputs.
 
-    @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> Kernel:
-        """Restore serialized Kernel metadata without building or executing sources."""
-        validation = value.get("validation")
-        return cls(
-            name=value["name"],
-            problem=ProblemSpec.from_dict(mapping(value["problem"], "kernel problem")),
-            source_files=mapping(value["source_files"], "kernel source_files"),
-            compile_flags=tuple(value.get("compile_flags") or ()),
-            validation=ValidationResult.from_dict(
-                mapping(validation, "kernel validation")
+        Destination-passing outputs are allocated by the adapter. Raises
+        ``RuntimeError`` if the kernel has not been built.
+        """
+        if self.function is None:
+            raise RuntimeError("Kernel is not built; use its backend's load_kernel()")
+        return self.function(*inputs)
+
+
+def kernel_layouts(kernel_type: type[Kernel]) -> tuple[Node, ...]:
+    """Define native, source-free and Python-entry layouts for a Kernel type."""
+    native = kernel_type.kernel_spec()
+    if not isinstance(native, Node):
+        raise TypeError("kernel_spec must return a Node")
+    python_entry = native.with_child(Node.directory(SUBMISSION_DIRECTORY.name, (
+        Node.file(BUNDLE_CONFIG, description='Python host entry: language="python", entry_point="kernel.py::run".'),
+        Node.directory(BUNDLE_SOLUTION, (Node.file("kernel.py", description="Python host entry."),)),
+    )))
+    return native, KERNEL, python_entry
+
+
+def capture_kernel(path: Path) -> Node:
+    """Read a kernel directory with inline metadata and bounded inline sources."""
+    root = Path(path).expanduser().absolute()
+    with safe_directory(root):
+        pass
+    sources = read_source_tree(root / SUBMISSION_DIRECTORY, "submission")
+
+    def read(path: Path, relative: Path) -> Node:
+        if path.is_symlink():
+            raise ValueError(f"kernel cannot contain symlinks: {path}")
+        if path.is_dir():
+            with safe_directory(path) as directory:
+                names = sorted(os.listdir(directory))
+            return Node.directory(
+                path.name if relative.parts else ".",
+                (read(path / name, relative / name) for name in names),
             )
-            if validation is not None
-            else None,
-        )
+        with safe_file(path) as stream:
+            data = stream.buffer.read()
+        if relative == Path(KERNEL_METADATA):
+            return Node.file(path.name, data.decode("utf-8"))
+        if relative.is_relative_to(SUBMISSION_DIRECTORY):
+            name = relative.relative_to(SUBMISSION_DIRECTORY).as_posix()
+            content = data.decode("utf-8")
+            if sources.get(name) != content:
+                raise ValueError(f"submission changed while reading: {relative}")
+            return Node.file(path.name, content)
+        if len(data) <= MAX_INLINE_BYTES:
+            try:
+                content = data.decode("utf-8")
+                if "\0" not in content:
+                    return Node.file(path.name, content)
+            except UnicodeDecodeError:
+                pass
+        return Node.file(path.name, reference=FileRef(
+            str(path), hashlib.sha256(data).hexdigest(), len(data),
+        ))
+
+    return read(root, Path())
 
 
-@agent_function
-def save_kernel(kernel: Kernel, workdir: Path) -> None:
-    """Write kernel.json in an existing workdir, replacing its prior metadata.
-
-    Serializes the Kernel's sources, problem, and validation; it does not reread
-    edited disk sources or compile. Reconstruct the Kernel after source edits.
-    """
-    path = workdir / KERNEL_FILE
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(kernel.to_dict(), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(path)
-
-
-@agent_function
-def load_kernel(workdir: Path) -> Kernel:
-    """Restore kernel.json from a directory without compiling or running it.
-
-    Returns a Kernel with embedded sources and problem. Evaluation builds it in
-    a worker; call Kernel.build before direct execution in this process.
-    """
-    return Kernel.from_dict(
-        json.loads((workdir / KERNEL_FILE).read_text(encoding="utf-8"))
-    )
+def latest_kernel(work: Path) -> Path:
+    """Return the highest numbered kernel directory without following links."""
+    root = Path(work).expanduser().absolute() / KERNELS_DIRECTORY
+    versions = []
+    with safe_directory(root) as directory:
+        for name in os.listdir(directory):
+            if not name.isascii() or not name.isdecimal() or str(int(name)) != name:
+                continue
+            info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError(f"kernel version must be a real directory: {root / name}")
+            versions.append(int(name))
+    if not versions:
+        raise FileNotFoundError(f"no kernel versions in {root}")
+    return root / str(max(versions))
 
 
-__all__ = ["Kernel", "ValidationResult", "load_kernel", "save_kernel"]
+def next_version(work: Path) -> int:
+    """Number the next kernel snapshot from zero, without reusing gaps."""
+    try:
+        return int(latest_kernel(work).name) + 1
+    except FileNotFoundError:
+        return 0
+
+
+def snapshot_kernel(kernel: Kernel, work: Path) -> Path:
+    """Publish a complete kernel file tree under work/kernels/<N>."""
+    root = Path(work).expanduser().absolute() / KERNELS_DIRECTORY
+    with safe_directory(root, DirectoryMode.CREATE) as directory:
+        # Serialize publishers; only complete trees receive a version number.
+        fcntl.flock(directory, fcntl.LOCK_EX)
+        number = str(next_version(work))
+        temporary = operation_id("kernel")
+        os.mkdir(temporary, mode=0o700, dir_fd=directory)
+        try:
+            pending = [(kernel.tree, root / temporary)]
+            while pending:
+                node, path = pending.pop()
+                if node.kind is NodeKind.FILE:
+                    with safe_file(path, "w") as stream:
+                        stream.buffer.write(raw_bytes(node))
+                    continue
+                with safe_directory(path, DirectoryMode.CREATE):
+                    pass
+                pending.extend((child, path / child.name) for child in node.children)
+            os.rename(temporary, number, src_dir_fd=directory, dst_dir_fd=directory)
+        finally:
+            with suppress(FileNotFoundError):
+                shutil.rmtree(temporary, dir_fd=directory)
+    return root / number

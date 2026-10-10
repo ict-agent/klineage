@@ -1,14 +1,12 @@
-"""Extract optimization SkillCards into a memory directory."""
+"""Extract optimization recipes and return a memory Artifact."""
 
-import json
-import os
-from collections.abc import Sequence
+import argparse
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
-from klineage.cli.common import (
-    argument_parser,
-    decompose_steps,
-)
+from klineage.action import Decompose, Init
+from klineage.artifact import Artifact, ArtifactKind, Node, nested
+from klineage.cli.common import action_arguments, add_run_options
 from klineage.constants import (
     MAX_DECOMPOSE_STEPS,
     MAX_RETRIES,
@@ -16,60 +14,101 @@ from klineage.constants import (
     TIMEOUT,
     RunKind,
 )
-from klineage.memory.storage import save_skill
+from klineage.harness import AgentRuntime
+from klineage.memory import SkillCard, save_skill
+from klineage.serialization import to_json
+from klineage.server import Client
 from klineage.utils import new_workdir, operation_id
 
 
 def init_memory(
-    problem: str | os.PathLike[str],
-    repo: str | os.PathLike[str],
-    expert_kernel: str | os.PathLike[str],
+    problem,
+    repo,
+    expert_kernel,
     max_decompose_step: int = MAX_DECOMPOSE_STEPS,
-    enable_verifier: bool = False,
     *,
     workdir: Path | None = None,
     timeout: int = TIMEOUT,
     max_retries: int = MAX_RETRIES,
-    memory_dir: str | os.PathLike[str],
-) -> tuple[Path, ...]:
-    """Extract skills into memory_dir and return their paths in removal order."""
-
+    memory_dir,
+    evaluation: Client | None = None,
+    agent: AgentRuntime | None = None,
+) -> Artifact:
     if type(max_decompose_step) is not int or max_decompose_step <= 0:
         raise ValueError("max_decompose_step must be a positive integer")
-
     workdir = Path(workdir or new_workdir(RunKind.INIT_MEMORY)).expanduser().resolve()
     memory_dir = Path(memory_dir).expanduser().resolve()
     workdir.mkdir(parents=True, exist_ok=False)
     memory_dir.mkdir(parents=True, exist_ok=True)
-
-    skill_paths = []
-    for _, card in decompose_steps(
+    children = []
+    for result in decompose_steps(
         problem,
         repo,
         expert_kernel,
         max_decompose_step,
-        enable_verifier,
         workdir=workdir,
         timeout=timeout,
         max_retries=max_retries,
+        evaluation=evaluation,
+        agent=agent,
     ):
-        if card is None:
+        if not any(node.name == "skillcard" for node in result.tree.children):
             continue
+        card = result.part("skillcard", SkillCard)
+        name = operation_id(card.skill_id)
+        # Publish each successful removal before starting the next action.
+        save_skill(card, memory_dir / name / SKILL_FILE)
+        children.append(nested(name, card))
+    tree = Node.directory(".", children, description="Reusable optimization skills.")
+    return Artifact.from_tree(ArtifactKind.MEMORY, tree)
 
-        # Save each passed step immediately; keep repeated IDs in separate directories.
-        destination = memory_dir / operation_id(card.skill_id) / SKILL_FILE
-        skill_paths.append(save_skill(card, destination))
 
-    return tuple(skill_paths)
+def decompose_steps(
+    problem,
+    repo,
+    expert_kernel,
+    max_decompose_step: int,
+    *,
+    workdir: Path,
+    timeout: int,
+    max_retries: int,
+    evaluation: Client | None = None,
+    agent: AgentRuntime | None = None,
+) -> Iterator[Artifact]:
+    current = Init(
+        problem,
+        repo,
+        expert_kernel,
+        workdir=workdir / RunKind.INIT,
+        timeout=timeout,
+        max_retries=max_retries,
+        evaluation=evaluation,
+        agent=agent,
+    ).run()
+    for step in range(max_decompose_step):
+        current = Decompose(
+            current,
+            workdir=workdir / RunKind.DECOMPOSE / str(step),
+            timeout=timeout,
+            max_retries=max_retries,
+            evaluation=evaluation,
+            agent=agent,
+        ).run()
+        yield current
+        if not any(node.name == "skillcard" for node in current.tree.children):
+            return
 
 
 def main(argv: Sequence[str] | None = None) -> None:
-    parser = argument_parser(__doc__)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--problem", required=True)
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--expert-kernel", required=True)
+    parser.add_argument("--max-decompose-step", type=int, default=MAX_DECOMPOSE_STEPS)
+    parser.add_argument("--workdir", type=Path, help="Fresh run directory")
+    add_run_options(parser)
     parser.add_argument("--memory-dir", type=Path, required=True)
-    parser.set_defaults(enable_verifier=False)
-    args = parser.parse_args(argv)
-    paths = init_memory(**vars(args))
-    print(json.dumps([str(path) for path in paths], ensure_ascii=False))
+    print(to_json(init_memory(**action_arguments(parser.parse_args(argv)))))
 
 
 if __name__ == "__main__":

@@ -9,16 +9,29 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from klineage.errors import ActionError
+from klineage.tools import agent_function
 
 
+@agent_function
 def stage_repository(
     repo: str | os.PathLike[str],
     destination: Path,
 ) -> Path:
     """Copy a local repository or shallow-clone a Git URL into a fresh destination.
 
-    Returns its resolved path. The destination must not exist; inspect and reuse
-    an intact staged repository on retries instead of calling this again.
+    Args:
+        repo: Existing local directory or Git URL.
+        destination: New directory to create. Local copies omit VCS metadata,
+            ``.venv``, ``__pycache__`` and ``.klineage``; symlinks are preserved.
+
+    Returns:
+        The resolved destination path. Reuse an intact staged repository on
+        retries instead of calling this function again.
+
+    Raises:
+        FileNotFoundError: A local source does not exist and is not a Git URL.
+        NotADirectoryError: A local source is not a directory.
+        ActionError: Git is unavailable or cloning fails.
     """
 
     raw = os.fspath(repo)
@@ -78,6 +91,7 @@ def repository_ignore(destination: Path):
 
 
 def looks_like_git_url(value: str) -> bool:
+    """Recognize HTTP(S), SSH, Git schemes and ``git@`` clone syntax."""
     parsed = urlparse(value)
     return parsed.scheme in {"http", "https", "ssh", "git"} or value.startswith("git@")
 

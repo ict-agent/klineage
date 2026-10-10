@@ -1,12 +1,25 @@
+import inspect
+import json
 import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from problem_fixtures import io_problem
+from kernel_fixtures import make_kernel, write_kernel
+from problem_fixtures import io_problem, problem_spec
 
-from klineage.artifact.kernel import Kernel
-from klineage.contract import ABIValue, OutputStyle
+from klineage.artifact import (
+    Kernel,
+    Node,
+    load_artifact,
+    load_problem,
+    save_artifact,
+)
+from klineage.backend import backends
+from klineage.backend.cuda import CudaKernel
+from klineage.serialization import from_json, to_json
 
 SOURCES = {
     "config.toml": """[solution]
@@ -25,44 +38,145 @@ class KernelBuildTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.problem = io_problem(
-            inputs=(ABIValue("x"),),
-            outputs=(ABIValue("result"),),
+            inputs={"x": {}},
+            outputs={"result": {}},
             language="python",
-            platform="cpu",
+            platform="sm120",
         )
+        self.current = make_kernel("increment", self.problem, SOURCES)
+        self.directory = write_kernel(self.current, self.root / "kernel")
 
-    def test_build_returns_callable(self):
-        current = Kernel.from_sources(SOURCES, self.problem, build_root=self.root)
+    def test_abstract_interfaces(self):
+        self.assertEqual(Kernel.__abstractmethods__, {"kernel_spec", "build_kernel"})
+        self.assertFalse(hasattr(Kernel, "save_kernel"))
+        self.assertEqual(
+            set(inspect.signature(CudaKernel.load_kernel).parameters),
+            {"build_root", "include_paths"},
+        )
+        with self.assertRaises(TypeError):
+            Kernel(self.current.tree)
+
+    def test_directory_load(self):
+        current = CudaKernel.load_kernel(build_root=self.directory)
         self.assertEqual(current(3), 4)
-        self.assertEqual(current.language, "python")
-        self.assertEqual(current.entry_point, "kernel.py::run")
-        self.assertEqual(current.source_path, "solution/kernel.py")
-        self.assertEqual(current.symbol, "run")
-        self.assertIs(current.output_style, OutputStyle.RETURN)
-
-    def test_restore_requires_build(self):
-        current = Kernel.from_sources(SOURCES, self.problem, build_root=self.root)
-        saved = current.to_dict()
-        self.assertEqual(set(saved), {"name", "problem", "source_files", "validation"})
-        restored = Kernel.from_dict(saved)
-        self.assertIsNone(restored.function)
-        with self.assertRaisesRegex(RuntimeError, "built"):
-            restored(3)
-        restored.build(self.root)
-        self.assertEqual(restored(3), current(3))
-        self.assertEqual(restored.fingerprint, current.fingerprint)
-
-    def test_changed_sources_need_build(self):
-        current = Kernel.from_sources(SOURCES, self.problem, build_root=self.root)
-        changed = replace(
-            current,
-            source_files={**SOURCES, "solution/kernel.py": "def run(x): return x + 2"},
+        self.assertEqual(load_problem(current), self.problem)
+        self.assertEqual(
+            {p.name for p in self.directory.iterdir()}, {"metadata.json", "submission"}
         )
-        self.assertIsNone(changed.function)
-        changed.build(self.root)
-        self.assertEqual((current(3), changed(3)), (4, 5))
+        self.assertNotIn("problem", {node.name for node in current.tree.children})
 
-    def test_build_failure_propagates(self):
-        sources = {**SOURCES, "solution/kernel.py": "def run(:"}
+    def test_json_is_separate_data(self):
+        current = CudaKernel.load_kernel(self.directory)
+        path = save_artifact(current, self.root / "snapshot.json")
+        restored = load_artifact(path, type(self.current))
+        self.assertIsInstance(restored, CudaKernel)
+        self.assertIsNone(restored.function)
+        self.assertEqual(restored, current)
+        self.assertEqual(from_json(to_json(current), type(current)), current)
+        self.assertFalse((self.directory / "artifact.json").exists())
+
+    def test_load_changed_files(self):
+        current = CudaKernel.load_kernel(self.directory)
+        (self.directory / "submission/solution/kernel.py").write_text(
+            "def run(x): return x + 2"
+        )
+        loaded = Kernel.load_kernel(self.directory)
+        self.assertEqual((current(3), loaded(3)), (4, 5))
+
+    def test_failed_reload_is_isolated(self):
+        current = CudaKernel.load_kernel(self.directory)
+        (self.directory / "submission/solution/kernel.py").write_text("def run(:")
         with self.assertRaises(SyntaxError):
-            Kernel.from_sources(sources, self.problem, build_root=self.root)
+            CudaKernel.load_kernel(self.directory)
+        self.assertEqual(current(3), 4)
+
+    def test_subtree_type_error(self):
+        entry = self.directory / "submission/solution/kernel.py"
+        entry.unlink()
+        solution = entry.parent
+        solution.rmdir()
+        solution.write_text("not a directory")
+        with (
+            patch.object(CudaKernel, "build_kernel") as build,
+            self.assertRaisesRegex(
+                ValueError, "submission/solution: expected directory"
+            ),
+        ):
+            CudaKernel.load_kernel(self.directory)
+        build.assert_not_called()
+
+    def test_config_error_path(self):
+        (self.directory / "submission/config.toml").write_text("[broken")
+        with self.assertRaisesRegex(ValueError, "submission/config.toml"):
+            CudaKernel.load_kernel(self.directory)
+
+    def test_missing_entry_path(self):
+        (self.directory / "submission/solution/kernel.py").unlink()
+        with self.assertRaisesRegex(
+            ValueError, "submission/solution/kernel.py: missing"
+        ):
+            CudaKernel.load_kernel(self.directory)
+
+    def test_problem_reference_error(self):
+        metadata = json.loads((self.directory / "metadata.json").read_text())
+        metadata["problem"]["path"] = str(self.root / "missing-problem")
+        (self.directory / "metadata.json").write_text(json.dumps(metadata))
+        with (
+            patch.object(CudaKernel, "build_kernel") as build,
+            self.assertRaisesRegex(ValueError, "metadata.json/problem:"),
+        ):
+            CudaKernel.load_kernel(self.directory)
+        build.assert_not_called()
+
+    def test_backend_interfaces(self):
+        for backend in backends():
+            cls = backend.kernel_type
+            with self.subTest(backend=backend.kind):
+                self.assertIsInstance(cls.kernel_spec(), Node)
+                current = make_kernel(
+                    "test",
+                    problem_spec(language=backend.language, platform=backend.kind),
+                    {cls.kernel_spec().child("submission/solution").children[0].name: "// source"},
+                )
+                directory = write_kernel(current, self.root / backend.kind)
+                with patch.object(
+                    cls, "build_kernel", return_value=lambda x: x + 1
+                ) as build:
+                    loaded = cls.load_kernel(directory)
+                build.assert_called_once_with(
+                    self.root / ".klineage/build", include_paths=()
+                )
+                self.assertEqual(loaded(3), 4)
+
+    def test_generic_backend_spec(self):
+        class ExtendedKernel(CudaKernel):
+            artifact_kind = "kernel.cuda.test_build"
+
+            @classmethod
+            def kernel_spec(cls):
+                schema = super().kernel_spec()
+                return replace(schema, children=(
+                    *schema.children, Node.file("notes.txt", description="Backend notes."),
+                ))
+
+
+        notes = self.directory / "notes.txt"
+        notes.write_text("platform-specific metadata")
+        backend = SimpleNamespace(kernel_type=ExtendedKernel)
+        with (
+            patch("klineage.backend.get_backend", return_value=backend),
+            patch.object(ExtendedKernel, "build_kernel", return_value=lambda x: x + 1),
+        ):
+            loaded = Kernel.load_kernel(self.directory)
+            self.assertIsInstance(loaded, ExtendedKernel)
+            self.assertEqual(loaded.node("notes.txt").content, notes.read_text())
+            self.assertEqual(loaded(3), 4)
+            notes.unlink()
+            with self.assertRaisesRegex(ValueError, "notes.txt: missing"):
+                Kernel.load_kernel(self.directory)
+
+    def test_wrong_backend_rejected(self):
+        from klineage.backend.ascend import AscendKernel
+
+        with self.assertRaisesRegex(ValueError, "metadata.json/problem: target"):
+            AscendKernel.load_kernel(self.directory)

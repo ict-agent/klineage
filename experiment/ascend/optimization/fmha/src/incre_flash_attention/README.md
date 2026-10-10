@@ -1,5 +1,8 @@
 # IncreFlashAttention
 
+本文随 CANN ops-transformer 源码快照保留，版本见 [UPSTREAM_COMMIT](../../UPSTREAM_COMMIT)。
+下述接口与产品范围属于上游算子；本仓库 wrapper 的范围和复现入口见 [FMHA 实验说明](../../README.md)。
+
 ## 产品支持情况
 
 |产品      | 是否支持 |

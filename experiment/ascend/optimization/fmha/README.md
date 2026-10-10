@@ -1,5 +1,8 @@
 # FMHA：Packed-NHD Attention
 
+本目录保留论文实验的独立复现包及上游源码快照，不是当前框架的 Kernel Tree 提交目录。
+以下命令、依赖和计时口径属于该实验；`src/` 内上游 README 的接口范围不等同于本包 wrapper 的范围。
+
 Ascend 910B1 上的 FP16 packed attention Artifact，包含源码、Python wrapper、构建脚本、正确性测试和一键 benchmark。支持运行时 shape 分派：对齐输入使用常驻 UB 的 FIA 路径，其他输入使用独立的官方通用 attention 路径。
 
 ## 1. 算子定义与支持范围

@@ -1,0 +1,153 @@
+# Overview
+
+Make one atomic, replayable deoptimization of the current kernel: remove one
+optimization actually present in its code, preserve the operator contract, and
+emit a SKILL.md explaining the removed optimization.
+If the input is already naive, skip deoptimization.
+
+The input kernel is: {{ input_kernel | tojson }}
+
+Given artifacts are read-only; your current working directory holds this step's
+outputs. Preserve the complete input problem, including its numerical requirements.
+
+Artifact output contract, generated from the annotated tree:
+{{ raw_text(action_spec("decompose")) }}
+
+{% set target_language = artifact_language(input_kernel) %}
+{% include "backend.j4" %}
+
+- Use .agents/skills/bench/SKILL.md for harness measurements.
+- Follow the Artifact contract above. Keep SKILL.md outside the submission/ subtree.
+- If the input is already naive, evaluate it unchanged and emit no SKILL.md.
+  The client saves its complete Kernel automatically. Never invent a removal to fill a step.
+
+You should follow the following schema when emitting SKILL.md:
+{{ raw_text(SkillCard.schema) }}
+
+{% if target_language == "cuda" %}
+This CUDA-only GEMM example illustrates the card format. Its memory spaces,
+thread mapping, and instructions are not prerequisites for HIP or AscendC cards.
+{% include "cuda/decompose_gemm.j4" %}
+{% endif %}
+
+# Procedure
+
+1. Read the skills and tree contracts above. Import Artifact, Kernel and
+   load_artifact from klineage.artifact, and from_json from klineage.serialization.
+   Load Kernel directories or JSON files with load_artifact(path, Kernel), and
+   inline Kernel JSON with from_json(text, Kernel). Restore action JSON as
+   Artifact and select part("kernel", Kernel). For an action directory, load
+   its last numbered kernels/<N> directory. Keep this Kernel as input.
+   Inspect the complete
+   bundle, config, ABI, launch path, and device code. Identify computation, data
+   movement, layouts, synchronization, and scheduling patterns.
+   If the input is already naive, emit no SKILL.md; skip steps 2-5.
+   Evaluate the unchanged input once; the client appends its complete saved version.
+   Perform the naive source audit under Progress and termination below, then finish.
+
+2. Choose one semantic transformation to undo. Remove dependent mechanisms before
+   their prerequisites. Include layout/thread-mapping changes necessary to remove
+   that mechanism; retain independent strategies. MMA includes its required
+   operand/fragment adapters. Pipeline scheduling includes its async copies,
+   stages, buffer rotation, and producer/consumer ordering. Independently removable
+   swizzles and CTA/L2 ordering remain separate mechanisms. Before removing a
+   transfer, peel off independent descriptor prefetch and nondefault cache policies
+   that depend on it. Their API disappearing with the transfer does not make them
+   part of the same optimization. Stage counts, compiler hints, and helper-loop
+   choices belong in the recipe, not separate skills.
+   Do not split tile 128 -> 64 -> 32 or vector width 4 -> 2 -> 1 into repeated cards.
+
+3. Write the complete deoptimized kernel under kernel/submission/. Preserve the input problem,
+   language, precision, required accumulation order/rounding, and output semantics.
+   Use native computation without expert-library calls for native input.
+   Preserve its problem directory reference and compile_flags in kernel/metadata.json.
+   After source changes, submit the current directory through client.evaluate;
+   the returned reply.kernel is deoptimized_kernel for the SkillCard recipe.
+
+4. Create one SkillCard named card explaining how to apply the removed optimization
+   to deoptimized_kernel. Write intent as one brief sentence describing the removed
+   optimization technique. Write the Markdown sections in body, including the
+   implementation steps, focused code snippets, and checks.
+   Specify the code location, ownership,
+   layouts, synchronization, launch changes, and parameters needed to restore the
+   mechanism. Derive scope and preconditions from the actual problem and deoptimized
+   code: data types; layout, contiguity, and data-to-parallel-unit mapping; storage
+   placement; pipeline stages and ordering; required hardware features and capacity.
+   Separate necessary dependencies from preserved instance settings before writing.
+   Write the same dependency set in YAML preconditions and # Precondition, with a
+   reason for each. Put concrete replay parameters and unrelated retained features
+   under Overview / Example configuration. Introduced changes belong in body.
+   The recipe must work from deoptimized_kernel and its problem alone;
+   do not copy the complete input kernel or require upstream source paths.
+   End body with a Code Change Snippet section showing focused Before and After code
+   for the forward optimization, as specified in the SkillCard template.
+
+5. The client automatically saves the evaluated Kernel. Use klineage.memory.save_skill
+   to write card to SKILL.md. Keep four top-level YAML metadata fields and the
+   independent Markdown body. Finish with the accepted deoptimized Kernel as the
+   latest saved version. Never synthesize validation in metadata.json.
+
+# Validation
+
+For a removal, perform all checks below. For an unchanged naive input, run only
+Correctness and timing once and the Progress and termination source audit.
+Do not invoke other actions or generate a forward roundtrip here.
+
+**Correctness and timing.** Use client.evaluate(input, Path.cwd()) and
+client.evaluate(Path("kernel"), Path.cwd()) without reference. Require both results
+to be accepted. A deoptimized kernel may be slower; do not apply a relative speed floor
+to it. Read measurements from reply.validation; Kernels are saved automatically.
+For an unchanged terminal input, evaluate it once.
+Never relax tolerances, reduce a workload, or remove workloads to make a naive kernel pass.
+Every registered workload must pass; keep per-UUID results from reply.validation.workloads.
+Use the evaluation service for official correctness and timing evidence.
+Read reply.diagnostics. Any separate diagnostic scripts remain exploratory
+and cannot replace service measurements.
+
+**Atomicity and replayability.** For a removal, compare input and deoptimized_kernel at cited
+source locations: exactly one optimization is absent, required adaptations
+are explained, and other mechanisms remain. Read SKILL.md as an agent given only
+deoptimized_kernel and its problem. Check that it specifies how to restore the
+optimization without reading the target source. Require that
+klineage.memory.load_skill(Path.cwd() / "SKILL.md") restores the same card,
+including its Markdown instructions, scope, and preconditions.
+When compilation can restore the removed mechanism, inspect generated code for
+that mechanism. Source changes alone do not establish removal: unrolled loops
+may fuse again, repeated loads may be eliminated, and scalar operations may pack.
+If it survives, revise the removal or choose another mechanism; explain any
+required compiler-control changes in the recipe. Do not infer this from timing.
+
+**Skill prerequisites.** For a removal, audit the saved card semantically:
+
+- Read YAML preconditions and the entire # Precondition section separately.
+- Keep all five categories explicit in both: Data types, Layout, Storage, Pipeline,
+  and Hardware. State and explain when a category has no additional requirement.
+- Check Pipeline for producer/consumer ordering, visibility, and safe buffer reuse,
+  even if synchronization is unchanged. Do not infer a required stage count.
+- For each condition, name an operation or hardware rule in this transformation
+  that fails without it. A retained kernel feature alone does not justify it.
+- Ask whether changing the value invalidates the technique or just needs adapted
+  indexing, launch parameters, or snippets. Put example settings in Overview.
+- Check every number, dtype, instruction, and pipeline feature in both places.
+  Keep intrinsic constraints with reasons; remove accidental instance restrictions.
+- Explain the dependency reasons and moved instance settings in the final response.
+  Fix the card before finishing. Card-only edits do not require another kernel run.
+
+Serialization roundtrip does not validate these semantics.
+
+**Finish.** Once these checks pass and the final artifacts are consistent, finish.
+Additional source or disassembly inspection must resolve a stated uncertainty about
+the removed mechanism. Repeat checks only after relevant source changes, a failed
+check, or new evidence. A missing slowdown is not a reason to retune or remeasure.
+
+**Progress and termination.** A naive kernel directly implements the operator
+without removable software optimizations. For CUDA/HIP GEMM, each thread computes one output
+from global memory with scalar arithmetic: no shared-memory reuse, register tiling,
+MMA, async pipeline, swizzle, or persistent scheduler. ABI checks, bounds checks,
+ordinary parallel execution, and numerically required rounding remain necessary.
+For AscendC, establish the simplest legal implementation on its execution units;
+required local-memory transfers or Cube/vector instructions are not removable merely
+because a CUDA scalar baseline lacks them. For other operators, justify the
+equivalent direct implementation from source.
+Preserve required numerical behavior even when it needs scalar reduction grouping.
+Explain this audit in the final response; a step number or failed attempt is not completion evidence.

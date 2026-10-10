@@ -1,110 +1,43 @@
 # KLineage
 
-KLineage extracts reusable optimization skills from expert accelerator kernels.
-Codex removes one optimization per Decompose step and saves it as `SKILL.md`.
-The full workflow uses those skills to guide kernel optimization rounds.
+Generate accelerator kernels and reuse optimization skills.
 
-Supports CUDA, Hygon HIP, and AscendC.
+[Documentation](https://qiuchu.site/project/klineage/) · [API reference](https://qiuchu.site/project/klineage/reference/artifacts.html)
 
-## Paper
+## Quick start
 
-*KLineage: Recovering the Missing When of Kernel Optimization by Deoptimizing
-Experts* — [`KLineage.pdf`](KLineage.pdf).
-
-[`docs/ARTIFACTS.md`](docs/ARTIFACTS.md) maps every number the paper reports to
-the directory that holds it.
-
-## Repository
-
-| Path | Contents |
-| --- | --- |
-| `src/klineage/` | Framework: actions, harness, memory, messages, per-language skills |
-| `problems/` | Five problem definitions, workloads, and fixed input samples |
-| `skillcards/` | Induced CUDA skill cards, one `SKILL.md` per optimization |
-| `experiment/` | Transfer runs, one directory per timestamped run |
-| `docs/` | Where the paper's results live |
-| `tests/` | Test suite |
-
-## Build
-
-Requires Python 3.12+, uv, Codex, and the backend's hardware, toolchain, and
-PyTorch runtime. CUDA evaluation requires FlashInfer with CUPTI 13+.
+Requires Python 3.12+, uv, Codex and Linux bubblewrap with user namespaces.
+From the repository root, install the CLI with one backend:
 
 ```bash
-uv venv --system-site-packages
-uv sync
-uv build
-codex login
+uv tool install '.[cuda]' --python 3.12
 ```
 
-## CLI
+Use `.[ascend]` or `.[hygon]` for those backends. Each extra installs its Python
+dependencies; configure the matching system driver and toolchain separately.
+See [runtime requirements](docs/getting-started.md).
+If the commands are not on PATH, run `uv tool update-shell` and reopen the terminal.
 
-Choose a [problem](problems/README.md) and replace the expert paths below.
-
-Extract skills into a memory directory. Verification defaults to off; stdout is
-a JSON array of saved SKILL.md paths.
+Model and provider settings default to `$CODEX_HOME/config.toml`
+(`~/.codex/config.toml` when `CODEX_HOME` is unset). These overrides are optional:
 
 ```bash
-uv run klineage-init-memory \
-  --problem problems/definitions/gemm.json \
-  --repo /path/to/expert-repo \
-  --expert-kernel path/inside/repo/kernel.cu \
-  --memory-dir memory \
-  --workdir agent-workspace/extract
+export KLINEAGE_API_BASE_URL=https://provider.example/v1
+export KLINEAGE_API_KEY_ENV=MODEL_API_KEY
+export KLINEAGE_MODEL=provider-model-id
 ```
 
-Run extraction followed by kernel optimization rounds. Verification defaults
-to on; stdout is the final kernel as JSON.
+When overriding the key variable, populate `MODEL_API_KEY` on the host.
+
+Generate a kernel from a problem directory containing `definition.json` and
+at least one workload in `workloads.jsonl`:
 
 ```bash
-uv run klineage-workflow \
-  --problem problems/definitions/gemm.json \
-  --repo /path/to/expert-repo \
-  --expert-kernel path/inside/repo/kernel.cu \
-  --workdir agent-workspace/run \
-  --max-decompose-step 15 \
-  --max-apply-step 15
+klineage-generation problems/gemm \
+  --workdir agent-workspace/gemm --timeout 600
 ```
 
-Optimize an existing kernel using a memory directory:
-
-```bash
-uv run klineage-optimize \
-  --start_kernel agent-workspace/run/decompose/0 \
-  --memory_dir memory \
-  --workdir agent-workspace/optimize
-```
-
-Omit `--memory_dir`, or pass an empty/whitespace value, to run the independent
-optimization baseline:
-
-```bash
-uv run klineage-optimize \
-  --start_kernel agent-workspace/run/decompose/0 \
-  --workdir agent-workspace/baseline
-```
-
-Each Apply round can combine techniques and iterate on measured results. Memory
-provides optional guidance; an empty directory does not stop optimization. Apply
-emits the best validated kernel, without SKILL.md. An unchanged kernel ends the
-loop; `--max-apply-step` limits rounds.
-
-The input is a `kernel.json` file or its directory, with the complete problem and
-source bundle; a bare source directory is insufficient. When supplied, memory is
-read through `.agents/skills/memory`. CUDA/NCU counter profiling is optional. Optimize
-enables verification by default and writes the final kernel as JSON to stdout.
-Every handoff preserves the problem and ordered input/output ABI, including when
-verification is disabled.
-
-Workdirs must not already exist. Extraction and workflow generate one if omitted;
-optimize requires `--workdir`, outside the memory directory when one is supplied.
-Use `--verifier` / `--no-verifier` to override verification defaults.
-
-```bash
-uv run klineage-init-memory --help
-uv run klineage-workflow --help
-uv run klineage-optimize --help
-```
-
-See the [workflow contract](src/klineage/message/workflow.md) for artifacts,
-stop rules, and failure handling.
+By default, the command detects the backend and starts local evaluation. Add
+`--server http://127.0.0.1:9100` to use an existing evaluator. It prints the accepted
+Kernel as JSON; sources and per-workload results remain under `kernels/`.
+See [Getting started](docs/getting-started.md) for setup and output details.

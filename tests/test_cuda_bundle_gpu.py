@@ -2,14 +2,15 @@
 
 import os
 import unittest
-from dataclasses import replace
 
+from kernel_fixtures import load_entry, make_kernel, write_kernel
 from problem_fixtures import io_problem
 from test_cuda_bundle import BundleCase
 
-from klineage.artifact.kernel import Kernel
-from klineage.artifact.source import read_source_tree
-from klineage.harness.codex_runner import SKILL_ROOT
+from klineage.artifact import source_files
+from klineage.artifact.tree import read_source_tree
+from klineage.backend import get_backend
+from klineage.backend.cuda import CudaKernel
 
 RUN_CUDA = os.environ.get("KLINEAGE_CUDA_TESTS") == "1"
 SIZE = 1027
@@ -21,24 +22,20 @@ class CudaBundleExecutionTests(BundleCase):
         super().setUp()
         import torch
 
-        from klineage.contract import ABIValue
-
         self.torch = torch
-        value = ABIValue("x", "float32", (SIZE,), description="Contiguous CUDA tensor.")
+        value = {"dtype": "float32", "shape": [SIZE], "description": "Contiguous CUDA tensor."}
         self.problem = io_problem(
-            inputs=(value,), outputs=(replace(value, name="output"),)
+            inputs={"x": value}, outputs={"output": value}
         )
 
     def test_cuda_skill_example(self):
         # Compile the skill's shipped files, including its actual ABI checks.
-        files = read_source_tree(SKILL_ROOT / "cuda/assets/add_one", "example")
-        kernel = Kernel.from_sources(
-            files, self.problem, build_root=self.root / "build"
-        )
+        files = read_source_tree(get_backend("cuda").skill_root / "assets/add_one", "example")
+        kernel = CudaKernel.load_kernel(write_kernel(make_kernel("add-one", self.problem, files), self.root / "kernel"))
         self.check(kernel)
 
         # Call pybind11 directly to exercise the example's own ABI checks.
-        run = self.loader.load(kernel)
+        run = load_entry(self.loader, kernel)
         torch = self.torch
         x = torch.arange(SIZE, device="cuda", dtype=torch.float32)
         y = torch.empty_like(x)
@@ -65,8 +62,13 @@ class CudaBundleExecutionTests(BundleCase):
         kernel = self.kernel(
             {"kernel.py": "def run(x): return x + 1"}, entry="kernel.py::run"
         )
-        current = Kernel.from_sources(
-            kernel.source_files, self.problem, build_root=self.root / "build"
+        current = CudaKernel.load_kernel(
+            write_kernel(
+                make_kernel(
+                    "python", self.problem, source_files(kernel.node("submission"))
+                ),
+                self.root / "kernel",
+            )
         )
         self.check(current)
 

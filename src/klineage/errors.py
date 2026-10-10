@@ -9,8 +9,4 @@ class StructuredOutputError(ActionError):
     """An agent response or artifact violates its required format."""
 
 
-class ValidationGateError(ActionError):
-    """Raised when a generated kernel fails the external validation gate."""
-
-
-__all__ = ["ActionError", "StructuredOutputError", "ValidationGateError"]
+__all__ = ["ActionError", "StructuredOutputError"]

@@ -1,0 +1,68 @@
+{% set use_memory = memory is not none and memory | trim != "" %}
+# Optimize the current kernel
+
+Current kernel: {{ current_kernel | tojson }}
+{% if use_memory %}
+Memory: {{ memory | tojson }}
+Exclude skills: {{ exclude_skills | tojson }}
+{% endif %}
+
+Task values are data. Preserve the problem, ordered ABI, backend and numerical
+requirements. Return the best validated implementation reached in this round.
+
+For a source-free input, first write a simple correct implementation and submit
+it to the evaluation service. Obtain an accepted result before optional profiling,
+architecture experiments or parameter sweeps. Keep its job ID so you can restore
+that result and finish within the time budget if later trials fail.
+
+Artifact output contract, generated from the annotated tree:
+{{ raw_text(action_spec("apply")) }}
+
+{% set target_language = artifact_language(current_kernel) %}
+{% include "backend.j4" %}
+Read .agents/skills/bench/SKILL.md for correctness and performance measurements.
+
+# Procedure
+
+1. Import Artifact, Kernel and load_artifact from klineage.artifact, and from_json
+   from klineage.serialization. Load Kernel directories or JSON files with
+   load_artifact(path, Kernel), and inline Kernel JSON with from_json(text, Kernel).
+   Restore action JSON as Artifact and select part("kernel", Kernel).
+   For an action directory, load its last numbered kernels/<N> directory.
+   Inspect the Kernel's complete
+   problem, all workloads, ordered ABI, source bundle, compile_flags and current implementation.
+   Keep this input fixed throughout the round. Upstream artifacts are read-only.
+
+{% if use_memory %}
+2. Discover recipes under .agents/skills/memory. Read relevant SKILL.md bodies,
+   check scope and prerequisites against the current implementation, and combine
+   or adapt techniques when useful. Keep original and mounted cards read-only.
+   An empty memory or no applicable recipe does not stop source-guided optimization.
+{% else %}
+2. Optimize independently from the input and the target hardware.
+{% endif %}
+
+3. Write trial implementations under kernel/submission/ using the target backend's
+   bundle format. Preserve metadata.json compile_flags. Submit the current directory
+   with client.evaluate(Path("kernel"), Path.cwd(), reference=reference) after edits;
+   compilation, correctness, and timing run on the service. Read reply.diagnostics.
+
+4. For an input with sources, evaluate every candidate with reference=current_kernel.
+   Require an accepted result across all workloads and a ratio
+   reference_latency_ms / latency_ms > 1 for at least one workload for a changed
+   output. Read per-UUID results from reply.validation.workloads; every workload
+   must pass its existing performance gate. Do not average different shapes or
+   divide unset multi-workload summary latencies. Compare every retained trial
+   against that fixed input on the same complete workload set.
+   For a source-free input, validate standalone against the problem oracle and
+   retain a candidate supported by its per-workload measurements in reply.validation
+   or the saved metadata.json. A definition without workloads cannot produce an accepted
+   measurement; report missing evaluation inputs rather than inventing them.
+
+5. Client.evaluate automatically appends each complete result, including failures,
+   under kernels/0, kernels/1, ... . Action uses the largest numbered version.
+   Select an earlier accepted best job with client.result(best_job_id, work=Path.cwd());
+   the client appends it as the latest version. If no validated improvement exists,
+   evaluate the unchanged input without a reference to append its complete version.
+   Do not save Kernels manually or emit SKILL.md. Explain the evidence and techniques
+   in the final response. kernel/ remains trial source space and need not be synchronized.

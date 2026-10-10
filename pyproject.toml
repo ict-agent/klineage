@@ -6,10 +6,62 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = ["jinja2>=3.1,<4", "pyyaml>=6,<7", "safetensors>=0.4,<1"]
 
+[project.optional-dependencies]
+cuda = [
+    "torch>=2.14.1,<2.15",
+    "flashinfer-python>=0.7.0.post1,<0.8",
+    "cupti-python>=13.0.1,<13.1",
+    "ninja>=1.13,<2",
+]
+ascend = [
+    "torch==2.9.0+cpu",
+    "torch-npu==2.9.0",
+    "numpy>=1.26,<3",
+]
+hygon = [
+    "torch==2.9.0+das.opt1.dtk2604",
+    "numpy>=1.26,<3",
+    "ninja>=1.13,<2",
+]
+
+[tool.uv]
+conflicts = [[{ extra = "cuda" }, { extra = "ascend" }, { extra = "hygon" }]]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu130", extra = "cuda" },
+    { index = "pytorch-cpu", extra = "ascend" },
+    { index = "hygon-dtk", extra = "hygon" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "hygon-dtk"
+url = "https://pypi.sourcefind.cn/release/dtk/+simple/"
+explicit = true
+
+[dependency-groups]
+docs = [
+    "mkdocs>=1.6,<2",
+    "mkdocs-material>=9.6,<10",
+    "mkdocstrings[python]>=0.30,<2",
+    "ruff>=0.14,<1",
+]
+
 [project.scripts]
+klineage-generation = "klineage.generation:main"
 klineage-init-memory = "klineage.cli.init_memory:main"
-klineage-workflow = "klineage.cli.workflow:main"
 klineage-optimize = "klineage.cli.optimize:main"
+klineage-server = "klineage.server.__main__:main"
 
 [build-system]
 requires = ["uv_build>=0.11.28,<0.12.0"]

@@ -1,0 +1,274 @@
+"""JSON handlers preserve wire formats without methods on domain objects."""
+
+import json
+import tempfile
+import unittest
+from dataclasses import dataclass
+from pathlib import Path
+from unittest.mock import patch
+
+from kernel_fixtures import accepted, kernel, measured, skill
+from problem_fixtures import problem_spec
+
+from klineage.artifact import (
+    Artifact,
+    FileRef,
+    Kernel,
+    Node,
+    ValidationResult,
+    file_ref,
+    json_node,
+)
+from klineage.backend import TimingPolicy, TimingResult
+from klineage.memory import Scope
+from klineage.serialization import (
+    SerializationHandler,
+    from_json,
+    raw_text,
+    register_handler,
+    restore,
+    to_json,
+)
+from klineage.server.protocol import Evaluation, source_digest, submission
+
+
+class SerializationTests(unittest.TestCase):
+    def test_raw_text_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "example.txt"
+            path.write_bytes(b"example\r\n")
+            reference = file_ref(path)
+            node = Node.file("example.txt", reference=reference)
+            for value in ("example\r\n", Node.file("inline.txt", "example\r\n"), reference, node):
+                with self.subTest(type=type(value).__name__):
+                    self.assertEqual(raw_text(value), "example\r\n")
+            self.assertEqual(raw_text(Node.file("empty.txt", "")), "")
+            path.write_bytes(b"altered\r\n")
+            with self.assertRaisesRegex(ValueError, "changed"):
+                raw_text(reference)
+        self.assertEqual(json.loads(raw_text(Node.directory(".")))["children"], [])
+
+    def test_raw_text_spec(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "example.txt"
+            path.write_text("a complete example")
+            reference = file_ref(path)
+            spec = Node.directory(".", (
+                Node.file("source.txt", description="Source.", one_shot=reference),
+            ), description="Sources.", one_shot=reference)
+            text = raw_text(spec)
+            data = json.loads(text)
+            self.assertEqual(data["one_shot"], "a complete example")
+            self.assertEqual(data["children"][0]["one_shot"], "a complete example")
+            self.assertEqual(spec.one_shot, reference)
+            path.unlink()
+            self.assertEqual(from_json(to_json(spec), Node), spec)
+            with self.assertRaisesRegex(ValueError, "regular file"):
+                raw_text(spec)
+
+    def test_dataclass_roundtrips(self):
+        values = (
+            FileRef("/missing/input", "0" * 64, 4),
+            Scope(languages=("cuda", "hip")),
+            TimingPolicy(warmup=1, repeat=2, trials=1),
+            TimingResult(((1.0, 2.0),), 1.5, "cupti", {"cupti_version": "13.0"}),
+        )
+        for value in values:
+            with self.subTest(type=type(value).__name__):
+                self.assertEqual(from_json(to_json(value), type(value)), value)
+
+    def test_node_wire_fields(self):
+        reference = FileRef("/missing/input", "0" * 64, 4)
+        node = Node.file("input.bin", reference=reference, one_shot=reference)
+        data = json.loads(to_json(node))
+        expected_ref = {"path": reference.path, "sha256": reference.sha256, "size": 4}
+        self.assertEqual(
+            data,
+            {
+                "name": "input.bin",
+                "kind": "file",
+                "description": "",
+                "one_shot": expected_ref,
+                "reference": expected_ref,
+            },
+        )
+        self.assertEqual(restore(data, Node), node)
+        with self.assertRaisesRegex(ValueError, "unknown tree node"):
+            restore(data | {"unknown": True}, Node)
+
+    def test_schema_roundtrip(self):
+        schema = Node.directory(
+            ".",
+            description="Report.",
+            children=(
+                Node.file(
+                    "result.txt",
+                    description="Result.",
+                    one_shot="example",
+                ),
+            ),
+        )
+        self.assertEqual(from_json(to_json(schema), Node), schema)
+        self.assertEqual(json.loads(raw_text(schema)), json.loads(to_json(schema)))
+
+    def test_artifact_types_and_format(self):
+        for value in (kernel(), problem_spec(), skill("tiling")):
+            with self.subTest(type=type(value).__name__):
+                data = json.loads(to_json(value))
+                self.assertEqual(set(data), {"artifact_type", "tree"})
+                self.assertFalse(hasattr(value, "version"))
+                generic = from_json(to_json(value), Artifact)
+                self.assertEqual(generic.tree, value.tree)
+                self.assertIs(type(generic), Artifact)
+                self.assertEqual(restore(data, type(value)), value)
+        with self.assertRaisesRegex(TypeError, "not a Kernel"):
+            from_json(to_json(problem_spec()), Kernel)
+        with self.assertRaisesRegex(ValueError, "envelope"):
+            restore({"artifact_type": "problem"}, Artifact)
+
+    def test_runtime_callable_is_omitted(self):
+        current = kernel()
+        object.__setattr__(current, "function", lambda value: value + 1)
+        restored = from_json(to_json(current), Kernel)
+        self.assertIsNone(restored.function)
+        self.assertEqual(restored, current)
+
+    def test_nested_single_encoding(self):
+        value = {"kernel": kernel(), "card": skill("α"), "policy": TimingPolicy()}
+        with (
+            patch("klineage.serialization.json.dumps", wraps=json.dumps) as encode,
+            patch(
+                "klineage.serialization.json.loads",
+                side_effect=AssertionError("unexpected decoding"),
+            ),
+        ):
+            text = to_json(value, indent=None)
+        encode.assert_called_once()
+        self.assertNotIn("\n", text)
+        self.assertIn("α", text)
+        self.assertEqual(json.loads(text)["policy"]["repeat"], 50)
+
+    def test_metadata_accepts_objects(self):
+        reference = FileRef("/missing/problem.json", "0" * 64, 4)
+        data = json.loads(
+            json_node(
+                "metadata.json",
+                {
+                    "problem": reference,
+                    "validation": accepted(),
+                },
+            ).content
+        )
+        self.assertEqual(data["problem"]["path"], reference.path)
+        self.assertEqual(data["validation"]["latency_ms"], 1.0)
+
+    def test_validation_report_fields(self):
+        leaf = accepted()
+        self.assertNotIn("workloads", json.loads(to_json(leaf)))
+        result = ValidationResult.combine({"small": leaf, "large": accepted(2.0)})
+        data = json.loads(to_json(result))
+        self.assertEqual(tuple(data["workloads"]), ("small", "large"))
+        self.assertIsNone(data["latency_ms"])
+        self.assertEqual(restore(data, ValidationResult), result)
+
+    def test_evaluation_transport(self):
+        current = kernel()
+        validation = measured(current)
+        metadata = json.loads(current.node("metadata.json").content)
+        current = type(current)(
+            current.tree.with_child(
+                json_node(
+                    "metadata.json",
+                    metadata | {"validation": validation},
+                )
+            )
+        )
+        result = Evaluation(
+            "job",
+            "problem",
+            source_digest("problem", submission(current)),
+            current,
+            validation,
+            {"worker.log": "measured"},
+        )
+        data = json.loads(to_json(result))
+        self.assertIsNone(data["error"])
+        self.assertEqual(restore(data, Evaluation), result)
+        metadata = next(
+            node
+            for node in data["kernel"]["tree"]["children"]
+            if node["name"] == "metadata.json"
+        )
+        metadata.pop("content")
+        metadata["reference"] = {
+            "path": "/private/metadata.json",
+            "sha256": "0" * 64,
+            "size": 4,
+        }
+        with patch(
+            "klineage.serialization.FileRefHandler.raw_text", side_effect=AssertionError("untrusted read")
+        ):
+            with self.assertRaisesRegex(ValueError, "must be inline"):
+                restore(data, Evaluation)
+
+    def test_scope_wire_validation(self):
+        with self.assertRaisesRegex(ValueError, "scope requires"):
+            restore({}, Scope)
+        with self.assertRaisesRegex(TypeError, "sequence"):
+            restore({"cases": "gemm", "languages": ["cuda"], "platforms": ["*"]}, Scope)
+
+    def test_custom_handler_inheritance(self):
+        @dataclass
+        class Label:
+            text: str
+
+        class DetailedLabel(Label):
+            pass
+
+        class LabelHandler(SerializationHandler):
+            def default(self, value):
+                return {"label": value.text}
+
+            def restore(self, data, object_type):
+                return object_type(data["label"])
+
+            def raw_text(self, value):
+                return value.text
+
+        register_handler(Label, LabelHandler())
+        value = DetailedLabel("compile")
+        self.assertEqual(json.loads(to_json(value)), {"label": "compile"})
+        self.assertEqual(from_json(to_json(value), DetailedLabel), value)
+        self.assertEqual(raw_text(value), "compile")
+        with self.assertRaisesRegex(ValueError, "already registered"):
+            register_handler(Label, LabelHandler())
+
+    def test_unregistered_type(self):
+        with self.assertRaisesRegex(TypeError, "no serialization handler"):
+            to_json(object())
+        with self.assertRaisesRegex(TypeError, "no serialization handler"):
+            restore({}, object)
+
+    def test_nonfinite_rejected(self):
+        for value in (float("nan"), float("inf"), -float("inf")):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                to_json({"value": value})
+
+    def test_methods_removed(self):
+        for object_type in (
+            Artifact,
+            Node,
+            FileRef,
+            Scope,
+            ValidationResult,
+            TimingPolicy,
+            TimingResult,
+            Evaluation,
+        ):
+            for name in ("to_dict", "to_json", "from_dict", "from_json", "describe", "read_text", "example", "annotate"):
+                with self.subTest(type=object_type.__name__, method=name):
+                    self.assertFalse(hasattr(object_type, name))
+
+
+if __name__ == "__main__":
+    unittest.main()

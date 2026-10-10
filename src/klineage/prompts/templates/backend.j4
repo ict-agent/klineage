@@ -1,0 +1,103 @@
+Read AGENTS.md for the registered Python interfaces and limits.
+{% if target_language is defined and target_language in ("cuda", "hip", "ascendc") %}
+{% for layout in kernel_layouts(get_backend(target_language).kernel_type) %}
+{{ raw_text(layout) }}
+{% endfor %}
+{% else %}
+{{ raw_text(KERNEL) }}
+{% endif %}
+{% if target_language is defined and target_language in ("cuda", "hip", "ascendc") %}
+Read .agents/skills/{{ target_language }}/SKILL.md for the native bundle, binding,
+and caller-stream contract. Preserve problem.language and problem.platform.
+{% elif target_language is defined and target_language == "python" %}
+Preserve config.toml with [solution] name, definition, author and [build] language="python".
+Retain the configured callable, entry_point, and destination_passing_style. Keep
+implementation files under solution/, ordered problem inputs/outputs, and device backend.
+{% else %}
+Read the native skill matching client.problem().language/platform:
+
+- CUDA / NVIDIA: .agents/skills/cuda/SKILL.md.
+- HIP / Hygon: .agents/skills/hip/SKILL.md.
+- AscendC / Ascend: .agents/skills/ascendc/SKILL.md.
+- Python: retain config.toml, solution/, the configured callable, and device backend.
+
+HIP tensors also use torch's cuda device; that spelling does not identify NVIDIA.
+{% endif %}
+
+The sandbox hides host HOME and other runs. Use only the devices, runtimes and
+tools explicitly supplied by the controller; write files in this workspace.
+Inputs and expert sources are read-only. Use klineage.server.Client for official
+correctness checks and acceptance timings.
+Client() reads KLINEAGE_SERVER. KLINEAGE_PROBLEM configures problem directories
+on the server; it is not a client task ID. Read client.info()["problems"] and set
+problem_id to the task's registered ID. Bind Client(problem_id=problem_id) for
+this action; a server exposing one problem can select it automatically.
+client.info() reports the server's backend and device; client.problem() returns
+the selected Problem. Local hardware queries describe only the supplied diagnostic
+device, which may differ from the server. Keep the service environment fixed;
+repository include paths for submissions are registered by the controller.
+
+With an authorized device and toolchain, write diagnostic scripts and use vendor
+tools directly: for example, CUDA ncu or the corresponding HIP/Ascend tools.
+KLineage has no dedicated profiling API. Choose tools and observations for the
+question being investigated. Diagnostic measurements cannot populate validation
+or replace service measurements. Do not run diagnostics and service benchmarks
+concurrently on the same device. If tools or counter permissions are unavailable,
+report that limitation; do not change host driver permissions.
+
+For native bundles, keep computation in the target language and preserve the ABI,
+numerical contract, and required memory ordering. Memory placement, work mapping,
+and synchronization may change only within the action's scope.
+
+config.toml's entry_point names the host entry function. Its source owns all launch
+parameters and obtains the current stream on each invocation. Calls pass ordered
+problem inputs; destination-style entries also receive runtime-allocated outputs.
+
+Use kernel/metadata.json and kernel/submission/ as trial source files. Preserve an
+input Kernel's problem directory reference. For a fresh candidate, use the supplied
+problem directory, available through the framework's problems/<problem_id> link:
+
+```python
+from pathlib import Path
+from klineage.serialization import to_json
+from klineage.server import Client
+
+client = Client(problem_id=problem_id)
+problem_spec = client.problem()
+problem_dir = (Path("problems") / problem_id).resolve(strict=True)
+root = Path("kernel")
+root.mkdir(exist_ok=True)
+metadata = {
+    "name": problem_spec.name,
+    "problem": {"path": str(problem_dir), **problem_spec.target()},
+    "validation": None,
+    "compile_flags": [],
+}
+(root / "metadata.json").write_text(to_json(metadata))
+```
+
+For edits, preserve the incoming name and compile_flags; clear stale validation.
+The server checks the concrete spec and reports failing subtree paths and compiler
+diagnostics. Set reference according to the action: its fixed input for Apply,
+the accepted expert job for Init, or None for standalone/Decompose measurements.
+
+```python
+reply = client.evaluate(root, Path.cwd(), reference=reference)
+assert reply.accepted, reply.diagnostics
+```
+
+Each evaluate/result call with work automatically appends the complete returned
+Kernel under kernels/0, kernels/1, ... including failed results, and links the
+original problem directory. Each version's metadata.json contains validation.workloads
+and evaluation with job_id, error and diagnostics. Read reply.validation and
+reply.diagnostics or this metadata; do not save Kernels manually or edit these fields.
+Action uses the largest numbered version; a failed latest version cannot fall back.
+To select an earlier accepted candidate, call client.result(job_id, work=Path.cwd());
+this appends it as a new latest version. kernel/ remains independent trial source space.
+
+Read Kernel JSON with load_artifact(path, Kernel) or from_json(text, Kernel).
+Read action JSON as Artifact, then select part("kernel", Kernel). JSON restoration does not compile.
+For an unchanged result, evaluate the input through the service. The client saves
+its complete Kernel with the same name and sources and fresh measured validation.
+Do not emit SKILL.md for an unchanged result.
+Action.run returns its Artifact as JSON. Never emit artifact.json in artifact directories.

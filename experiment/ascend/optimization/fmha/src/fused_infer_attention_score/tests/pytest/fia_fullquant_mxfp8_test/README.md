@@ -1,10 +1,13 @@
 # FIA FullQuant MXFP8 测试用例执行指南
 
+此文档随 [CANN 源码快照](../../../../../UPSTREAM_COMMIT) 保留，描述原测试环境。
+它不是本仓库 910B FMHA wrapper 的复现入口；后者见 [实验说明](../../../../../README.md)。
+
 ## 1. 环境准备
 
 ### 1.1 安装 CANN / PyTorch + TorchNPU
 
-参考根目录 README.md，或使用项目根目录下的安装脚本：
+以下安装命令引用原测试环境的脚本，本 checkout 不提供这些脚本；运行测试前需准备匹配的 CANN、PyTorch 和 TorchNPU。
 
 ```bash
 bash install_cann_950.sh    # 安装 CANN 9.1.0 + 950 ops
@@ -12,6 +15,8 @@ bash install_torch_npu.sh   # 安装 PyTorch + TorchNPU
 ```
 
 ### 1.2 每次执行前加载环境
+
+下述 `attention/...` 是原仓库布局；使用本副本时，在当前 README 所在目录运行 pytest。
 
 ```bash
 source /home/user/Ascend/cann/set_env.sh

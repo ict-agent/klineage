@@ -1,16 +1,20 @@
+import json
 import unittest
-from dataclasses import replace
+from types import MappingProxyType
 
+from kernel_fixtures import edit_kernel, make_kernel
 from problem_fixtures import problem_spec
 
-from klineage.artifact.kernel import Kernel
-from klineage.contract import ProblemSpec
+from klineage.action import same_implementation
+from klineage.artifact.problem import Problem
+from klineage.serialization import restore, to_json
+from klineage.utils import json_value
 
 CUDA_SOURCE = "__global__ void kernel() {}"
 
 
-def problem() -> ProblemSpec:
-    return ProblemSpec(
+def problem() -> Problem:
+    return Problem(
         name="vector-add",
         definition={
             "name": "vector-add",
@@ -21,39 +25,40 @@ def problem() -> ProblemSpec:
             "outputs": {"result": {"shape": ["N"], "dtype": "float32"}},
             "reference": "def run(x):\n    return x + 1\n",
         },
-        workload={
+        workloads=({
             "uuid": "c03709e8-79f7-4d50-b75f-5c82884b13b2",
             "axes": {"N": 1024},
             "inputs": {"x": {"type": "random"}},
-        },
+        },),
         language="cuda",
         platform="sm90",
     )
 
 
 class ContractTests(unittest.TestCase):
-    def test_problem_json_schema(self):
-        value = problem()
-        expected = {"name", "definition", "workload", "language", "platform"}
-        self.assertEqual(set(value.to_dict()), expected)
-        self.assertEqual(ProblemSpec.from_dict(value.to_dict()), value)
+    def test_json_normalizes_collections(self):
+        child = {"values": range(3)}
+        source = MappingProxyType({"children": (child,)})
+        result = json_value(source, "contract")
+        self.assertEqual(result, {"children": [{"values": [0, 1, 2]}]})
+        child["values"] = range(5)
+        self.assertEqual(result["children"][0]["values"], [0, 1, 2])
 
     def test_trace_data_is_detached(self):
-        raw = problem().to_dict()
-        value = ProblemSpec.from_dict(raw)
-        raw["definition"]["inputs"]["x"]["shape"].append("N")
-        raw["workload"]["axes"]["N"] = 2048
+        raw = json.loads(to_json(problem()))
+        value = restore(raw, Problem)
+        raw["tree"]["children"].clear()
         self.assertEqual(value, problem())
-        exported = value.to_dict()
-        exported["workload"]["inputs"]["x"]["type"] = "scalar"
+        exported = value.workloads[0]
+        exported["inputs"]["x"]["type"] = "scalar"
         self.assertEqual(value, problem())
 
-    def test_fingerprint_binds_io_order(self):
+    def test_identity_binds_io_order(self):
         spec = problem_spec()
-        current = Kernel("gemm", spec, source_files={"kernel.cu": CUDA_SOURCE})
+        current = make_kernel("gemm", spec, source_files={"kernel.cu": CUDA_SOURCE})
         reordered = {
             **spec.definition,
             "inputs": dict(reversed(spec.definition["inputs"].items())),
         }
-        changed = replace(current, problem=replace(spec, definition=reordered))
-        self.assertNotEqual(current.fingerprint, changed.fingerprint)
+        changed = edit_kernel(current, problem=spec.replace(definition=reordered))
+        self.assertFalse(same_implementation(current, changed))

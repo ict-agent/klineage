@@ -1,135 +1,86 @@
-"""Shared CLI arguments and decomposition handoffs."""
+"""Shared CLI options and runtime configuration."""
 
 import argparse
 import os
-from collections.abc import Iterator
 from pathlib import Path
 
-from klineage.action.decompose import Decompose
-from klineage.action.init import Init
-from klineage.artifact.kernel import Kernel, load_kernel
-from klineage.constants import (
-    MAX_DECOMPOSE_STEPS,
-    MAX_RETRIES,
-    SKILL_FILE,
-    SUBMISSION_DIRECTORY,
-    TIMEOUT,
-    RunKind,
-)
-from klineage.contract import ValueRole
-from klineage.errors import StructuredOutputError
-from klineage.memory.skillcard import SkillCard
-from klineage.memory.storage import load_skill
-
-
-def argument_parser(description: str | None) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--problem", required=True)
-    parser.add_argument("--repo", required=True)
-    parser.add_argument("--expert-kernel", required=True)
-    parser.add_argument("--max-decompose-step", type=int, default=MAX_DECOMPOSE_STEPS)
-    parser.add_argument("--workdir", type=Path, help="Fresh run directory")
-    add_run_options(parser)
-    return parser
+from klineage.constants import MAX_RETRIES, TIMEOUT
+from klineage.harness import AgentRuntime
+from klineage.server import Client
+from klineage.server.client import SERVER_ENV
 
 
 def add_run_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
-        "--timeout", type=int, default=TIMEOUT, help="Seconds per action"
+        "--timeout", type=int, default=TIMEOUT,
+        help="Seconds per agent attempt and evaluation request",
     )
     parser.add_argument("--max-retries", type=int, default=MAX_RETRIES)
     parser.add_argument(
-        "--verifier",
-        dest="enable_verifier",
-        action=argparse.BooleanOptionalAction,
-        help="Verify each action before accepting its output",
+        "--server", metavar="ENDPOINT", help="Evaluation endpoint; defaults to KLINEAGE_SERVER"
+    )
+    parser.add_argument(
+        "--problem-id", help="Registered task; optional when the server exposes one problem"
+    )
+    add_agent_options(parser)
+
+
+def add_agent_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--agent-python", type=Path, help="Python runtime mounted in the agent sandbox"
+    )
+    parser.add_argument(
+        "--agent-device-node",
+        type=Path,
+        action="append",
+        default=[],
+        help="Device node exposed to the agent for diagnostics",
+    )
+    parser.add_argument(
+        "--agent-read-only",
+        type=Path,
+        action="append",
+        default=[],
+        help="Read-only agent toolchain or dependency path",
+    )
+    parser.add_argument(
+        "--agent-env", action="append", default=[], help="Agent environment NAME=VALUE"
     )
 
 
-def decompose_steps(
-    problem: str | os.PathLike[str],
-    repo: str | os.PathLike[str],
-    expert_kernel: str | os.PathLike[str],
-    max_decompose_step: int,
-    enable_verifier: bool,
-    *,
-    workdir: Path,
-    timeout: int,
-    max_retries: int,
-) -> Iterator[tuple[Path, SkillCard | None]]:
-    init_dir = workdir / RunKind.INIT
-    Init(
-        problem,
-        repo,
-        expert_kernel,
-        workdir=init_dir,
-        enable_verifier=enable_verifier,
-        timeout=timeout,
-        max_retries=max_retries,
-    ).run()
-
-    # Yield only after the action and its optional verifier have succeeded.
-    current_dir = init_dir
-    before = load_kernel(current_dir)
-    for step in range(max_decompose_step):
-        decompose_dir = workdir / RunKind.DECOMPOSE / str(step)
-        Decompose(
-            current_dir,
-            workdir=decompose_dir,
-            enable_verifier=enable_verifier,
-            timeout=timeout,
-            max_retries=max_retries,
-        ).run()
-        after, card = read_step(before, decompose_dir, RunKind.DECOMPOSE)
-        yield decompose_dir, card
-        if card is None:
-            return
-
-        current_dir = decompose_dir
-        before = after
+def agent_runtime(values: dict) -> AgentRuntime | None:
+    python = values.pop("agent_python", None)
+    devices = values.pop("agent_device_node", ())
+    read_only = values.pop("agent_read_only", ())
+    assignments = values.pop("agent_env", ())
+    if not (python or devices or read_only or assignments):
+        return None
+    environment = {}
+    for assignment in assignments:
+        name, separator, value = assignment.partition("=")
+        if not separator or not name.isidentifier():
+            raise ValueError("--agent-env requires NAME=VALUE")
+        environment[name] = value
+    options = {
+        "device_nodes": devices,
+        "read_only": read_only,
+        "environment": environment,
+    }
+    if python is not None:
+        options["python"] = python
+    return AgentRuntime(**options)
 
 
-def read_step(
-    before: Kernel,
-    workdir: Path,
-    stage: RunKind,
-) -> tuple[Kernel, SkillCard | None]:
-    """Validate the problem, ABI, and action-specific card contract."""
-
-    label = stage.value.capitalize()
-    after = load_kernel(workdir)
-    if before.problem != after.problem:
-        raise StructuredOutputError(f"{label} changed the problem")
-    if any(
-        before.problem.values(role) != after.problem.values(role) for role in ValueRole
-    ):
-        raise StructuredOutputError(f"{label} changed the ABI")
-
-    skill_path = workdir / SKILL_FILE
-    has_card = skill_path.exists() or skill_path.is_symlink()
-    if before.fingerprint == after.fingerprint:
-        if has_card:
-            raise StructuredOutputError(
-                f"{label} emitted {SKILL_FILE} for an unchanged kernel"
-            )
-        if before.name != after.name or (
-            stage is RunKind.APPLY and before.validation != after.validation
-        ):
-            raise StructuredOutputError(
-                f"{label} changed an unchanged kernel's metadata"
-            )
-        submission = workdir / SUBMISSION_DIRECTORY
-        if submission.exists() or submission.is_symlink():
-            raise StructuredOutputError(
-                f"{label} terminal result contains {SUBMISSION_DIRECTORY}"
-            )
-        return after, None
-
-    if stage is RunKind.APPLY:
-        if has_card:
-            raise StructuredOutputError(f"{label} must not emit {SKILL_FILE}")
-        return after, None
-
-    if not skill_path.is_file():
-        raise StructuredOutputError(f"{label} changed a kernel without {SKILL_FILE}")
-    return after, load_skill(skill_path)
+def action_arguments(arguments: argparse.Namespace) -> dict:
+    values = vars(arguments).copy()
+    agent = agent_runtime(values)
+    if agent is not None:
+        values["agent"] = agent
+    endpoint = values.pop("server")
+    problem_id = values.pop("problem_id")
+    if endpoint is None and problem_id is None and not os.environ.get(SERVER_ENV):
+        return values
+    values["evaluation"] = Client(
+        endpoint=endpoint, problem_id=problem_id, timeout=values["timeout"],
+    )
+    return values

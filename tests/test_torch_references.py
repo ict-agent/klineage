@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 TORCH_AVAILABLE = importlib.util.find_spec("torch") is not None
-DEFINITIONS = Path(__file__).resolve().parents[1] / "problems/definitions"
+PROBLEMS = Path(__file__).resolve().parents[1] / "problems"
 
 if TORCH_AVAILABLE:
     import torch
@@ -26,23 +26,23 @@ class TorchReferenceTests(unittest.TestCase):
         }
         for name, axes in expected.items():
             with self.subTest(name=name):
-                module = load_trace(DEFINITIONS / f"{name}.json")
-                self.assertEqual(module.workload["axes"], axes)
+                module = load_trace(PROBLEMS / name)
+                self.assertEqual(module.workloads[0]["axes"], axes)
                 self.assertEqual(module.definition["op_type"], name)
                 self.assertFalse(hasattr(module, "make_inputs"))
 
     def test_gemm_weight_layout(self):
-        module = load_trace(DEFINITIONS / "gemm.json")
-        module.workload["axes"] = {"M": 3, "N": 5, "K": 4}
-        inputs = trace_inputs(module.definition, module.workload, device="cpu", seed=17)
+        module = load_trace(PROBLEMS / "gemm")
+        module.workloads[0]["axes"] = {"M": 3, "N": 5, "K": 4}
+        inputs = trace_inputs(module.definition, module.workloads[0], device="cpu", seed=17)
         actual = module.run(**inputs)
         expected = inputs["x"] @ inputs["weight"].T
         torch.testing.assert_close(actual, expected)
         self.assertEqual(tuple(actual.shape), (3, 5))
 
     def test_conv2d_filter_layout(self):
-        module = load_trace(DEFINITIONS / "conv2d.json")
-        module.workload["axes"] = {
+        module = load_trace(PROBLEMS / "conv2d")
+        module.workloads[0]["axes"] = {
             "N": 2,
             "H": 5,
             "W": 4,
@@ -50,7 +50,7 @@ class TorchReferenceTests(unittest.TestCase):
             "F": 3,
             "FILTER_ROWS": 18,
         }
-        inputs = trace_inputs(module.definition, module.workload, device="cpu", seed=23)
+        inputs = trace_inputs(module.definition, module.workloads[0], device="cpu", seed=23)
         actual = module.run(**inputs)
         weight = (
             inputs["weight_hwcf"].T.reshape(3, 3, 3, 2).permute(0, 3, 1, 2).contiguous()
@@ -60,7 +60,7 @@ class TorchReferenceTests(unittest.TestCase):
         self.assertEqual(tuple(actual.shape), (2, 5, 4, 3))
 
     def test_fmha_packed_output(self):
-        module = load_trace(DEFINITIONS / "fmha.json")
+        module = load_trace(PROBLEMS / "fmha")
         generator = torch.Generator().manual_seed(42)
         q, k, v = (torch.randn(6, 2, 4, generator=generator) for _ in range(3))
         offsets = torch.tensor([0, 3, 6], dtype=torch.int32)
@@ -75,7 +75,7 @@ class TorchReferenceTests(unittest.TestCase):
         torch.testing.assert_close(actual, expected)
 
     def test_topk_values_and_indices(self):
-        module = load_trace(DEFINITIONS / "topk.json")
+        module = load_trace(PROBLEMS / "topk")
         values = torch.tensor([[1.0, -2.0, 4.0, 3.0], [0.0, 8.0, 2.0, 7.0]])
         result = module.run(values, k=2)
         torch.testing.assert_close(result.values, values.gather(1, result.indices))
@@ -86,7 +86,7 @@ class TorchReferenceTests(unittest.TestCase):
         self.assertEqual(module.definition["axes"]["K"]["value"], 512)
 
     def test_gdn_matches_recurrence(self):
-        module = load_trace(DEFINITIONS / "gdn.json")
+        module = load_trace(PROBLEMS / "gdn")
         generator = torch.Generator().manual_seed(17)
         q, k = (
             F.normalize(torch.randn(1, 5, 1, 4, generator=generator), dim=-1)

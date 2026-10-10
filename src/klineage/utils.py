@@ -2,18 +2,74 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import secrets
-from collections.abc import Iterable, Mapping
+import stat
+from collections.abc import Iterable, Mapping, Sequence
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from klineage.constants import WORKSPACE_DIR
 
 _SAFE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+class DirectoryMode(Enum):
+    EXISTING = "existing"
+    CREATE = "create"
+
+
+@contextmanager
+def safe_directory(path: Path, mode=DirectoryMode.EXISTING):
+    """Open each directory without following links; retain the final directory fd."""
+    path = Path(path).expanduser().absolute()
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    descriptor = os.open(path.anchor, flags)
+    try:
+        for part in path.parts[1:]:
+            if part in (".", ".."):
+                raise ValueError("directory path must not contain traversal")
+            if mode is DirectoryMode.CREATE:
+                with suppress(FileExistsError):
+                    os.mkdir(part, mode=0o700, dir_fd=descriptor)
+            child = os.open(part, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
+def safe_file(path: Path, mode="r", *, errors="strict"):
+    """Open a regular, single-link file beneath no-follow directory descriptors."""
+    flags = {
+        "r": os.O_RDONLY,
+        "w": os.O_WRONLY | os.O_CREAT,
+        "w+": os.O_RDWR | os.O_CREAT,
+        "a": os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+    }[mode] | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+    path = Path(path)
+    directory_mode = DirectoryMode.EXISTING if mode == "r" else DirectoryMode.CREATE
+    with safe_directory(path.parent, directory_mode) as parent:
+        descriptor = os.open(path.name, flags, 0o600, dir_fd=parent)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise OSError(f"expected a regular single-link file: {path}")
+        # Validate hard links before truncation, unlike open(..., O_TRUNC).
+        if mode in ("w", "w+"):
+            os.ftruncate(descriptor, 0)
+        stream = os.fdopen(descriptor, mode, encoding="utf-8", errors=errors, newline="")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    with stream:
+        yield stream
 
 
 def nonempty(value: str, label: str) -> str:
@@ -39,10 +95,41 @@ def mapping(value: Any, label: str) -> Mapping[str, Any]:
     return value
 
 
-def boolean(value: Any, label: str) -> bool:
-    if not isinstance(value, bool):
-        raise TypeError(f"{label} must be a bool")
-    return value
+def json_value(value: Any, label: str) -> Any:
+    """Return a detached JSON value and reject lossy/non-portable values."""
+
+    def normalize(item: Any, location: str):
+        if item is None or isinstance(item, bool):
+            return item
+        if isinstance(item, str):
+            return str(item)
+        if isinstance(item, int):
+            return int(item)
+        if isinstance(item, float):
+            if not (-float("inf") < item < float("inf")):
+                raise ValueError(f"{location} must not contain NaN or infinity")
+            return float(item)
+        if isinstance(item, Mapping):
+            result = {}
+            for key, child in item.items():
+                if not isinstance(key, str):
+                    raise TypeError(f"{location} keys must be strings")
+                result[str(key)] = normalize(child, f"{location}.{key}")
+            return result
+        if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
+            return [
+                normalize(child, f"{location}[{index}]")
+                for index, child in enumerate(item)
+            ]
+        raise TypeError(f"{location} must contain only JSON values")
+
+    return normalize(value, label)
+
+
+def json_mapping(value: Mapping[str, Any], label: str) -> dict[str, Any]:
+    normalized = json_value(mapping(value, label), label)
+    assert isinstance(normalized, dict)
+    return normalized
 
 
 def safe_name(value: str, *, default: str) -> str:
@@ -81,8 +168,10 @@ def make_log_dir(path: Path) -> Path:
 
 
 def write_json(path: Path, value: Any):
+    from klineage.serialization import to_json
+
     path.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
+        to_json(value) + "\n",
         encoding="utf-8",
     )
 
@@ -97,9 +186,10 @@ def existing_dir(value: Any, label: str) -> Path:
 
 
 __all__ = [
-    "boolean",
     "existing_dir",
     "make_log_dir",
+    "json_value",
+    "json_mapping",
     "mapping",
     "new_workdir",
     "nonempty",

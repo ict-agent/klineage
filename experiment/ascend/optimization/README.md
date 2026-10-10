@@ -1,9 +1,13 @@
 # GDN on Ascend: B1 T4096 HQ16 HV48 D128, chunk 64
 
+Historical paper benchmark. Run the scripts below from this directory in the
+recorded Ascend environment; its timing policy is independent of the current
+KLineage evaluation service.
+
 ## 1. Operator
 
 - Compute: chunked gated delta rule with grouped value heads (GVA), as defined in
-  `problems/definitions/gdn.json`.
+  `problems/gdn/definition.json`.
 - Inputs: `q`/`k` BF16 `[B, T, HQ=16, D=128]` (L2-normalized), `v` BF16
   `[B, T, HV=48, D]`, `g`/`beta` FP32 `[B, T, HV]` (log gates, update strength),
   `initial_state` FP32 `[B, HV, D, D]`.
@@ -11,7 +15,7 @@
 - Test shape: `B1 T4096 HQ16 HV48 D128`, `chunk_size=64`; Q/K heads repeated x3 to
   match the value heads, as the workload reference does.
 - Correctness: `torch.allclose` against the FLA chunk oracle embedded in
-  `problems/definitions/gdn.json`, gate `rtol = atol = 1e-2` (the harness gate).
+  `problems/gdn/definition.json`, gate `rtol = atol = 1e-2` (the harness gate).
 
 ## 2. Baseline
 

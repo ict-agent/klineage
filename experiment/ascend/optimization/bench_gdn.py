@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """GDN Stage 6/7 benchmark on Ascend: vLLM-Ascend chain vs our fused kernel.
 
-Shape: the paper workload in problems/workloads/gdn.jsonl
+Shape: the paper workload in problems/gdn/workloads.jsonl
        (B1 T4096 HQ16 HV48 D128, chunk 64).
 Baseline: every stage is a vLLM-Ascend Triton kernel (baseline/fla).
 Ours:     the same first five stages with Stage 6/7 replaced by ours/fused.py.
 
 Both outputs are checked against the FLA chunk oracle embedded in
-problems/definitions/gdn.json with atol = rtol = 1e-2, the gate the problem
+problems/gdn/definition.json with atol = rtol = 1e-2, the gate the problem
 harness uses. Latency is the sum of device kernel durations per iteration
 (do_bench_npu profile), median of the active samples after trimming one
 minimum and one maximum.
@@ -65,11 +65,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_problem(problem_root: Path) -> tuple[dict, dict, Path]:
-    problems = problem_root / "problems"
-    definition = json.loads((problems / "definitions" / "gdn.json").read_text())
-    records = (problems / "workloads" / "gdn.jsonl").read_text().splitlines()
+    directory = problem_root / "problems/gdn"
+    definition = json.loads((directory / "definition.json").read_text())
+    records = (directory / "workloads.jsonl").read_text().splitlines()
     workload = json.loads(records[0])["workload"]
-    return definition, workload, problems
+    return definition, workload, directory
 
 
 def axis_shape(spec: dict, definition: dict, axes: dict) -> tuple[int, ...]:

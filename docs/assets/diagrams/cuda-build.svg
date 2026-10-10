@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="384" viewBox="0 0 800 384" role="img" aria-labelledby="title desc">
+  <title id="title">Native CUDA source-to-callable build</title>
+  <desc id="desc">Read config.toml and the source entry, freeze the target architecture and compiler flags under COMPILE_LOCK, stage or reuse source files and compile them with nvcc, then bind the resulting entry to the problem's tensor ABI. The target chip denotes the selected compilation architecture.</desc>
+  <defs>
+    <style>
+      :root { --paper:#f8fbff; --surface:#ffffff; --ink:#1b2d43; --muted:#5e728b; --rule:#b9ccdf; --grid:#dce8f3; --blue:#3377cc; --violet:#7b61b5; --green:#26846b; --amber:#b37b37; }
+      @media(prefers-color-scheme:dark) { :root { --paper:#152233; --surface:#1b2b40; --ink:#e5edf7; --muted:#a0b6cf; --rule:#526982; --grid:#293c52; --blue:#83b7f1; --violet:#b3a0e2; --green:#82cbb4; --amber:#e5bd83; } }
+      text { font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; fill:var(--ink); text-rendering:geometricPrecision; }
+      .title { font-size:20px; font-weight:650; }
+      .body { font-size:16px; fill:var(--muted); }
+      .mono { font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace; font-size:15px; }
+      .label { font-size:14px; fill:var(--muted); paint-order:stroke; stroke:var(--paper); stroke-width:5px; stroke-linejoin:round; }
+      .eyebrow { font-family:"SFMono-Regular",Consolas,monospace; font-size:14px; letter-spacing:1.25px; fill:var(--muted); }
+      .paper { fill:var(--paper); }
+      .surface { fill:var(--surface); stroke:var(--rule); stroke-width:1.3; }
+      .plate { fill:var(--blue); fill-opacity:.035; stroke:var(--rule); stroke-width:1; stroke-dasharray:4 5; }
+      .wire { fill:none; stroke:var(--rule); stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; marker-end:url(#arrow); }
+      .return { stroke-dasharray:4 5; }
+      .blue { color:var(--blue); }
+      .violet { color:var(--violet); }
+      .green { color:var(--green); }
+      .amber { color:var(--amber); }
+      .tone { fill:currentColor; }
+      .trace { fill:none; stroke:currentColor; stroke-width:1.65; stroke-linecap:round; stroke-linejoin:round; }
+      .disc { fill:var(--surface); stroke:currentColor; stroke-width:1.7; }
+      .halo { fill:currentColor; fill-opacity:.065; }
+      .rule { fill:none; stroke:var(--rule); stroke-width:1; }
+    </style>
+    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse"><path d="M 20 0 H 0 V 20" fill="none" stroke="var(--grid)" stroke-width=".65"/></pattern>
+    <pattern id="major" width="100" height="100" patternUnits="userSpaceOnUse"><rect width="100" height="100" fill="url(#grid)"/><path d="M 100 0 H 0 V 100" fill="none" stroke="var(--grid)" stroke-width="1.1"/></pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 1 1 L 8 5 L 1 9" fill="none" stroke="var(--muted)" stroke-width="1.4" stroke-linejoin="round"/></marker>
+    <g id="terminal" class="trace"><path d="m -10 -7 7 7 -7 7 M 2 7 H 11"/></g>
+    <g id="chip" class="trace"><rect x="-23" y="-23" width="46" height="46" rx="3"/><rect x="-12" y="-12" width="24" height="24" rx="1"/><path d="M -13 -23 V -32 M 0 -23 V -32 M 13 -23 V -32 M -13 23 V 32 M 0 23 V 32 M 13 23 V 32 M -23 -13 H -32 M -23 0 H -32 M -23 13 H -32 M 23 -13 H 32 M 23 0 H 32 M 23 13 H 32"/></g>
+    <g id="file" class="trace"><path d="M -13 -18 H 5 L 13 -10 V 18 H -13 Z M 5 -18 V -10 H 13 M -6 -1 H 6 M -6 6 H 6"/></g>
+    <g id="check" class="trace"><path d="m -8 0 5 5 11 -11"/></g>
+    <g id="braces" class="trace"><path d="M -5 -12 H -9 V -4 L -13 0 -9 4 V 12 H -5 M 5 -12 H 9 V -4 L 13 0 9 4 V 12 H 5"/></g>
+  </defs>
+
+  <rect class="paper" width="800" height="384" rx="10"/>
+  <rect width="800" height="384" rx="10" fill="url(#major)"/>
+  <text class="mono" x="28" y="32" fill="var(--muted)">CUDA / NATIVE BUILD</text>
+
+  <path class="surface" d="M 36 94 H 170 L 187 111 V 203 H 36 Z"/>
+  <path class="rule" d="M 170 94 V 111 H 187"/>
+  <text class="mono" x="51" y="126">config.toml</text>
+  <path class="rule" d="M 51 140 H 160 M 51 154 H 123"/>
+  <path class="surface" d="M 89 147 H 217 L 234 164 V 243 H 89 Z"/>
+  <path class="rule" d="M 217 147 V 164 H 234"/>
+  <text class="mono" x="105" y="181">kernel.cu</text>
+  <g class="blue">
+    <path class="trace" d="m 112 202 -8 7 8 7 M 127 201 L 121 217 M 137 202 L 145 209 137 216"/>
+    <path class="trace" d="M 158 207 H 214 M 158 220 H 198"/>
+  </g>
+  <text class="title" x="135" y="271" text-anchor="middle">Source bundle</text>
+  <path class="wire" d="M 242 173 H 410"/>
+  <text class="label" x="325" y="158" text-anchor="middle">read entry</text>
+
+  <rect class="plate" x="392" y="62" width="380" height="167" rx="2"/>
+  <text class="mono" x="409" y="86">FROZEN BUILD INPUTS</text>
+  <rect class="surface" x="420" y="105" width="216" height="103" rx="2"/>
+  <path d="M 420 106 H 636" stroke="var(--violet)" stroke-width="3"/>
+  <text class="mono" x="437" y="131">COMPILE_LOCK</text>
+  <path class="rule" d="M 437 143 H 619"/>
+  <text class="mono" x="437" y="168">target</text>
+  <text class="mono" x="437" y="193">compile_flags</text>
+  <g class="amber" transform="translate(710 154)">
+    <circle class="halo" r="39"/>
+    <use href="#chip"/>
+  </g>
+  <path class="wire" d="M 670 154 H 644"/>
+  <text class="mono" x="710" y="213" text-anchor="middle">smXX</text>
+
+  <path class="wire" d="M 528 216 V 255"/>
+  <text class="label" x="541" y="250">freeze</text>
+  <rect class="surface" x="420" y="264" width="246" height="94" rx="2"/>
+  <path d="M 420 265 H 666" stroke="var(--blue)" stroke-width="3"/>
+  <g class="blue" transform="translate(443 285)"><use href="#terminal" transform="scale(.65)"/></g>
+  <text class="mono" x="465" y="290">nvcc</text>
+  <path class="rule" d="M 420 301 H 666"/>
+  <text class="body" x="438" y="325">Staged sources + cache</text>
+  <text class="label" x="438" y="347">PyTorch extension loader</text>
+  <path class="wire" d="M 412 319 H 274"/>
+  <text class="label" x="343" y="304" text-anchor="middle">bind</text>
+
+  <g class="green" transform="translate(71 325)">
+    <circle class="halo" r="35"/>
+    <circle class="disc" r="25"/>
+    <use href="#braces"/>
+  </g>
+  <text class="mono" x="113" y="319">fn(*inputs)</text>
+  <text class="body" x="113" y="344">Bound tensor ABI</text>
+</svg>

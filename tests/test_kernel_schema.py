@@ -4,10 +4,11 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from kernel_fixtures import accepted, kernel
+from kernel_fixtures import accepted, edit_kernel, kernel
 
-from klineage.artifact.kernel import Kernel, load_kernel, save_kernel
+from klineage.artifact import load_artifact, save_artifact
 from klineage.harness.eval import ValidationResult
+from klineage.serialization import from_json, restore, to_json
 
 
 class KernelSchemaTests(unittest.TestCase):
@@ -17,14 +18,12 @@ class KernelSchemaTests(unittest.TestCase):
                 self.subTest(latency=latency),
                 self.assertRaises((TypeError, ValueError)),
             ):
-                ValidationResult.from_dict(
-                    {
+                restore({
                         "compile_passed": True,
                         "correctness_passed": True,
                         "profile_passed": True,
                         "latency_ms": latency,
-                    }
-                )
+                    }, ValidationResult)
 
     def test_timing_requires_latency(self):
         with self.assertRaises(ValueError):
@@ -37,40 +36,35 @@ class KernelSchemaTests(unittest.TestCase):
                     self.subTest(reference=latency, candidate=candidate),
                     self.assertRaises((TypeError, ValueError)),
                 ):
-                    ValidationResult.from_dict(
-                        {
+                    restore({
                             "compile_passed": True,
                             "correctness_passed": True,
                             "profile_passed": False,
                             "latency_ms": candidate,
                             "reference_latency_ms": latency,
-                        }
-                    )
+                        }, ValidationResult)
 
     def test_reference_latency_optional(self):
-        restored = ValidationResult.from_dict(
-            {
+        restored = restore({
                 "compile_passed": True,
                 "correctness_passed": True,
                 "profile_passed": True,
                 "latency_ms": 1.0,
-            }
-        )
+            }, ValidationResult)
         self.assertIsNone(restored.reference_latency_ms)
-        self.assertIsNone(restored.to_dict()["reference_latency_ms"])
+        self.assertIsNone(json.loads(to_json(restored))["reference_latency_ms"])
 
     def test_roundtrip_schema(self):
-        current = replace(
-            kernel(), validation=replace(accepted(), reference_latency_ms=2.5)
-        )
-        expected = {"name", "problem", "source_files", "validation"}
+        current = edit_kernel(kernel(), validation=replace(accepted(), reference_latency_ms=2.5))
+        expected = {"artifact_type", "tree"}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            save_kernel(current, root)
-            raw = json.loads((root / "kernel.json").read_text())
+            save_artifact(current, root / "kernel.json")
+            artifact = from_json((root / "kernel.json").read_text(), type(current))
+            raw = json.loads(to_json(artifact))
             self.assertEqual(set(raw), expected)
             self.assertEqual(
-                set(raw["validation"]),
+                set(json.loads(to_json(artifact.validation))),
                 {
                     "compile_passed",
                     "correctness_passed",
@@ -79,30 +73,16 @@ class KernelSchemaTests(unittest.TestCase):
                     "reference_latency_ms",
                 },
             )
-            self.assertEqual(raw["validation"]["reference_latency_ms"], 2.5)
-            self.assertEqual(load_kernel(root), current)
-
-    def test_sources_bind_fingerprint(self):
-        current = kernel()
-        helper = replace(
-            current, source_files={**current.source_files, "helper.cuh": "// helper"}
-        )
-        self.assertNotEqual(helper.fingerprint, current.fingerprint)
-        self.assertEqual(
-            replace(current, validation=accepted()).fingerprint, current.fingerprint
-        )
-        restored = Kernel.from_dict(json.loads(json.dumps(helper.to_dict())))
-        self.assertEqual(restored.fingerprint, helper.fingerprint)
+            self.assertEqual(artifact.validation.reference_latency_ms, 2.5)
+            self.assertEqual(load_artifact(root / "kernel.json", type(current)), current)
 
     def test_rejects_invalid_sources(self):
         for sources in (
-            {},
             {"../escape.cu": "code"},
-            {"kernel.cu": "\0"},
             {"kernel.cu": 1},
         ):
             with (
                 self.subTest(sources=sources),
                 self.assertRaises((TypeError, ValueError)),
             ):
-                replace(kernel(), source_files=sources)
+                edit_kernel(kernel(), source_files=sources)
