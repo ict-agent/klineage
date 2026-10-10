@@ -54,6 +54,7 @@ Deployment uses the repository secret `DOCS_SSH_PRIVATE_KEY` and a dedicated
 Each build uploads a release, then switches the `current` symlink. Previous
 releases remain under `/var/www/klineage-docs/releases/` for rollback.
 Nginx serves `current/` at `/project/klineage/`; later deployments need no reload.
+CI checks the server's HTTPS response over SSH against the built homepage.
 
 ## Write documentation
 
