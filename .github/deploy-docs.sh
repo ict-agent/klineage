@@ -27,7 +27,7 @@ EOF
 
 # Upload a complete release before changing the live symlink.
 ssh -F "$ssh_dir/config" klineage-docs "mkdir '$release_path'"
-rsync -rt --chmod=D755,F644 -e "ssh -F $ssh_dir/config" \
+rsync -rtz --chmod=D755,F644 -e "ssh -F $ssh_dir/config" \
     site/ "klineage-docs:$release_path/"
 ssh -F "$ssh_dir/config" klineage-docs bash -s -- "$deploy_root" "$release" <<'SH'
 set -euo pipefail
