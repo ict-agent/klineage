@@ -1,4 +1,3 @@
-import ast
 import copy
 import importlib.util
 import json
@@ -27,24 +26,6 @@ if TORCH_AVAILABLE:
 
 @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is unavailable")
 class TraceTests(unittest.TestCase):
-    def test_gdn_benchmark_problem(self):
-        script = ROOT.parent / "experiment/ascend/optimization/bench_gdn.py"
-        tree = ast.parse(script.read_text())
-        loader = next(
-            node for node in tree.body
-            if isinstance(node, ast.FunctionDef) and node.name == "load_problem"
-        )
-        # Exercise file loading without importing the experiment's NPU kernels.
-        module = ast.Module(body=[loader], type_ignores=[])
-        namespace = {"Path": Path, "json": json}
-        exec(compile(module, str(script), "exec"), namespace)
-        definition, workload, directory = namespace["load_problem"](ROOT.parent)
-        self.assertEqual(definition["name"], "gdn")
-        self.assertEqual(directory, ROOT / "gdn")
-        for descriptor in workload["inputs"].values():
-            if descriptor["type"] == "safetensors":
-                self.assertTrue((directory / descriptor["path"]).is_file())
-
     def test_captured_layout_survives(self):
         values = {"x": torch.arange(6, dtype=torch.float32).reshape(2, 3).T}
         expected = values["x"] + 1

@@ -1,9 +1,0 @@
-[solution]
-name = "gqa-fa2"
-definition = "gqa"
-author = "klineage"
-
-[build]
-language = "cuda"
-entry_point = "kernel.cu::kernel"
-destination_passing_style = true

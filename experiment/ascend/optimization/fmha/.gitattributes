@@ -1,4 +1,0 @@
-# Preserve the upstream snapshot and patch bytes.
-src/** -whitespace linguist-vendored
-LICENSE -whitespace
-*.patch -whitespace

@@ -9,8 +9,7 @@ __pycache__/
 build/
 dist/
 agent-workspace/
+/experiment/
 baseline/
-!experiment/ascend/optimization/baseline/
-!experiment/ascend/optimization/gemm/src/baseline/
 .vscode/
 .DS_Store

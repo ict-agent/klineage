@@ -18,8 +18,8 @@ Keep implementation beside the component that owns it:
 | `src/klineage/memory/` | Skill cards, storage and retrieval |
 | `src/klineage/cli/` | Command implementations and shared options |
 
-Tests and repository scripts live in `tests/` and `scripts/`. Historical device
-benchmarks remain under `experiment/`; their runtimes are separate from the library.
+Tests and repository scripts live in `tests/` and `scripts/`. Local experiments
+and generated outputs under `experiment/` are ignored by Git.
 
 ## Build the documentation
 
