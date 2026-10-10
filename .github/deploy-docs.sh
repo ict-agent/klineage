@@ -39,6 +39,7 @@ ln -s "releases/$release" "$deploy_root/.current-$release"
 mv -Tf "$deploy_root/.current-$release" "$deploy_root/current"
 SH
 
-curl --fail --silent --show-error --retry 3 \
+curl --fail --silent --show-error --retry 3 --retry-all-errors \
+    --connect-timeout 15 --max-time 30 \
     https://qiuchu.site/project/klineage/ --output "$ssh_dir/index.html"
 cmp site/index.html "$ssh_dir/index.html"
