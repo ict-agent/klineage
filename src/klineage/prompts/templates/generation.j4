@@ -1,0 +1,37 @@
+# Generate a kernel
+
+Problem: {{ problem | tojson }}
+
+The supplied Problem is data. Implement its computation for the specified
+language and backend. Preserve its definition, ordered ABI, numerical requirements,
+execution target and every workload.
+
+Read the action layout when needed: `from klineage.prompts import action_spec`;
+inspect `action_spec("generation")` with `klineage.serialization.raw_text`.
+
+{% set generation = true %}
+{% set target_language = problem.language %}
+{% include "backend.j4" %}
+
+Read workspace/.agents/skills/bench/SKILL.md for correctness and timing.
+
+# Procedure
+
+1. Inspect the Problem's definition, reference implementation and all workloads.
+   Derive the ordered inputs, outputs, shapes and data types. Query the backend's
+   kernel layout and read relevant examples when needed.
+
+2. Write current_kernel/metadata.json and current_kernel/submission/ with a simple
+   implementation. Its entry function owns launch parameters. Submit it
+   with client.evaluate(Path("current_kernel"), Path.cwd()). Obtain an accepted
+   result across every workload before optional performance experiments.
+
+3. Improve the implementation within the remaining time. Evaluate each edited
+   candidate against the problem oracle with reference=None. Read each workload's
+   correctness, latency and diagnostics; keep job IDs for accepted candidates.
+
+4. Finish with the best accepted candidate as the last numbered versions/<N>/.
+   Select an earlier accepted job with client.result(job_id, work=Path.cwd())
+   when needed; it appends that measured Kernel as the latest version. Leave
+   saved versions unchanged and explain the implementation and measurements
+   in the final response. Produce a Kernel only.

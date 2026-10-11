@@ -59,8 +59,9 @@ klineage-generation problems/gemm \
   --workdir agent-workspace/gemm --timeout 600
 ```
 
-The command generates a kernel and evaluates it on all workloads. The problem
-must have at least one workload. Results are stored as Kernel artifacts:
+The command runs Generation with the Problem and evaluates the kernel on all
+workloads. The problem must have at least one workload. Results are stored as
+Kernel artifacts:
 
 | Path under the work directory | Contents |
 | --- | --- |
@@ -72,6 +73,7 @@ must have at least one workload. Results are stored as Kernel artifacts:
 | `workspace/AGENTS.md` | Agent instructions and available Python APIs |
 | `workspace/.agents/skills/` | Backend guidance and supplied skill memory |
 | `workspace/.klineage/codex-runs/` | Agent prompts, traces, final replies and stderr |
+| `workspace/.klineage/codex-runs/<attempt>/stats.jsonl` | Model request usage and evaluation statistics |
 
 Each version keeps its source and evaluation together, so its metadata lets you
 compare correctness and latency across workloads and versions. A successful run
@@ -83,7 +85,7 @@ each run. Artifact layouts are queried through Python when needed.
 
 ## Start an evaluation server
 
-Generation starts a local evaluator by default. To reuse an evaluator across
+The CLI starts a local evaluator by default. To reuse an evaluator across
 generation, skill extraction and optimization, start it separately. For CUDA
 device 0, run from the repository root in the installed backend environment:
 

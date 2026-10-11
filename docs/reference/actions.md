@@ -1,14 +1,14 @@
 # Action API
 
-Use `generate` to create a kernel from a problem directory. Use `Init`,
-`Decompose` and `Apply` when you want to control each round yourself. See
+Use `generate` to create a kernel from a problem directory. Use `Generation`,
+`Init`, `Decompose` and `Apply` to control individual actions. See
 [Action Primitive](../concepts/actions.md) for a complete composition example.
 
 ## Generate from a problem
 
 `generate` returns a measured Kernel, using a local evaluator or a supplied
-service. The [generation CLI](../guides/cli.md#generate-a-kernel) exposes the same
-workflow.
+service. It invokes `Generation` with the loaded Problem. The
+[generation CLI](../guides/cli.md#generate-a-kernel) exposes the same workflow.
 
 ::: klineage.generation.generate
 
@@ -22,6 +22,8 @@ card or records. The convenience functions construct and run one action.
       members: [run, resume_from]
 
 ::: klineage.action.Init
+
+::: klineage.action.Generation
 
 ::: klineage.action.Decompose
 

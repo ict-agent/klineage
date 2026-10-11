@@ -25,6 +25,7 @@ class ArtifactPromptTests(unittest.TestCase):
     def test_layouts_are_queried(self):
         current = json.loads(to_json(kernel()))
         contexts = {
+            "generation": {"problem": load_problem(kernel())},
             "init": {
                 "problem": "/problem",
                 "repository": "/repo",
@@ -43,6 +44,25 @@ class ArtifactPromptTests(unittest.TestCase):
                 self.assertNotIn("verifier", prompt.lower())
                 self.assertNotIn("verify_", prompt)
                 self.assertNotIn("harnessuate", prompt)
+
+    def test_generation_problem_input(self):
+        prompt = render_prompt("generation", problem=load_problem(kernel()))
+        self.assertIn("reference=None", prompt)
+        for unrelated in (
+            "Current kernel:", "Memory:", "reference=current_kernel",
+            "For edits, preserve", "For an unchanged result",
+        ):
+            self.assertNotIn(unrelated, prompt)
+        self.assertEqual(tuple(child.name for child in action_spec("generation").children), ("kernel",))
+
+    def test_generation_python_entry(self):
+        problem = load_problem(kernel()).replace(language="python")
+        prompt = render_prompt("generation", problem=problem)
+        self.assertIn('language="python"', prompt)
+        self.assertIn("Define a Python host callable", prompt)
+        self.assertIn("kernel_layouts", prompt)
+        self.assertNotIn("Retain the configured callable", prompt)
+        self.assertNotIn("native language", prompt)
 
     def test_memory_is_optional(self):
         current = json.loads(to_json(kernel()))
@@ -158,7 +178,7 @@ entry_point = "main.py::run"
 
     def test_service_measurement_path(self):
         root = Path(__file__).parents[1] / "src/klineage"
-        paths = [root / "prompts/templates" / f"{name}.j4" for name in ("backend", "apply", "init", "decompose")]
+        paths = [root / "prompts/templates" / f"{name}.j4" for name in ("backend", "generation", "apply", "init", "decompose")]
         paths += [root / "harness/resources/bench/SKILL.md"]
         paths += [root / "backend" / name / "skills/SKILL.md" for name in ("cuda", "hip", "ascend")]
         paths += [root / "backend/cuda/skills/cuda.md"]

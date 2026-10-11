@@ -21,12 +21,11 @@ from klineage.constants import (
     MEMORY_DIRECTORY,
     SKILL_DIRECTORY,
     STATE_DIRECTORY,
-    STATS_DIRECTORY,
     WORK_DIRECTORY,
     RunKind,
 )
 from klineage.harness.codex_skills import render_memory
-from klineage.harness.logging import LOG_ENV
+from klineage.harness.logging import LOG_ENV, LOG_FILE
 from klineage.harness.process import PROCESS_SCOPE_ENV, stop_process
 from klineage.harness.sandbox import AgentRuntime, Sandbox, runtime_paths
 from klineage.serialization import to_json
@@ -158,7 +157,6 @@ class CodexRunner:
         self.trace_root = self.state_dir / "codex-runs"
         with safe_directory(self.trace_root, DirectoryMode.CREATE):
             pass
-        self.stats_dir = self.state_dir / STATS_DIRECTORY.name
         self.timeout = timeout
         self.model = model.strip() if model is not None else None
         self.reasoning_effort = reasoning_effort
@@ -293,6 +291,8 @@ class CodexRunner:
         stderr_path = run_dir / "stderr.log"
         with safe_file(prompt_path, "w") as stream:
             stream.write(prompt)
+        with safe_file(run_dir / LOG_FILE, "w"):
+            pass
 
         with (
             safe_file(trace_path, "w") as trace_file,
@@ -366,7 +366,7 @@ class CodexRunner:
             pass
         writable = [home]
         if not final_message_path.is_relative_to(self.work_dir):
-            writable.append(final_message_path)
+            writable.extend((final_message_path, run_dir / LOG_FILE))
         environment = {
             **self.agent.environment,
             "PATH": f"{self.agent.python.parent}:{self.agent.environment.get('PATH', '/usr/bin:/bin')}",
@@ -374,7 +374,7 @@ class CodexRunner:
                 str(PACKAGE_ROOT.parent), self.agent.environment.get("PYTHONPATH"),
             ))),
             "CODEX_HOME": str(home),
-            LOG_ENV: str(self.stats_dir),
+            LOG_ENV: str(run_dir),
             PROCESS_SCOPE_ENV: str(run_dir),
         }
         read_only = [
@@ -395,7 +395,9 @@ class CodexRunner:
                 from klineage.server import ClientGateway
                 from klineage.server.client import link_problem
 
-                gateway = stack.enter_context(ClientGateway(self.evaluation, ipc / "evaluation.sock"))
+                gateway = stack.enter_context(ClientGateway(
+                    self.evaluation, ipc / "evaluation.sock", directory=run_dir,
+                ))
                 sockets.append(gateway.socket_path)
                 environment["KLINEAGE_SERVER"] = gateway.endpoint
                 for name, value in gateway.info().get("problem_paths", {}).items():
@@ -421,7 +423,7 @@ class CodexRunner:
                 key_env = self.api_key_env or self.DEFAULT_KEY_ENV
                 bridge = stack.enter_context(ProviderBridge(
                     original_url, self.api_key, ipc / "provider.sock",
-                    headers=self.provider_headers,
+                    headers=self.provider_headers, directory=run_dir,
                 ))
                 self.api_base_url = bridge.url
                 environment[key_env] = PROVIDER_KEY_PLACEHOLDER

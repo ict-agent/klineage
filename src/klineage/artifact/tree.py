@@ -27,13 +27,14 @@ class ArtifactKind(StrEnum):
     SKILLCARD = "skillcard"
     MEMORY = "memory"
     ACTION = "action.action"
+    GENERATION = "action.generation"
     INIT = "action.init"
     DECOMPOSE = "action.decompose"
     APPLY = "action.apply"
 
 
 ACTION_TYPES = frozenset(
-    (ArtifactKind.ACTION, ArtifactKind.INIT, ArtifactKind.DECOMPOSE, ArtifactKind.APPLY)
+    (ArtifactKind.ACTION, ArtifactKind.GENERATION, ArtifactKind.INIT, ArtifactKind.DECOMPOSE, ArtifactKind.APPLY)
 )
 
 

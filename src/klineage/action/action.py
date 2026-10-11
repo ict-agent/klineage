@@ -192,7 +192,7 @@ def input_paths(value) -> tuple[Path, ...]:
 
     if value.kind == ArtifactKind.PROBLEM:
         visit(value.tree)
-    if value.kind in (ArtifactKind.INIT, ArtifactKind.APPLY, ArtifactKind.DECOMPOSE):
+    if value.kind in ACTION_TYPES and value.kind != ArtifactKind.ACTION:
         value = value.part("kernel", Kernel)
     if value.kind.startswith("kernel"):
         submission = value.find("submission")

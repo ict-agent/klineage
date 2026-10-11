@@ -168,6 +168,9 @@ if prompt == "RUNTIME":
     from klineage.artifact import Problem
     from klineage.serialization import raw_text
     assert "definition.json" in raw_text(Problem.problem_spec())
+if prompt.startswith("STATS:"):
+    from klineage.harness.logging import record
+    record("probe", marker=prompt.removeprefix("STATS:"))
 if prompt == "NO_OUTPUT":
     raise SystemExit(0)
 if prompt == "NO_FINAL":
@@ -228,6 +231,32 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertTrue(prompt.endswith("build the thing"))
         self.assertTrue((result.trace_path.parent / "final_message.txt").is_file())
         self.assertTrue((result.trace_path.parent / "stderr.log").is_file())
+        self.assertEqual((result.trace_path.parent / "stats.jsonl").read_text(), "")
+
+    def test_attempt_stats(self):
+        runner = self.runner()
+        first = runner("STATS:first", run_id="stats-first")
+        runner.resume_id = "recorded-session"
+        second = runner("STATS:retry", run_id="stats-retry")
+        for result, marker in ((first, "first"), (second, "retry")):
+            events = (result.trace_path.parent / "stats.jsonl").read_text().splitlines()
+            self.assertEqual([json.loads(line)["marker"] for line in events], [marker])
+        self.assertFalse((runner.state_dir / "stats").exists())
+
+    def test_parallel_stats(self):
+        runners = [self.runner(), self.runner()]
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(runner, f"STATS:{index}", run_id=f"parallel-{index}")
+                       for index, runner in enumerate(runners)]
+            results = [future.result() for future in futures]
+        for index, result in enumerate(results):
+            events = (result.trace_path.parent / "stats.jsonl").read_text().splitlines()
+            self.assertEqual([json.loads(line)["marker"] for line in events], [str(index)])
+
+    def test_external_stats(self):
+        result = self.runner(state_dir=self.root / "external")("STATS:external")
+        events = (result.trace_path.parent / "stats.jsonl").read_text().splitlines()
+        self.assertEqual([json.loads(line)["marker"] for line in events], ["external"])
 
     def test_error_retains_trace(self):
         with self.assertRaises(CodexRunnerError) as caught:

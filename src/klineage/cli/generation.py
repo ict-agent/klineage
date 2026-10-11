@@ -10,13 +10,8 @@ from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from klineage.action import Apply
-from klineage.artifact import (
-    Kernel,
-    Node,
-    json_node,
-    load_problem,
-)
+from klineage.action import Generation
+from klineage.artifact import Kernel, load_problem
 from klineage.artifact.problem import DEFINITION_FILE, TARGET_FILE, problem_reference
 from klineage.backend import detect_backend, get_backend
 from klineage.cli.common import action_arguments, add_run_options
@@ -105,26 +100,9 @@ def generate(
             )
             server = stack.enter_context(service.start("unix://" + str(root / "evaluation.sock")))
             evaluation = Client(server.endpoint, spec.name, timeout=timeout)
-        initial = backend.kernel_type(
-            Node.directory(
-                ".",
-                (
-                    json_node(
-                        "metadata.json",
-                        {
-                            "name": spec.name,
-                            "problem": reference,
-                            "validation": None,
-                            "compile_flags": [],
-                        },
-                    ),
-                    Node.directory("submission"),
-                ),
-            )
-        )
         link_problem(work, evaluation.problem_id, reference)
-        result = Apply(
-            initial,
+        result = Generation(
+            spec,
             workdir=work,
             timeout=timeout,
             max_retries=max_retries,

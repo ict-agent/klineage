@@ -125,7 +125,7 @@ class Provider(BaseHTTPRequestHandler):
     def do_POST(self):
         body = self.rfile.read(int(self.headers["Content-Length"]))
         self.server.requests.append((self.path, self.headers["Authorization"], body, self.headers))
-        payload = b'data: {"type":"response.completed"}\n\n'
+        payload = b'data: {"type":"response.completed","response":{"id":"test-response","model":"test","usage":{"input_tokens":10,"output_tokens":3,"total_tokens":13}}}\n\n'
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Content-Length", str(len(payload)))
@@ -186,6 +186,20 @@ class AgentServerTests(unittest.TestCase):
         record = latest_kernel(self.work) / "metadata.json"
         self.assertEqual(json.loads(record.read_text())["evaluation"]["job_id"], reply["job_id"])
         self.assertFalse((self.work / "evaluations").exists())
+        events = [json.loads(line) for line in
+                  (result.trace_path.parent / "stats.jsonl").read_text().splitlines()]
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["event"], "evaluate")
+        self.assertEqual(event["problem_id"], "gemm")
+        self.assertEqual(event["job_id"], reply["job_id"])
+        self.assertTrue(event["accepted"])
+        self.assertTrue(event["compile_passed"])
+        self.assertTrue(event["correctness_passed"])
+        self.assertTrue(event["profile_passed"])
+        self.assertEqual(set(event["workloads"]), {case["uuid"] for case in problem_spec().workloads})
+        self.assertLessEqual(event["at"], event["finished_at"])
+        self.assertNotIn("sources", event)
         measured = load_artifact(latest_kernel(self.work), artifact_type=CudaKernel)
         client.verify(measured, reply["job_id"])
 
@@ -257,6 +271,15 @@ class AgentServerTests(unittest.TestCase):
                     self.assertEqual(reply["devices"], [])
                     self.assertNotIn("host-provider-secret", result.final_message)
                     self.assertNotIn("host-provider-secret", result.trace_path.read_text())
+                    events = [json.loads(line) for line in
+                              (result.trace_path.parent / "stats.jsonl").read_text().splitlines()]
+                    self.assertEqual(len(events), 1)
+                    self.assertEqual(events[0]["event"], "api_response")
+                    self.assertEqual(events[0]["status"], HTTPStatus.OK)
+                    self.assertEqual(events[0]["input_tokens"], 10)
+                    self.assertEqual(events[0]["output_tokens"], 3)
+                    self.assertEqual(events[0]["total_tokens"], 13)
+                    self.assertNotIn("host-provider-secret", json.dumps(events))
             self.assertEqual(len(upstream.requests), 2)
             for index, (path, authorization, body, _) in enumerate(upstream.requests):
                 self.assertEqual(path, "/api/v1/responses")

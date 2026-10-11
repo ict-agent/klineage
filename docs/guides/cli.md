@@ -30,6 +30,9 @@ By default, the command detects a local backend and starts evaluation. Use
 needs no local accelerator; the input must match a registered problem, whose
 original directory must also be accessible on the controller.
 
+The CLI passes the loaded Problem to the `Generation` action, which authors and
+evaluates candidates and returns the selected Kernel in its Artifact.
+
 | Argument | Meaning |
 | --- | --- |
 | `PROBLEM_DIR` | Problem directory with its definition and workloads |

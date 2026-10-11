@@ -4,17 +4,19 @@
 one per model round trip. Both carry an ISO timestamp, so a kernel's latency and
 the tokens spent producing it line up on the same axis.
 
-Collection is off unless KLINEAGE_LOG_DIR names a directory. Event writes are
+An explicit directory or KLINEAGE_LOG_DIR enables collection. Event writes are
 best effort; proxy startup errors remain visible.
 """
 
 from __future__ import annotations
 
+import fcntl
 import functools
 import json
 import os
+import re
 import threading
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,10 +31,12 @@ from klineage.utils import safe_file
 #: Set to a directory to collect records; unset disables collection entirely.
 LOG_ENV = "KLINEAGE_LOG_DIR"
 #: Records land here under the log directory.
-LOG_FILE = "events.jsonl"
+LOG_FILE = "stats.jsonl"
 #: Responses-API event carrying one round trip's usage.
 COMPLETED = "response.completed"
 STREAM_CHUNK_SIZE = 8192
+USAGE_BUFFER_BYTES = 1024 * 1024
+SSE_BOUNDARY = re.compile(br"\r?\n\r?\n")
 
 
 def now() -> str:
@@ -59,7 +63,9 @@ def record(event: str, /, *, directory: Path | None = None, **fields: Any) -> No
     entry = {"event": event, "at": now(), **fields}
     try:
         with safe_file(target / LOG_FILE, "a") as stream:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
             stream.write(to_json(entry, indent=None) + "\n")
+            stream.flush()
     except Exception:  # noqa: BLE001 - collection must not fail the caller
         pass
 
@@ -125,15 +131,15 @@ def observed(event: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
 
 
 def usage_from_event(payload: bytes) -> dict[str, Any] | None:
-    """Return the usage of a completed response event; None for any other frame."""
+    """Read usage from a completed SSE event or a non-streamed response."""
 
     try:
         event = json.loads(payload)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return None
-    if not isinstance(event, dict) or event.get("type") != COMPLETED:
+    if not isinstance(event, dict) or event.get("type") not in (None, COMPLETED):
         return None
-    response = event.get("response")
+    response = event.get("response") if event.get("type") == COMPLETED else event
     if not isinstance(response, dict):
         return None
     usage = response.get("usage")
@@ -189,22 +195,45 @@ def complete_events(buffer: bytes) -> tuple[list[bytes], bytes]:
     early, so the trailing partial frame carries into the next call.
     """
 
-    frames = []
-    while b"\n\n" in buffer:
-        frame, buffer = buffer.split(b"\n\n", 1)
-        frames.append(frame)
-    return frames, buffer
+    frames = SSE_BOUNDARY.split(buffer)
+    return frames[:-1], frames[-1]
 
 
-def record_usage(frames: Iterable[bytes], directory: Path | None = None) -> None:
-    """Record one api_response event per completed response frame."""
+class ResponseUsage:
+    """Inspect streamed frames or JSON with bounded buffering, retaining usage only."""
 
-    for frame in frames:
-        for payload in data_lines(frame):
-            if payload and payload != b"[DONE]":
-                usage = usage_from_event(payload)
-                if usage is not None:
-                    record("api_response", directory=directory, **usage)
+    def __init__(self, content_type: str):
+        self.streaming = content_type.partition(";")[0].strip().lower() == "text/event-stream"
+        self.pending = b""
+        self.discarding = False
+        self.usage = {}
+
+    def feed(self, data: bytes) -> None:
+        if not self.streaming:
+            if self.discarding:
+                return
+            self.pending += data
+            if len(self.pending) > USAGE_BUFFER_BYTES:
+                self.pending = b""
+                self.discarding = True
+            return
+
+        frames, pending = complete_events(self.pending + data)
+        if self.discarding and frames:
+            frames = frames[1:]
+            self.discarding = False
+        for frame in frames:
+            if len(frame) <= USAGE_BUFFER_BYTES:
+                self.usage = usage_from_event(b"\n".join(data_lines(frame))) or self.usage
+        self.discarding = self.discarding or len(pending) > USAGE_BUFFER_BYTES
+        # Keep enough bytes to recognize a CRLF separator split across reads.
+        self.pending = pending[-3:] if self.discarding else pending
+
+    def finish(self) -> dict[str, Any]:
+        if self.pending and not self.discarding:
+            payload = b"\n".join(data_lines(self.pending)) if self.streaming else self.pending
+            self.usage = usage_from_event(payload) or self.usage
+        return self.usage
 
 
 def relay(
@@ -212,17 +241,17 @@ def relay(
     sink,
     *,
     directory: Path | None = None,
+    content_type: str = "text/event-stream",
 ) -> None:
-    """Forward a chunked response and record usage as frames arrive."""
+    """Forward a chunked response and record its usage without buffering the body."""
 
-    pending = b""
+    collector = ResponseUsage(content_type)
     for data in iter(lambda: source.read(STREAM_CHUNK_SIZE), b""):
         sink.write(chunk(data))
         sink.flush()
-        frames, pending = complete_events(pending + data)
-        record_usage(frames, directory)
-    if pending:
-        record_usage((pending,), directory)
+        collector.feed(data)
+    if usage := collector.finish():
+        record("api_response", directory=directory, **usage)
     sink.write(LAST_CHUNK)
     sink.flush()
 
@@ -261,7 +290,8 @@ def handler_for(upstream: str, directory: Path | None = None):
                             self.send_header(name, value)
                     self.send_header("Transfer-Encoding", "chunked")
                     self.end_headers()
-                    relay(response, self.wfile, directory=directory)
+                    relay(response, self.wfile, directory=directory,
+                          content_type=response.headers.get("Content-Type", ""))
             except HTTPError as error:
                 payload = error.read()
                 self.send_response(error.code)

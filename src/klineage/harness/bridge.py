@@ -12,12 +12,15 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Mapping
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from socketserver import ThreadingMixIn, UnixStreamServer
 from urllib.parse import urlsplit
+
+from klineage.harness.logging import ResponseUsage, now, record
 
 RELAY_PORT = 18081
 BODY_LIMIT = 32 * 1024 * 1024
@@ -66,10 +69,11 @@ class Connections:
     daemon_threads = False
     block_on_close = True
 
-    def configure(self, connect, prefix="", headers=None):
+    def configure(self, connect, prefix="", headers=None, *, directory=None):
         self.connect = connect
         self.prefix = prefix
         self.headers = dict(headers or {})
+        self.directory = directory
         self.lock = threading.Lock()
         self.connections = set()
         self.closing = False
@@ -121,6 +125,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         pass
 
     def reject(self, status):
+        self.response_status = status
         self.close_connection = True
         self.send_response(status)
         self.send_header("Content-Length", "0")
@@ -158,6 +163,25 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 return
 
     def forward(self):
+        started_at = now()
+        started = time.monotonic()
+        self.response_status = HTTPStatus.BAD_GATEWAY
+        self.stats = {}
+        self.usage = None
+        try:
+            self.forward_request()
+        finally:
+            if self.server.directory is not None:
+                if self.usage is not None:
+                    self.stats.update(self.usage.finish())
+                record(
+                    "api_response", directory=self.server.directory,
+                    at=started_at, finished_at=now(),
+                    duration_ms=(time.monotonic() - started) * 1000,
+                    status=self.response_status, **self.stats,
+                )
+
+    def forward_request(self):
         self.close_connection = True
         try:
             length = self.body_length()
@@ -168,12 +192,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.reject(HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
             return
 
-        upstream = self.server.connect()
+        upstream = None
         peer = None
         watcher = None
         stopped = threading.Event()
         started = False
         try:
+            upstream = self.server.connect()
             upstream.connect()
             peer = upstream.sock
             peer.settimeout(STREAM_TIMEOUT)
@@ -199,6 +224,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
             watcher = threading.Thread(target=self.watch_client, args=(peer, stopped), daemon=True)
             watcher.start()
             with upstream.getresponse() as response:
+                self.response_status = response.status
+                if self.server.directory is not None and response.status < HTTPStatus.BAD_REQUEST:
+                    self.usage = ResponseUsage(response.headers.get("Content-Type", ""))
                 self.send_response(response.status)
                 for name, value in response.headers.items():
                     if name.lower() in RESPONSE_HEADERS:
@@ -208,11 +236,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 started = True
                 while data := response.read1(TRANSFER_BYTES):
+                    if self.usage is not None:
+                        self.usage.feed(data)
                     self.wfile.write(f"{len(data):x}\r\n".encode() + data + b"\r\n")
                     self.wfile.flush()
                 self.wfile.write(b"0\r\n\r\n")
                 self.wfile.flush()
-        except (OSError, http.client.HTTPException):
+        except (OSError, http.client.HTTPException) as error:
+            self.stats["error"] = type(error).__name__
             if not started:
                 with contextlib.suppress(OSError):
                     self.reject(HTTPStatus.BAD_GATEWAY)
@@ -221,7 +252,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if peer is not None:
                 disconnect(peer)
                 self.server.discard(peer)
-            upstream.close()
+            if upstream is not None:
+                upstream.close()
             if watcher is not None:
                 watcher.join(STOP_SECONDS)
 
@@ -262,11 +294,12 @@ class ProviderBridge(Service):
 
     Host headers override sandbox headers. A non-None API key overrides their
     Authorization value; None leaves authentication to the supplied headers.
+    An explicit directory receives one stats.jsonl record per request.
     """
 
     def __init__(
         self, base_url: str, api_key: str | None, socket_path: Path,
-        *, headers: Mapping[str, str] | None = None,
+        *, headers: Mapping[str, str] | None = None, directory: Path | None = None,
     ):
         target = urlsplit(base_url)
         if (target.scheme not in ("http", "https") or not target.hostname
@@ -299,6 +332,7 @@ class ProviderBridge(Service):
             self.headers["authorization"] = "Bearer " + api_key
         self.target = target
         self.socket_path = Path(socket_path).absolute()
+        self.directory = directory
         self.server = None
 
     @property
@@ -317,7 +351,9 @@ class ProviderBridge(Service):
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
         self.server = UnixServer(str(self.socket_path), ProxyHandler)
         self.socket_path.chmod(0o600)
-        self.server.configure(self.connect, self.target.path.rstrip("/"), self.headers)
+        self.server.configure(
+            self.connect, self.target.path.rstrip("/"), self.headers, directory=self.directory,
+        )
         return self.start()
 
     def close(self):

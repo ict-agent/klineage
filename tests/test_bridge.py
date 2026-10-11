@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import http.client
+import json
 import os
 import subprocess
 import sys
@@ -14,6 +15,7 @@ import unittest
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 from klineage.harness.bridge import (
     BODY_LIMIT,
@@ -22,6 +24,7 @@ from klineage.harness.bridge import (
     ProviderBridge,
     UnixConnection,
 )
+from klineage.harness.logging import LOG_ENV
 
 
 class Provider(BaseHTTPRequestHandler):
@@ -36,10 +39,16 @@ class Provider(BaseHTTPRequestHandler):
         self.server.received.set()
         body = first + self.rfile.read(size - len(first))
         self.server.requests.append((self.path, self.headers, body))
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", "text/event-stream")
+        self.send_response(self.server.status)
+        self.send_header("Content-Type", self.server.content_type)
         self.send_header("Connection", "close")
         self.end_headers()
+        if self.server.chunks is not None:
+            for data in self.server.chunks:
+                self.wfile.write(data)
+                self.wfile.flush()
+            self.close_connection = True
+            return
         self.wfile.write(b"data: first\n\n")
         self.wfile.flush()
         self.server.release.wait(3)
@@ -60,14 +69,97 @@ class BridgeTests(unittest.TestCase):
         self.upstream.requests = []
         self.upstream.received = threading.Event()
         self.upstream.release = threading.Event()
+        self.upstream.status = HTTPStatus.OK
+        self.upstream.content_type = "text/event-stream"
+        self.upstream.chunks = None
         self.thread = threading.Thread(target=self.upstream.serve_forever, daemon=True)
         self.thread.start()
         self.stack.callback(self.stop_provider)
         self.base_url = f"http://127.0.0.1:{self.upstream.server_port}/api/v1"
         self.path = self.root / "provider.sock"
+        self.directory = self.root / "run"
         self.bridge = self.stack.enter_context(
-            ProviderBridge(self.base_url, "host-secret", self.path)
+            ProviderBridge(self.base_url, "host-secret", self.path, directory=self.directory)
         )
+
+    def stats(self):
+        deadline = time.monotonic() + 2
+        while self.bridge.server and self.bridge.server.connections and time.monotonic() < deadline:
+            time.sleep(0.01)
+        path = self.directory / "stats.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()]
+
+    def usage_response(self):
+        return {
+            "id": "response-1", "model": "test-model", "object": "response",
+            "usage": {
+                "input_tokens": 10, "output_tokens": 2, "total_tokens": 12,
+                "input_tokens_details": {"cached_tokens": 4},
+                "output_tokens_details": {"reasoning_tokens": 1},
+            },
+        }
+
+    def test_records_split_sse_usage(self):
+        payload = json.dumps({"type": "response.completed", "response": self.usage_response()}).encode()
+        for ending in (b"\n", b"\r\n"):
+            frame = b"event: response.completed" + ending + b"data: " + payload + ending * 2
+            self.upstream.chunks = [frame[index:index + 7] for index in range(0, len(frame), 7)]
+            connection = self.connection()
+            connection.request("POST", "/responses", b'{"private":"request-body"}')
+            self.assertEqual(connection.getresponse().read(), frame)
+        entries = self.stats()
+        self.assertEqual(len(entries), 2)
+        for entry in entries:
+            self.assertEqual(entry["event"], "api_response")
+            self.assertEqual(entry["status"], HTTPStatus.OK)
+            self.assertEqual(entry["total_tokens"], 12)
+            self.assertEqual(entry["cached_tokens"], 4)
+            self.assertEqual(entry["reasoning_tokens"], 1)
+            self.assertGreaterEqual(entry["duration_ms"], 0)
+            self.assertLessEqual(entry["at"], entry["finished_at"])
+        text = (self.directory / "stats.jsonl").read_text()
+        self.assertNotIn("host-secret", text)
+        self.assertNotIn("request-body", text)
+
+    def test_json_usage_once(self):
+        body = json.dumps(self.usage_response()).encode()
+        self.upstream.content_type = "application/json"
+        self.upstream.chunks = [body[:17], body[17:]]
+        with patch.dict(os.environ, {LOG_ENV: str(self.directory)}):
+            with LoopbackRelay(self.path, port=0) as relay:
+                connection = http.client.HTTPConnection("127.0.0.1", relay.port, timeout=2)
+                self.addCleanup(connection.close)
+                connection.request("POST", "/responses", b"{}")
+                self.assertEqual(connection.getresponse().read(), body)
+        [entry] = self.stats()
+        self.assertEqual(entry["response_id"], "response-1")
+        self.assertEqual(entry["model"], "test-model")
+        self.assertEqual(entry["input_tokens"], 10)
+
+    def test_records_http_failure(self):
+        self.upstream.status = HTTPStatus.TOO_MANY_REQUESTS
+        self.upstream.content_type = "application/json"
+        self.upstream.chunks = [b'{"error":"provider-secret"}']
+        connection = self.connection()
+        connection.request("POST", "/responses", b"{}")
+        response = connection.getresponse()
+        self.assertEqual(response.status, HTTPStatus.TOO_MANY_REQUESTS)
+        self.assertEqual(response.read(), self.upstream.chunks[0])
+        [entry] = self.stats()
+        self.assertEqual(entry["status"], HTTPStatus.TOO_MANY_REQUESTS)
+        self.assertNotIn("provider-secret", json.dumps(entry))
+
+    def test_connection_failure(self):
+        with patch.object(self.bridge.server, "connect", side_effect=ConnectionRefusedError("secret-host")):
+            connection = self.connection()
+            connection.request("POST", "/responses", b"{}")
+            response = connection.getresponse()
+            self.assertEqual(response.status, HTTPStatus.BAD_GATEWAY)
+            self.assertEqual(response.read(), b"")
+            [entry] = self.stats()
+        self.assertEqual(entry["status"], HTTPStatus.BAD_GATEWAY)
+        self.assertEqual(entry["error"], "ConnectionRefusedError")
+        self.assertNotIn("secret-host", json.dumps(entry))
 
     def stop_provider(self):
         self.upstream.release.set()
@@ -98,6 +190,9 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(body, b"{}")
         self.upstream.release.set()
         self.assertEqual(response.read(), b"data: last\n\n")
+        [entry] = self.stats()
+        self.assertEqual(entry["status"], HTTPStatus.OK)
+        self.assertNotIn("total_tokens", entry)
 
     def test_request_streams(self):
         connection = self.connection()
@@ -224,6 +319,8 @@ class BridgeTests(unittest.TestCase):
         self.bridge.close()
         self.assertLess(time.monotonic() - started, 2)
         self.assertFalse(self.path.exists())
+        [entry] = self.stats()
+        self.assertEqual(entry["event"], "api_response")
 
     def test_disconnect_cancels(self):
         connection = self.connection()

@@ -3,6 +3,7 @@
 from klineage.action.action import Action, same_implementation
 from klineage.action.apply import Apply, apply
 from klineage.action.decompose import Decompose, decompose
+from klineage.action.generation import Generation
 from klineage.action.init import Init, init
 
 __all__ = [
@@ -10,6 +11,7 @@ __all__ = [
     "Action",
     "Apply",
     "Decompose",
+    "Generation",
     "Init",
     "apply",
     "decompose",

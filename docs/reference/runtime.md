@@ -15,6 +15,10 @@ Sessions reuse the configured `CODEX_HOME`. Run records live under
 `workspace/.klineage/codex-runs/` in the action directory. See
 [Model access](../guides/evaluation.md#model-access) for credential visibility.
 
+Each attempt records `stats.jsonl` beside `trace.jsonl`. `api_response` events
+track model usage and request duration; `evaluate` events track job IDs,
+acceptance and per-workload measurements. Failed calls retain an error record.
+
 ::: klineage.harness.AgentRuntime
 
 ::: klineage.harness.CodexRunner

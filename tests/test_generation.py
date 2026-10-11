@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from kernel_fixtures import make_kernel, measured, write_kernel
 from problem_fixtures import problem_spec
+from prompt_fixtures import prompt_inputs
 
 from klineage.artifact import (
     Kernel,
@@ -93,7 +94,7 @@ class GenerationTests(unittest.TestCase):
         )
         # An agent may retain the supplied problem reference in its source tree.
         metadata = json.loads(candidate.find("metadata.json").content)
-        metadata["problem"] = problem_reference(self.runner.return_value.read_only[-1], spec)
+        metadata["problem"] = problem_reference(link.resolve(), spec)
         candidate = type(candidate)(
             candidate.tree.with_child(json_node("metadata.json", metadata))
         )
@@ -150,6 +151,20 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(
             set(result.validation.workloads), {case["uuid"] for case in workloads}
         )
+
+    def test_runs_generation_action(self):
+        backend = get_backend("cuda")
+        with (
+            patch("klineage.cli.generation.detect_backend", return_value=backend),
+            patch.object(type(backend), "info", return_value={"platform": "sm90"}),
+        ):
+            generate(self.path, workdir=self.work, max_retries=0)
+        call = self.runner.return_value.call_args
+        self.assertTrue(call.kwargs["run_id"].startswith("Generation-"))
+        values = prompt_inputs(call.args[0])
+        self.assertEqual(values["problem"]["artifact_type"], "problem")
+        self.assertNotIn("current_kernel", values)
+        self.runner.return_value.mount_memory.assert_not_called()
 
     def test_declared_target(self):
         target = {"name": "custom_gemm", "language": "cuda", "platform": "sm90"}

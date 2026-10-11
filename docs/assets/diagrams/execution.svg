@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="800" height="392" viewBox="0 0 800 392" role="img" aria-labelledby="title desc">
 <title id="title">Kernel generation and evaluation</title>
-<desc id="desc">A problem supplies Apply with a definition and workloads. Apply queries procedural memory for reusable optimization knowledge and submits a kernel artifact to the evaluation service. An isolated backend worker builds, checks and times it. The service returns performance feedback to Apply.</desc>
+<desc id="desc">Generation creates a kernel from a problem's definition and workloads. Apply refines a kernel using optional procedural memory. Both actions submit kernel artifacts to the evaluation service, where a backend worker builds, checks and times them, and receive performance feedback.</desc>
   <defs>
     <style>
       :root { --paper:#f8fbff; --surface:#ffffff; --ink:#1b2d43; --muted:#5e728b; --rule:#b9ccdf; --grid:#dce8f3; --blue:#3377cc; --violet:#7b61b5; --green:#26846b; --amber:#b37b37; }
@@ -56,8 +56,8 @@
     <circle class="halo" r="43"/><circle class="disc" r="31"/>
     <use href="#terminal"/>
   </g>
-  <text class="title" x="242" y="240" text-anchor="middle">Apply</text>
-  <text class="body" x="242" y="259" text-anchor="middle">CodexRunner</text>
+  <text class="title" x="242" y="240" text-anchor="middle">Generation</text>
+  <text class="body" x="242" y="259" text-anchor="middle">or Apply</text>
   <path class="wire" d="M 276 183 H 408"/>
   <text class="label" x="342" y="170" text-anchor="middle">kernel artifact</text>
 
@@ -89,5 +89,5 @@
   <g class="violet"><path class="trace" d="M 70 309 H 92 M 70 317 H 86"/></g>
   <text class="title" x="91" y="355" text-anchor="middle">Procedural</text>
   <text class="title" x="91" y="377" text-anchor="middle">memory</text>
-  <path class="wire" marker-start="url(#arrow)" d="M 117 309 H 175 Q 186 309 186 298 V 221 Q 186 210 197 210 H 215"/>
+  <path class="wire" marker-start="url(#arrow)" d="M 117 309 H 175 Q 186 309 186 298 V 265 Q 186 254 197 254 H 208"/>
 </svg>

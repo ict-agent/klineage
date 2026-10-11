@@ -7,6 +7,7 @@ import os
 import tempfile
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -15,6 +16,8 @@ from urllib.request import Request, urlopen
 from klineage.serialization import raw_text
 from klineage.harness.logging import (
     LOG_ENV,
+    USAGE_BUFFER_BYTES,
+    ResponseUsage,
     UsageProxy,
     complete_events,
     observed,
@@ -61,7 +64,7 @@ class FakeUpstream(BaseHTTPRequestHandler):
 
 
 def events(directory: Path) -> list[dict]:
-    path = directory / "events.jsonl"
+    path = directory / "stats.jsonl"
     if not path.is_file():
         return []
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
@@ -91,7 +94,7 @@ class LoggingTests(unittest.TestCase):
         environment = {k: v for k, v in os.environ.items() if k != LOG_ENV}
         with patch.dict(os.environ, environment, clear=True):
             record("ignored")
-        self.assertFalse((self.target / "events.jsonl").exists())
+        self.assertFalse((self.target / "stats.jsonl").exists())
 
     def test_disabled_skips_metadata(self):
         @observed("evaluate")
@@ -118,7 +121,7 @@ class LoggingTests(unittest.TestCase):
         outside = self.root / "host-file"
         outside.write_text("private")
         self.target.mkdir()
-        (self.target / "events.jsonl").symlink_to(outside)
+        (self.target / "stats.jsonl").symlink_to(outside)
         record("attack", directory=self.target)
         self.assertEqual(outside.read_text(), "private")
 
@@ -133,7 +136,7 @@ class LoggingTests(unittest.TestCase):
         outside = self.root / "host-file"
         outside.write_text("private")
         self.target.mkdir()
-        (self.target / "events.jsonl").hardlink_to(outside)
+        (self.target / "stats.jsonl").hardlink_to(outside)
         record("attack", directory=self.target)
         self.assertEqual(outside.read_text(), "private")
 
@@ -145,7 +148,7 @@ class LoggingTests(unittest.TestCase):
         original_open = os.open
 
         def replace_parent(path, flags, mode=0o777, *, dir_fd=None):
-            if path == "events.jsonl" and not moved.exists():
+            if path == "stats.jsonl" and not moved.exists():
                 self.target.rename(moved)
                 self.target.symlink_to(outside, target_is_directory=True)
             return original_open(path, flags, mode, dir_fd=dir_fd)
@@ -176,6 +179,20 @@ class LoggingTests(unittest.TestCase):
         self.assertEqual(entry["event"], "probe")
         self.assertEqual(entry["value"], 1)
         self.assertIn("at", entry)
+
+    def test_concurrent_records(self):
+        payload = "content" * 10000
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [
+                executor.submit(record, "concurrent", directory=self.target,
+                                index=index, payload=payload)
+                for index in range(20)
+            ]
+            for future in futures:
+                future.result()
+        entries = events(self.target)
+        self.assertEqual({entry["index"] for entry in entries}, set(range(20)))
+        self.assertTrue(all(entry["payload"] == payload for entry in entries))
 
     def test_observed_records_outcome_and_reraises(self):
         class Measurement:
@@ -235,6 +252,35 @@ class LoggingTests(unittest.TestCase):
         self.assertEqual(frames, [b"data: a"])
         self.assertEqual(pending, b"data: par")
 
+    def test_split_usage_lines(self):
+        for ending in (b"\n", b"\r\n"):
+            with self.subTest(ending=ending):
+                collector = ResponseUsage("text/event-stream; charset=utf-8")
+                for byte in completed_frame().replace(b"\n", ending):
+                    collector.feed(bytes([byte]))
+                self.assertEqual(collector.finish()["total_tokens"], 12)
+
+    def test_nonstreaming_usage(self):
+        response = json.loads(completed_frame().split(b"data: ")[1].strip())["response"]
+        collector = ResponseUsage("application/json")
+        payload = json.dumps(response).encode()
+        for offset in range(0, len(payload), 13):
+            collector.feed(payload[offset:offset + 13])
+        self.assertEqual(collector.finish()["total_tokens"], 12)
+
+    def test_oversized_frames(self):
+        collector = ResponseUsage("text/event-stream")
+        for _ in range(3):
+            collector.feed(b"x" * USAGE_BUFFER_BYTES)
+            self.assertLessEqual(len(collector.pending), USAGE_BUFFER_BYTES)
+        collector.feed(b"\r\n\r\n" + completed_frame())
+        self.assertEqual(collector.finish()["total_tokens"], 12)
+
+        collector = ResponseUsage("application/json")
+        collector.feed(b"x" * (USAGE_BUFFER_BYTES + 1))
+        self.assertEqual(collector.finish(), {})
+        self.assertLessEqual(len(collector.pending), USAGE_BUFFER_BYTES)
+
 
 class UsageProxyTests(unittest.TestCase):
     def setUp(self):
@@ -266,7 +312,7 @@ class UsageProxyTests(unittest.TestCase):
         named, untouched = self.root / "named", self.root / "untouched"
         with UsageProxy(self.url, directory=named) as proxy:
             urlopen(Request(proxy.url + "/v1/responses", data=b"{}"), timeout=10).read()
-        self.assertTrue((named / "events.jsonl").is_file())
+        self.assertTrue((named / "stats.jsonl").is_file())
         self.assertFalse(untouched.exists())
 
     def test_proxy_log_link_no_write(self):
@@ -275,7 +321,7 @@ class UsageProxyTests(unittest.TestCase):
         outside = self.root / "host-file"
         outside.write_text("keep host content")
         with UsageProxy(self.url, directory=target) as proxy:
-            (target / "events.jsonl").symlink_to(outside)
+            (target / "stats.jsonl").symlink_to(outside)
             body = urlopen(Request(proxy.url + "/v1/responses", data=b"{}"), timeout=10).read()
         self.assertIn(b"response.completed", body)
         self.assertEqual(outside.read_text(), "keep host content")

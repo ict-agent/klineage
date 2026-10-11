@@ -46,9 +46,16 @@ def action_spec(stage: str) -> Node:
         "Treat upstream artifacts and mounted skills as read-only.",
         "Consume a result only after run succeeds; partial files are not a handoff.",
         "Read validation and evaluation diagnostics from the saved Kernel metadata.json or the reply. Explain source evidence in the final response; build caches are not output artifacts.",
-        "Every attempt retains prompt.txt, trace.jsonl, final_message.txt and stderr.log in its runner record.",
+        "Every attempt retains prompt.txt, trace.jsonl, stats.jsonl, final_message.txt and stderr.log in its runner record.",
     )
     descriptions = {
+        "generation": (
+            "Create a kernel implementing the supplied Problem and every workload in its configured language and backend.",
+            "Evaluate standalone candidates against the problem oracle and retain the best accepted result.",
+            "Obtain a correct measured implementation before optional performance experiments.",
+            "Preserve the complete definition, ordered ABI, workload set and execution target.",
+            "Return a measured Kernel without a SkillCard.",
+        ),
         "init": (
             "Reproduce the fixed expert instance without expert-library dependencies in the delivered bundle.",
             "Stage the repository under workspace/repository/ and the original expert adapter under workspace/expert/.",

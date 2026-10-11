@@ -10,6 +10,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlsplit
@@ -347,6 +348,63 @@ server.close()
         source.symlink_to(self.root / "absent")
         with self.assertRaisesRegex(StructuredOutputError, "symlink"):
             self.client.evaluate(directory, self.root / "agent")
+
+    def test_gateway_stats_failures(self):
+        logs = self.root / "attempt"
+        gateway = ClientGateway(self.client, self.root / "gateway.sock", directory=logs)
+        with patch.object(self.client, "request", side_effect=ServerError("upstream unavailable")):
+            with self.assertRaisesRegex(ServerError, "upstream unavailable"):
+                gateway.evaluate(self.request())
+        events = [json.loads(line) for line in (logs / "stats.jsonl").read_text().splitlines()]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "evaluate")
+        self.assertEqual(events[0]["problem_id"], "first")
+        self.assertFalse(events[0]["accepted"])
+        self.assertEqual(events[0]["error"], "ServerError: upstream unavailable")
+        self.assertLessEqual(events[0]["at"], events[0]["finished_at"])
+        self.assertNotIn("submission", events[0])
+
+    def test_gateway_failed_result(self):
+        logs = self.root / "attempt"
+        gateway = ClientGateway(self.client, self.root / "gateway.sock", directory=logs)
+        with patch.object(FakeRuntime, "evaluate", side_effect=RuntimeError("compiler failed")):
+            result = gateway.evaluate(self.request())
+        self.assertFalse(result.accepted)
+        events = [json.loads(line) for line in (logs / "stats.jsonl").read_text().splitlines()]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["job_id"], result.job_id)
+        self.assertFalse(events[0]["accepted"])
+        self.assertFalse(events[0]["compile_passed"])
+        self.assertIn("compiler failed", events[0]["error"])
+
+    def test_parallel_gateway_stats(self):
+        gateways = [ClientGateway(
+            Client(self.running.endpoint, name), self.root / f"{name}.sock",
+            directory=self.root / name,
+        ) for name in ("first", "second")]
+        with patch.dict(os.environ, {"KLINEAGE_LOG_DIR": str(self.root / "unrelated")}):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(gateway.evaluate, self.request() | {"problem_id": name})
+                           for gateway, name in zip(gateways, ("first", "second"), strict=True)]
+                results = [future.result() for future in futures]
+        for result in results:
+            events = [json.loads(line) for line in
+                      (self.root / result.problem_id / "stats.jsonl").read_text().splitlines()]
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["problem_id"], result.problem_id)
+            self.assertEqual(events[0]["job_id"], result.job_id)
+        self.assertFalse((self.root / "unrelated").exists())
+
+    def test_gateway_result_no_event(self):
+        logs = self.root / "attempt"
+        gateway = ClientGateway(self.client, self.root / "gateway.sock", directory=logs)
+        result = gateway.evaluate(self.request())
+        self.assertTrue(result.accepted)
+        gateway.result(result.job_id)
+        events = [json.loads(line) for line in (logs / "stats.jsonl").read_text().splitlines()]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["job_id"], result.job_id)
+        self.assertTrue(events[0]["accepted"])
 
     def test_gateway_blocks_other_jobs(self):
         other = self.service.evaluate(self.request() | {"problem_id": "second"})

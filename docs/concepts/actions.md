@@ -1,8 +1,8 @@
 # Action Primitive
 
-Actions transform Artifacts through an agent session. **Init** adapts an expert
-implementation, **Decompose** extracts an optimization into a reusable skill,
-and **Apply** generates or improves a kernel using those skills.
+Actions transform Artifacts through an agent session. **Generation** creates a
+kernel from a Problem. **Init** adapts an expert implementation, **Decompose**
+extracts an optimization into a reusable skill, and **Apply** improves a kernel.
 
 <figure class="diagram" tabindex="0" aria-label="Init and repeated Decompose rounds extract skill memory for Apply to reuse on a target kernel.">
   <img src="../assets/diagrams/actions.svg"
@@ -13,17 +13,19 @@ and **Apply** generates or improves a kernel using those skills.
 Each call runs one round and returns an Artifact. A controller can pass that
 result to another action, repeat a round or stop. For generation from a problem
 directory, [klineage-generation](../guides/cli.md#generate-a-kernel) prepares the
-input and runs Apply for you.
+input and runs Generation for you.
 
 ## Choose an action
 
 | Action | Purpose | Result |
 | --- | --- | --- |
+| `Generation` | Generate a kernel from a Problem and evaluate every workload | Kernel |
 | `Init` | Adapt an expert implementation to the problem and its workloads | Kernel |
 | `Decompose` | Remove one optimization and explain how to restore it | Kernel and, when changed, a SkillCard |
 | `Apply` | Generate or improve an implementation, optionally using memory | Kernel |
 
-Init gives the agent read-only access to the expert repository. Decompose turns
+Generation starts from the definition and workloads in a Problem. Init gives the
+agent read-only access to the expert repository. Decompose turns
 implementation knowledge into a recipe. Apply can use those recipes, optimize
 without memory, or start from an empty submission.
 
@@ -32,6 +34,21 @@ checks every workload. Apply asks for an improvement on at least one workload
 while preserving the others' performance gates; if it finds none, it returns the
 unchanged implementation. Decompose can return a slower kernel after removing
 an optimization.
+
+To run Generation with an existing evaluator:
+
+```python
+from pathlib import Path
+from klineage.action import Generation
+from klineage.artifact import Kernel
+from klineage.server import Client
+
+client = Client(problem_id="gemm")
+result = Generation(
+    client.problem(), workdir=Path("runs/generate"), evaluation=client,
+).run()
+kernel = result.part("kernel", Kernel)
+```
 
 ## Pass results between actions
 
@@ -128,7 +145,8 @@ print(raw_text(action_spec("apply")))
 Each layout includes descriptions and examples. Layouts are not copied into
 prompts or saved as spec files. Diagnostic scripts, backups, binaries and logs
 stay under `workspace/`; its `.klineage/codex-runs/` directory keeps the prompts,
-traces and final replies.
+traces, statistics and final replies. Each attempt has its own `stats.jsonl`
+beside `trace.jsonl`, recording model requests and evaluation calls.
 
 ## Stop or retry
 
