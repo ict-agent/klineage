@@ -128,6 +128,9 @@ class ServerCampaignTests(unittest.TestCase):
         self.assertIn("ncu", action.prompt)
         self.assertIn("Client.evaluate", action.prompt)
         self.assertIn("never overlap", action.prompt)
+        self.assertIn("workspace/AGENTS.md", action.prompt)
+        self.assertIn("workspace/.agents/skills/", action.prompt)
+        self.assertIn("source backups, binaries and logs under workspace/", action.prompt)
 
 
 if __name__ == "__main__":

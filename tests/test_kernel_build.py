@@ -2,6 +2,7 @@ import inspect
 import json
 import tempfile
 import unittest
+from contextlib import chdir
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,7 +45,7 @@ class KernelBuildTests(unittest.TestCase):
             platform="sm120",
         )
         self.current = make_kernel("increment", self.problem, SOURCES)
-        self.directory = write_kernel(self.current, self.root / "kernel")
+        self.directory = write_kernel(self.current, self.root / "current_kernel")
 
     def test_abstract_interfaces(self):
         self.assertEqual(Kernel.__abstractmethods__, {"kernel_spec", "build_kernel"})
@@ -64,6 +65,13 @@ class KernelBuildTests(unittest.TestCase):
             {p.name for p in self.directory.iterdir()}, {"metadata.json", "submission"}
         )
         self.assertNotIn("problem", {node.name for node in current.tree.children})
+
+    def test_default_directory_load(self):
+        with chdir(self.root):
+            current = Kernel.load_kernel()
+        self.assertIsInstance(current, CudaKernel)
+        self.assertEqual(current(3), 4)
+        self.assertEqual(load_problem(current), self.problem)
 
     def test_json_is_separate_data(self):
         current = CudaKernel.load_kernel(self.directory)
@@ -136,7 +144,7 @@ class KernelBuildTests(unittest.TestCase):
                 current = make_kernel(
                     "test",
                     problem_spec(language=backend.language, platform=backend.kind),
-                    {cls.kernel_spec().child("submission/solution").children[0].name: "// source"},
+                    {cls.kernel_spec().find("submission").find("solution").children[0].name: "// source"},
                 )
                 directory = write_kernel(current, self.root / backend.kind)
                 with patch.object(
@@ -144,7 +152,7 @@ class KernelBuildTests(unittest.TestCase):
                 ) as build:
                     loaded = cls.load_kernel(directory)
                 build.assert_called_once_with(
-                    self.root / ".klineage/build", include_paths=()
+                    self.root / "workspace/.klineage/build", include_paths=()
                 )
                 self.assertEqual(loaded(3), 4)
 
@@ -169,7 +177,7 @@ class KernelBuildTests(unittest.TestCase):
         ):
             loaded = Kernel.load_kernel(self.directory)
             self.assertIsInstance(loaded, ExtendedKernel)
-            self.assertEqual(loaded.node("notes.txt").content, notes.read_text())
+            self.assertEqual(loaded.find("notes.txt").content, notes.read_text())
             self.assertEqual(loaded(3), 4)
             notes.unlink()
             with self.assertRaisesRegex(ValueError, "notes.txt: missing"):

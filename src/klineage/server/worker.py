@@ -39,7 +39,7 @@ def plugin_paths(names: Sequence[str]) -> tuple[Path, ...]:
 
 
 def problem_paths(kernel: Kernel, workload_id: str | None = None) -> tuple[Path, ...]:
-    metadata = json.loads(raw_text(kernel.node("metadata.json")))
+    metadata = json.loads(raw_text(kernel.find("metadata.json")))
     paths = [Path(metadata["problem"]["path"]).resolve(strict=True)]
     problem = load_problem(kernel)
     workloads = problem.resolve_inputs()

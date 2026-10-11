@@ -83,12 +83,12 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(reply.validation.latency_ms, 1)
         self.assertEqual(load_problem(reply.kernel), problem_spec())
         self.assertEqual(
-            json.loads(raw_text(reply.kernel.node("metadata.json")))["problem"][
+            json.loads(raw_text(reply.kernel.find("metadata.json")))["problem"][
                 "path"
             ],
             str(self.service.problem_paths["gemm"]),
         )
-        metadata = json.loads((work / "kernels/0/metadata.json").read_text())
+        metadata = json.loads((work / "versions/0/metadata.json").read_text())
         self.assertEqual(metadata["evaluation"]["job_id"], reply.job_id)
         self.assertEqual(metadata["validation"], json.loads(to_json(reply.validation)))
         self.assertIn("measured timing evidence", "".join(metadata["evaluation"]["diagnostics"].values()))
@@ -116,7 +116,7 @@ class ServerTests(unittest.TestCase):
         first = self.client.evaluate(kernel(), work)
         second = self.client.evaluate(kernel(source="changed"), work)
         restored = self.client.result(first.job_id, work=work)
-        versions = work / "kernels"
+        versions = work / "versions"
         self.assertEqual(sorted(path.name for path in versions.iterdir()), ["0", "1", "2"])
         for number, result in enumerate((first, second, restored)):
             with self.subTest(number=number):
@@ -129,7 +129,7 @@ class ServerTests(unittest.TestCase):
         work = self.root / "work"
         with patch.object(FakeRuntime, "evaluate", side_effect=RuntimeError("worker failed")):
             result = self.client.evaluate(kernel(), work)
-        saved = load_artifact(work / "kernels/0", artifact_type=type(result.kernel))
+        saved = load_artifact(work / "versions/0", artifact_type=type(result.kernel))
         self.assertEqual(saved.validation, result.validation)
         self.assertFalse(saved.validation.accepted)
 
@@ -211,7 +211,7 @@ class ServerTests(unittest.TestCase):
             Node.directory(
                 "submission", (
                     Node.file("config.toml", reference=reference),
-                    candidate.node("submission/solution"),
+                    candidate.find("submission").find("solution"),
                 )
             )
         )
@@ -226,7 +226,7 @@ class ServerTests(unittest.TestCase):
 
     def test_oracle_is_owned_by_service(self):
         candidate = kernel()
-        metadata = json.loads(raw_text(candidate.node("metadata.json")))
+        metadata = json.loads(raw_text(candidate.find("metadata.json")))
         metadata["problem"] = {"path": "/etc/passwd", "sha256": "0" * 64, "size": 100}
         candidate = type(candidate)(
             candidate.tree.with_child(json_node("metadata.json", metadata))
@@ -276,7 +276,7 @@ class ServerTests(unittest.TestCase):
         reply = self.client.evaluate(kernel(), work)
         changed = edit_kernel(reply.kernel, source_files={"kernel.cu": "changed"})
         # Preserve the expected local problem reference while changing sources.
-        original_meta = json.loads(raw_text(reply.kernel.node("metadata.json")))
+        original_meta = json.loads(raw_text(reply.kernel.find("metadata.json")))
         changed = type(changed)(
             changed.tree.with_child(json_node("metadata.json", original_meta))
         )
@@ -292,7 +292,7 @@ class ServerTests(unittest.TestCase):
     def test_verify_checks_ref_before_read(self):
         work = self.root / "work"
         reply = self.client.evaluate(kernel(), work)
-        metadata = json.loads(raw_text(reply.kernel.node("metadata.json")))
+        metadata = json.loads(raw_text(reply.kernel.find("metadata.json")))
         metadata["problem"]["path"] = "/etc/passwd"
         forged = type(reply.kernel)(
             reply.kernel.tree.with_child(json_node("metadata.json", metadata))
@@ -397,7 +397,7 @@ class ServerTests(unittest.TestCase):
         restored = self.client.result(first.job_id, work=work)
         self.assertEqual(restored.digest, first.digest)
         self.assertEqual(
-            json.loads((work / "kernels/2/metadata.json").read_text())["evaluation"]["job_id"],
+            json.loads((work / "versions/2/metadata.json").read_text())["evaluation"]["job_id"],
             first.job_id,
         )
 

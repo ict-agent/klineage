@@ -1,4 +1,4 @@
-"""Model configuration and host-owned credentials for kernel campaigns."""
+"""Model configuration and provider credentials for kernel campaigns."""
 
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ def model_settings(
     *, model=None, reasoning_effort=None, api_base_url=None, api_key_env=None,
     api_key=None,
 ) -> dict:
-    """Resolve model settings while keeping provider secrets on the host.
+    """Resolve model settings and credentials for the provider bridge.
 
     Explicit arguments override KLINEAGE environment settings and Codex user
     configuration. A different endpoint cannot inherit stored provider secrets.
@@ -176,7 +176,7 @@ def model_settings(
 
 @dataclass(frozen=True, slots=True)
 class Provider:
-    """A model endpoint whose credentials stay outside the agent sandbox."""
+    """A model endpoint routed through a host-side bridge."""
 
     model: str
     base_url: str

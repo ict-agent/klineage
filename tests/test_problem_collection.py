@@ -54,7 +54,7 @@ class ProblemCollectionTests(unittest.TestCase):
         result = service.evaluate({"problem_id": "alpha", "submission": submission(candidate)})
         self.assertTrue(result.accepted)
         self.assertFalse((service.root / "jobs" / result.job_id / "candidate.json").exists())
-        self.assertEqual(json.loads(result.kernel.node("metadata.json").content)["problem"], {
+        self.assertEqual(json.loads(result.kernel.find("metadata.json").content)["problem"], {
             "path": str(directory), **service.problem("alpha").target(),
         })
 
@@ -92,7 +92,7 @@ class ProblemCollectionTests(unittest.TestCase):
         request = {"problem_id": "alpha", "submission": submission(candidate)}
         old = service.evaluate(request)
         changed = problem_spec("alpha", size=64)
-        (directory / "workloads.jsonl").write_text(changed.node("workloads.jsonl").content)
+        (directory / "workloads.jsonl").write_text(changed.find("workloads.jsonl").content)
 
         restarted = Service(service.root, self.backend, {"alpha": directory}, runtime_factory=FakeRuntime)
         with self.assertRaisesRegex(ValueError, "registered problem"):
@@ -125,7 +125,7 @@ class ProblemCollectionTests(unittest.TestCase):
             self.assertTrue(client.verify(old.kernel, old.job_id).accepted)
             with patch("klineage.server.client.load_problem", side_effect=AssertionError("client has no problem directory")):
                 changed = problem_spec("alpha", size=64)
-                (directory / "workloads.jsonl").write_text(changed.node("workloads.jsonl").content)
+                (directory / "workloads.jsonl").write_text(changed.find("workloads.jsonl").content)
                 with self.assertRaisesRegex(ServerError, "registered problem"):
                     client.verify(old.kernel, old.job_id)
 

@@ -89,15 +89,15 @@ class GenerationTests(unittest.TestCase):
         candidate = make_kernel(
             spec.name,
             spec,
-            {backend.kernel_type.kernel_spec().child("submission/solution").children[0].name: "// generated"},
+            {backend.kernel_type.kernel_spec().find("submission").find("solution").children[0].name: "// generated"},
         )
         # An agent may retain the supplied problem reference in its source tree.
-        metadata = json.loads(candidate.node("metadata.json").content)
+        metadata = json.loads(candidate.find("metadata.json").content)
         metadata["problem"] = problem_reference(self.runner.return_value.read_only[-1], spec)
         candidate = type(candidate)(
             candidate.tree.with_child(json_node("metadata.json", metadata))
         )
-        directory = write_kernel(candidate, work / "kernel")
+        directory = write_kernel(candidate, work / "current_kernel")
         client.evaluate(directory, work)
         return SimpleNamespace(final_message="done")
 
@@ -130,7 +130,7 @@ class GenerationTests(unittest.TestCase):
                 self.assertFalse(self.services[-1].root.exists())
                 self.assertIs(self.runner.call_args.kwargs["agent"], self.runtime)
                 self.assertEqual(self.registrations[-1], {self.problem.name: self.path})
-                reference = json.loads(result.node("metadata.json").content)["problem"]
+                reference = json.loads(result.find("metadata.json").content)["problem"]
                 self.assertEqual(Path(reference["path"]).resolve(), self.path)
                 self.assertEqual(set(reference), {"path", "name", "language", "platform"})
                 settings = self.worker.call_args.kwargs
@@ -208,7 +208,7 @@ class GenerationTests(unittest.TestCase):
         with patch.object(
             backend.kernel_type, "build_kernel", return_value=lambda: None
         ):
-            restored = Kernel.load_kernel(self.work / "kernel")
+            restored = Kernel.load_kernel(self.work / "current_kernel")
         self.assertEqual(load_problem(restored), load_problem(result))
 
     def test_stdout_ignores_diagnostics(self):

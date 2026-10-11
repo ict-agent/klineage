@@ -39,5 +39,5 @@ klineage-generation problems/gemm \
 
 By default, the command detects the backend and starts local evaluation. Add
 `--server http://127.0.0.1:9100` to use an existing evaluator. It prints the accepted
-Kernel as JSON; sources and per-workload results remain under `kernels/`.
+Kernel as JSON; sources and per-workload results remain under `versions/`.
 See [Getting started](docs/getting-started.md) for setup and output details.

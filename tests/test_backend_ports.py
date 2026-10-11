@@ -142,7 +142,7 @@ class KernelPortTests(unittest.TestCase):
         restored = from_json(to_json(value), Kernel)
         self.assertIsInstance(restored, ExampleKernel)
         self.assertEqual(restored, value)
-        self.assertEqual(restored.node("notes.txt").description, "")
+        self.assertEqual(restored.find("notes.txt").description, "")
         empty = tree.with_child(Node.directory("submission"))
         self.assertIsInstance(ExampleKernel(empty), ExampleKernel)
         python = tree.with_child(Node.directory("submission", (

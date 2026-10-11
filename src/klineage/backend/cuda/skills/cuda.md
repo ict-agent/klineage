@@ -10,24 +10,26 @@ check it against the service target before interpreting results.
 ```text
 <action workdir>/
   problems/<problem_id>     # Symlink to the original problem directory
-  kernel/                   # Trial source space
+  current_kernel/           # Trial source space
     metadata.json           # Trial problem reference and build flags
     submission/
       config.toml
       solution/
         kernel.cu           # Host entry, binding and device implementation
-  kernels/
+  versions/
     0/                      # Complete returned Kernel
       metadata.json         # validation.workloads + evaluation diagnostics
       submission/
     1/                      # Next result, even if evaluation failed
+  workspace/                # Scripts, diagnostics, builds and run records
 ```
 
 Only config.toml and implementation text under solution/ belong in submission/.
-Keep metadata, skills, repository copies, binaries, caches, and measurements outside submission/.
+Keep metadata at the Kernel root. Put skills, repository copies, diagnostic scripts,
+binaries, caches and run records under workspace/.
 Use normalized relative paths without symlinks, `..`, backslashes, or NUL bytes.
 Keep the bundle below 16 MiB and 1024 files.
-Use one exact layout from `.klineage/specs/kernel.cuda.json`. Additional source
+Use one exact layout from `CudaKernel.kernel_spec()` (`from klineage.backend.cuda import CudaKernel`). Additional source
 or header files must be declared in the Kernel class's Node layout.
 
 Copy [config.toml](assets/add_one/config.toml) and adapt:
@@ -46,7 +48,7 @@ receives `(*inputs, *outputs)`. Define one
 `PYBIND11_MODULE(TORCH_EXTENSION_NAME, module)` and export the configured symbol
 with `module.def("kernel", &kernel)`. PyTorch supplies pybind11 headers and tensor
 type conversion. No Python loader or extra build system is needed.
-For local builds, use `Kernel.load_kernel(Path("kernel"))` from
+For local builds, use `Kernel.load_kernel(Path("current_kernel"))` from
 `klineage.artifact` to keep compiler settings aligned with the service.
 PyTorch 2.14 requires C++20. Let its extension loader select the language standard;
 an explicit `-std=c++17` overrides that default and fails to compile its headers.
@@ -92,13 +94,13 @@ expert adapter used for measurement may depend on its repository; the candidate 
 
 ## Evaluation
 
-Use `Client().evaluate(Path("kernel"), Path.cwd())` for service-side correctness and
+Use `Client().evaluate(Path("current_kernel"), Path.cwd())` for service-side correctness and
 CUPTI latency across all registered workloads. Read individual outcomes from
 `reply.validation.workloads[uuid]`; every case must pass. Multi-case top-level
 latencies are `None`, so do not average shapes or use them as a scalar speedup.
 A definition with no workloads cannot pass evaluation.
 Follow the action's comparison responsibilities; see
-`.agents/skills/bench/SKILL.md` for the entrypoint and evidence contract.
+`workspace/.agents/skills/bench/SKILL.md` for the entrypoint and evidence contract.
 
 Do not synchronize or read tensor values on the CPU inside the callable. Build
 and prepare launch resources outside the measured path. Preserve the caller stream.
@@ -107,13 +109,13 @@ and prepare launch resources outside the measured path. Preserve the caller stre
 
 The [two-file example](assets/add_one/config.toml) computes `y = x + 1` for contiguous
 float32 CUDA tensors. Adapt its signature, checks, and computation to the target.
-Read these assets as templates; write the candidate into kernel/submission/.
+Read these assets as templates; write the candidate into current_kernel/submission/.
 Submit it through the client for official validation. An authorized diagnostic
 runtime may also build it for local inspection.
 
 ## Submit and evaluate
 
-With authored kernel/submission/ files, set `reference` to the action's fixed
+With authored current_kernel/submission/ files, set `reference` to the action's fixed
 baseline, or None for a standalone/Decompose measurement. Select `problem_id`
 from `Client().info()["problems"]` for the assigned task:
 
@@ -125,7 +127,7 @@ from klineage.server import Client
 client = Client(problem_id=problem_id)
 problem_spec = client.problem()
 problem_dir = (Path("problems") / problem_id).resolve(strict=True)
-root = Path("kernel")
+root = Path("current_kernel")
 metadata = {
     "name": problem_spec.name,
     "problem": {"path": str(problem_dir), **problem_spec.target()},
@@ -138,13 +140,13 @@ assert reply.accepted, reply.diagnostics
 ```
 
 Edit the source files and metadata.json in the directory, clearing stale validation.
-Re-submit after changes. Client appends every complete result under kernels/0,
-kernels/1, ... including failures. Each version's metadata.json stores validation
+Re-submit after changes. Client appends every complete result under versions/0,
+versions/1, ... including failures. Each version's metadata.json stores validation
 and evaluation diagnostics; read it or reply.validation/reply.diagnostics.
 The original problem directory is linked under problems/<problem_id>; input binaries are not copied. Do not save or edit returned Kernel versions.
 Action uses the largest numbered version, without falling back after failure.
 Use client.result(job_id, work=Path.cwd()) to append an earlier accepted job
-as the latest version. kernel/ remains independent trial source space.
+as the latest version. current_kernel/ remains independent trial source space.
 
 ## Local checks
 
@@ -154,7 +156,7 @@ With registered workload inputs already on the device, load and call the Kernel:
 from pathlib import Path
 from klineage.artifact import Kernel
 
-kernel = Kernel.load_kernel(build_root=Path("kernel"))
+kernel = Kernel.load_kernel(build_root=Path("current_kernel"))
 outputs = kernel(*inputs)
 ```
 

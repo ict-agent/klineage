@@ -15,12 +15,12 @@ it to the evaluation service. Obtain an accepted result before optional profilin
 architecture experiments or parameter sweeps. Keep its job ID so you can restore
 that result and finish within the time budget if later trials fail.
 
-Artifact output contract, generated from the annotated tree:
-{{ raw_text(action_spec("apply")) }}
+Read the action layout when needed: `from klineage.prompts import action_spec`;
+inspect `action_spec("apply")` with `klineage.serialization.raw_text`.
 
 {% set target_language = artifact_language(current_kernel) %}
 {% include "backend.j4" %}
-Read .agents/skills/bench/SKILL.md for correctness and performance measurements.
+Read workspace/.agents/skills/bench/SKILL.md for correctness and performance measurements.
 
 # Procedure
 
@@ -28,13 +28,13 @@ Read .agents/skills/bench/SKILL.md for correctness and performance measurements.
    from klineage.serialization. Load Kernel directories or JSON files with
    load_artifact(path, Kernel), and inline Kernel JSON with from_json(text, Kernel).
    Restore action JSON as Artifact and select part("kernel", Kernel).
-   For an action directory, load its last numbered kernels/<N> directory.
+   For an action directory, load its last numbered versions/<N> directory.
    Inspect the Kernel's complete
    problem, all workloads, ordered ABI, source bundle, compile_flags and current implementation.
    Keep this input fixed throughout the round. Upstream artifacts are read-only.
 
 {% if use_memory %}
-2. Discover recipes under .agents/skills/memory. Read relevant SKILL.md bodies,
+2. Discover recipes under workspace/.agents/skills/memory. Read relevant SKILL.md bodies,
    check scope and prerequisites against the current implementation, and combine
    or adapt techniques when useful. Keep original and mounted cards read-only.
    An empty memory or no applicable recipe does not stop source-guided optimization.
@@ -42,9 +42,9 @@ Read .agents/skills/bench/SKILL.md for correctness and performance measurements.
 2. Optimize independently from the input and the target hardware.
 {% endif %}
 
-3. Write trial implementations under kernel/submission/ using the target backend's
+3. Write trial implementations under current_kernel/submission/ using the target backend's
    bundle format. Preserve metadata.json compile_flags. Submit the current directory
-   with client.evaluate(Path("kernel"), Path.cwd(), reference=reference) after edits;
+   with client.evaluate(Path("current_kernel"), Path.cwd(), reference=reference) after edits;
    compilation, correctness, and timing run on the service. Read reply.diagnostics.
 
 4. For an input with sources, evaluate every candidate with reference=current_kernel.
@@ -60,9 +60,9 @@ Read .agents/skills/bench/SKILL.md for correctness and performance measurements.
    measurement; report missing evaluation inputs rather than inventing them.
 
 5. Client.evaluate automatically appends each complete result, including failures,
-   under kernels/0, kernels/1, ... . Action uses the largest numbered version.
+   under versions/0, versions/1, ... . Action uses the largest numbered version.
    Select an earlier accepted best job with client.result(best_job_id, work=Path.cwd());
    the client appends it as the latest version. If no validated improvement exists,
    evaluate the unchanged input without a reference to append its complete version.
    Do not save Kernels manually or emit SKILL.md. Explain the evidence and techniques
-   in the final response. kernel/ remains trial source space and need not be synchronized.
+   in the final response. current_kernel/ remains trial source space and need not be synchronized.

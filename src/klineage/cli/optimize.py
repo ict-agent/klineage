@@ -14,10 +14,10 @@ from klineage.artifact import (
 from klineage.artifact.kernel import capture_kernel, latest_kernel
 from klineage.cli.common import action_arguments, add_run_options
 from klineage.constants import (
-    KERNELS_DIRECTORY,
     MAX_APPLY_STEPS,
     MAX_RETRIES,
     TIMEOUT,
+    VERSIONS_DIRECTORY,
     RunKind,
 )
 from klineage.harness import AgentRuntime
@@ -45,7 +45,7 @@ def optimize(
     current = start_kernel
     if not isinstance(current, Artifact):
         path = Path(current).expanduser()
-        if path.is_dir() and (path / KERNELS_DIRECTORY).exists():
+        if path.is_dir() and (path / VERSIONS_DIRECTORY).exists():
             path = latest_kernel(path)
         if path.is_dir() and evaluation is None and os.environ.get(SERVER_ENV):
             evaluation = Client()

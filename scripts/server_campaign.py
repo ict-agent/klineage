@@ -161,6 +161,7 @@ def run(args):
                 action.prompt += f"""
 
 This is a fresh, source-free campaign. Use only this task and workspace.
+Read workspace/AGENTS.md and the relevant workspace/.agents/skills/ guidance.
 Use `{agent.python}` in the configured agent sandbox. Its selected devices and
 available tools, such as ncu, may be used directly for performance diagnosis.
 Use klineage.server.Client.evaluate for authoritative correctness and timing.
@@ -173,10 +174,11 @@ Deliver the best accepted artifact and retain its matching service result by
 {state['generation_deadline']}. Check `date -u` before optional trials.
 For this source-free start, first submit a native implementation with a simple
 execution schedule. The client automatically appends complete results under
-kernels/0, kernels/1, ... including failures. Use the remaining time to improve it.
+versions/0, versions/1, ... including failures. Use the remaining time to improve it.
 Action uses the largest numbered version; do not save Kernels manually. To finish
 with an earlier accepted best job, call client.result(best_job_id, work=Path.cwd())
-to append it as the latest version. kernel/ remains trial source space.
+to append it as the latest version. current_kernel/ remains trial source space.
+Keep helpers, diagnostics, source backups, binaries and logs under workspace/.
 Read server diagnostics and retain tool output that explains your changes.
 """
                 status("generation", server_pid=server_pid, endpoint=client.endpoint)
@@ -187,7 +189,7 @@ Read server diagnostics and retain tool output that explains your changes.
             audit = client.evaluate(kernel, root / "audit", timeout=remaining(deadline))
             if not audit.accepted:
                 raise RuntimeError(f"independent audit failed: {audit.error or audit.validation}")
-            if source_files(audit.kernel.node("submission")) != source_files(kernel.node("submission")):
+            if source_files(audit.kernel.find("submission")) != source_files(kernel.find("submission")):
                 raise ValueError("audit used different sources")
             changed = [path for path, digest in hashes.items() if hashlib.sha256((PROJECT / path).read_bytes()).hexdigest() != digest]
             if changed:

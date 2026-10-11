@@ -15,7 +15,7 @@ from klineage.artifact import (
     stage_repository,
 )
 from klineage.artifact.problem import TARGET_FILE, read_problem
-from klineage.constants import MAX_RETRIES, TIMEOUT, RunKind
+from klineage.constants import MAX_RETRIES, TIMEOUT, WORK_DIRECTORY, RunKind
 from klineage.errors import StructuredOutputError
 from klineage.prompts import render_prompt
 from klineage.utils import new_workdir
@@ -89,7 +89,7 @@ class Init(Action):
         else:
             problem_input = str(Path(problem).expanduser().resolve(strict=True))
         self.repository = repo
-        self.repository_path = workdir / "repository"
+        self.repository_path = workdir / WORK_DIRECTORY / "repository"
         self.problem_input = problem if isinstance(problem, Artifact) else Path(problem_input)
         self.expert_kernel = Path(expert_kernel)
         prompt = render_prompt(

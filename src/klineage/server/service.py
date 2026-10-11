@@ -344,7 +344,7 @@ class Service:
             if locked:
                 self.lock.release()
 
-        metadata = json.loads(kernel.node("metadata.json").content)
+        metadata = json.loads(kernel.find("metadata.json").content)
         metadata["validation"] = validation
         kernel = self.backend.kernel_type(
             kernel.tree.with_child(json_node("metadata.json", metadata))

@@ -23,14 +23,13 @@ from klineage.artifact.tree import (
     nested,
 )
 from klineage.constants import (
-    AGENT_FILES,
     BUILD_DIRECTORY,
-    KERNELS_DIRECTORY,
     MAX_RETRIES,
-    SKILL_DIRECTORY,
     SKILL_FILE,
     STATE_DIRECTORY,
     TIMEOUT,
+    VERSIONS_DIRECTORY,
+    WORK_DIRECTORY,
     RunKind,
 )
 from klineage.errors import StructuredOutputError
@@ -54,8 +53,8 @@ class Action:
         workdir: Workspace for generated sources and evaluation records.
         timeout: Seconds allowed for each agent attempt.
         max_retries: Additional attempts after runner or collection failures.
-        output_type: Artifact class for custom outputs. Its Node schema is
-            appended to the prompt and checked during construction.
+        output_type: Importable Artifact class for custom outputs. The agent
+            queries its Node schema; construction checks the returned tree.
         evaluation: Evaluation service client. Built-in kernel actions create
             a client from the environment when omitted.
         agent: Optional sandbox runtime, mounts, and diagnostic devices.
@@ -87,7 +86,14 @@ class Action:
             if not isinstance(output_type.schema, Node):
                 raise TypeError("custom action output requires a Node schema")
             self.artifact_type = output_type.artifact_kind
-            prompt += "\n\nArtifact output contract:\n" + raw_text(output_type.schema)
+            name = output_type.__qualname__
+            if output_type.__module__ == "__main__" or not all(part.isidentifier() for part in name.split(".")):
+                raise ValueError("custom output_type must be importable by the agent")
+            prompt += (
+                f"\n\nRead the output layout on demand: from {output_type.__module__} "
+                f"import {name.split('.')[0]}; inspect {name}.schema using "
+                "klineage.serialization.raw_text."
+            )
         self.prompt = prompt
         self.workdir = Path(workdir).expanduser().resolve()
         self.max_retries = max_retries
@@ -140,9 +146,9 @@ class Action:
                     f"Previous attempt failed: {type(error).__name__}: {error}\n"
                     "Read the prior generation records in this workdir. "
                     "Correct the failure. For kernel actions, fix trial sources "
-                    "under kernel/ and evaluate again, or select "
+                    "under current_kernel/ and evaluate again, or select "
                     "an accepted job with client.result(job_id, work=Path.cwd()). "
-                    "Leave saved versions under kernels/ unchanged.\n\n"
+                    "Leave saved versions under versions/ unchanged.\n\n"
                     f"{self.prompt}"
                 )
 
@@ -170,7 +176,7 @@ def input_paths(value) -> tuple[Path, ...]:
     paths = []
     if not isinstance(value, Artifact):
         path = Path(value).expanduser().resolve(strict=True)
-        if path.is_dir() and (path / KERNELS_DIRECTORY).exists():
+        if path.is_dir() and (path / VERSIONS_DIRECTORY).exists():
             path = latest_kernel(path)
         paths.append(path)
         value = (
@@ -189,8 +195,12 @@ def input_paths(value) -> tuple[Path, ...]:
     if value.kind in (ArtifactKind.INIT, ArtifactKind.APPLY, ArtifactKind.DECOMPOSE):
         value = value.part("kernel", Kernel)
     if value.kind.startswith("kernel"):
-        visit(value.node("submission"))
-        metadata = json.loads(raw_text(value.node("metadata.json")))
+        submission = value.find("submission")
+        metadata_node = value.find("metadata.json")
+        if not isinstance(submission, Node) or not isinstance(metadata_node, Node):
+            raise ValueError("kernel requires exactly one submission and metadata.json")
+        visit(submission)
+        metadata = json.loads(raw_text(metadata_node))
         problem = Path(metadata["problem"]["path"]).expanduser().resolve(strict=True)
         if not problem.is_dir():
             raise NotADirectoryError(f"metadata.json/problem: expected a directory: {problem}")
@@ -199,12 +209,12 @@ def input_paths(value) -> tuple[Path, ...]:
 
 
 def same_implementation(before: Kernel, after: Kernel) -> bool:
-    before_meta = json.loads(raw_text(before.node("metadata.json")))
-    after_meta = json.loads(raw_text(after.node("metadata.json")))
+    before_meta = json.loads(raw_text(before.find("metadata.json")))
+    after_meta = json.loads(raw_text(after.find("metadata.json")))
     return (
         load_problem(before) == load_problem(after)
-        and source_files(before.node("submission"))
-        == source_files(after.node("submission"))
+        and source_files(before.find("submission"))
+        == source_files(after.find("submission"))
         and before_meta.get("compile_flags", []) == after_meta.get("compile_flags", [])
     )
 
@@ -218,8 +228,8 @@ def check_handoff(before: Kernel, after: Kernel, stage: RunKind, card):
             raise StructuredOutputError(
                 f"{stage} emitted a card for an unchanged kernel"
             )
-        before_meta = json.loads(raw_text(before.node("metadata.json")))
-        after_meta = json.loads(raw_text(after.node("metadata.json")))
+        before_meta = json.loads(raw_text(before.find("metadata.json")))
+        after_meta = json.loads(raw_text(after.find("metadata.json")))
         if before_meta["name"] != after_meta["name"]:
             raise StructuredOutputError(f"{stage} changed an unchanged kernel's metadata")
         return
@@ -230,10 +240,7 @@ def check_handoff(before: Kernel, after: Kernel, stage: RunKind, card):
 def capture_output(work: Path, layout: Node) -> Node:
     """Capture user outputs, preserving reserved names declared by the layout."""
     names = {child.name for child in layout.children}
-    reserved = {
-        STATE_DIRECTORY, SKILL_DIRECTORY.parts[0], BUILD_DIRECTORY.name,
-        "problems", *AGENT_FILES,
-    }
+    reserved = {WORK_DIRECTORY.name, BUILD_DIRECTORY.name, "problems"}
     return Node.directory(".", (
         capture(path) for path in sorted(work.iterdir())
         if path.name in names or path.name not in reserved
@@ -270,7 +277,7 @@ def collect_output(
         if before is not None:
             if not isinstance(before, Artifact):
                 path = Path(before).expanduser()
-                if path.is_dir() and (path / KERNELS_DIRECTORY).exists():
+                if path.is_dir() and (path / VERSIONS_DIRECTORY).exists():
                     path = latest_kernel(path)
                 before = load_artifact(path, Kernel if path.is_dir() else Artifact)
             if not isinstance(before, Kernel):
@@ -283,7 +290,7 @@ def collect_output(
         if card is not None:
             children.append(nested("skillcard", card))
 
-    records = work / ".klineage" / "codex-runs"
+    records = work / STATE_DIRECTORY / "codex-runs"
     if records.exists():
         children.append(replace(capture(records), name="records"))
     schema = action_spec(kind.removeprefix(ACTION_PREFIX))

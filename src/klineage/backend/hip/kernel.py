@@ -55,7 +55,7 @@ class HipKernel(Kernel):
         return Node.directory(
             ".",
             description="HIP kernel artifact.\n" + KERNEL.description,
-            children=(KERNEL.child(KERNEL_METADATA), submission),
+            children=(KERNEL.find(KERNEL_METADATA), submission),
         )
 
     def build_kernel(

@@ -188,7 +188,7 @@ class Client:
         expected = self.problem_id if problem_id is None else problem_id
         if expected is not None and result.problem_id != expected:
             raise ValueError("result belongs to another problem")
-        metadata = json.loads(result.kernel.node("metadata.json").content)
+        metadata = json.loads(result.kernel.find("metadata.json").content)
         link_problem(work, result.problem_id, metadata["problem"])
         metadata["evaluation"] = {
             "job_id": result.job_id,
@@ -208,7 +208,7 @@ class Client:
         """Submit text sources for remote build, correctness and timing.
 
         No local evaluation fallback is attempted. The returned Kernel is
-        automatically saved under `work/kernels/<N>/`; the input is not updated.
+        automatically saved under `work/versions/<N>/`; the input is not updated.
 
         Args:
             kernel: Kernel artifact or source directory, read without compiling.
@@ -264,7 +264,7 @@ class Client:
 
         Returns:
             Recorded evaluation with its kernel linked to the local problem copy.
-            A new `kernels/<N>/` snapshot makes this the latest local result.
+            A new `versions/<N>/` snapshot makes this the latest local result.
         """
         payload = self.request("GET", "/jobs/" + quote(job_id, safe=""))
         work = work or Path.cwd()
@@ -291,7 +291,7 @@ class Client:
             ValueError: The handoff differs from the registered problem or record.
             ServerError: The server request fails.
         """
-        metadata = json.loads(raw_text(kernel.node("metadata.json")))
+        metadata = json.loads(raw_text(kernel.find("metadata.json")))
         measurement = metadata.get("evaluation", {})
         if job_id is None:
             job_id = measurement.get("job_id")
@@ -304,7 +304,7 @@ class Client:
         if self.problem_id and self.problem_id != result.problem_id:
             raise ValueError("measurement belongs to another problem")
         problem = self.problem(result.problem_id)
-        reference = json.loads(result.kernel.node("metadata.json").content)["problem"]
+        reference = json.loads(result.kernel.find("metadata.json").content)["problem"]
         if metadata["problem"] != reference:
             raise ValueError("handoff problem reference differs from the registered directory")
         if Path(reference["path"]).exists() and load_problem(kernel) != problem:

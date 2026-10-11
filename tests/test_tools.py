@@ -19,6 +19,8 @@ def extra_tool(value: int = 1) -> int:
 class FunctionDocsTests(unittest.TestCase):
     def setUp(self):
         self.work = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.docs = self.work / "workspace"
+        self.docs.mkdir()
         tools.function_docs()
         self.enterContext(patch.dict(tools._FUNCTIONS))
 
@@ -64,7 +66,7 @@ class FunctionDocsTests(unittest.TestCase):
         self.assertEqual(documented, set(paths))
 
     def test_preserves_user_text(self):
-        path = self.work / "AGENTS.md"
+        path = self.docs / "AGENTS.md"
         before = "# User instructions\r\n\r\nPreserve this text.\r\n"
         path.write_bytes(before.encode())
         tools.write_agent_docs(self.work)
@@ -84,7 +86,7 @@ class FunctionDocsTests(unittest.TestCase):
         self.assertIn("extra_tool", contents)
 
     def test_updates_active_override(self):
-        path = self.work / "AGENTS.override.md"
+        path = self.docs / "AGENTS.override.md"
         path.write_text("# Override\nKeep these rules.\n")
         tools.write_agent_docs(self.work)
         self.assertTrue(path.read_text().startswith("# Override\nKeep these rules.\n"))
@@ -92,14 +94,14 @@ class FunctionDocsTests(unittest.TestCase):
             self.assertIn("klineage.harness.evaluate", (self.work / filename).read_text())
 
     def test_keeps_empty_override(self):
-        override = self.work / "AGENTS.override.md"
+        override = self.docs / "AGENTS.override.md"
         override.write_text("\n")
         tools.write_agent_docs(self.work)
         self.assertEqual(override.read_text(), "\n")
-        self.assertIn("klineage.harness.evaluate", (self.work / "AGENTS.md").read_text())
+        self.assertIn("klineage.harness.evaluate", (self.docs / "AGENTS.md").read_text())
 
     def test_rejects_damaged_markers(self):
-        path = self.work / "AGENTS.md"
+        path = self.docs / "AGENTS.md"
         start, end = FUNCTION_START, FUNCTION_END
         for original in (start, end, end + start, start + start + end):
             with self.subTest(original=original):
@@ -111,13 +113,13 @@ class FunctionDocsTests(unittest.TestCase):
     def test_rejects_symlink_output(self):
         original = self.work / "shared.md"
         original.write_text("Shared instructions")
-        (self.work / "AGENTS.md").symlink_to(original)
+        (self.docs / "AGENTS.md").symlink_to(original)
         with self.assertRaisesRegex(ValueError, "symlink"):
             tools.write_agent_docs(self.work)
         self.assertEqual(original.read_text(), "Shared instructions")
 
     def test_docs_symlink_race(self):
-        path = self.work / "AGENTS.md"
+        path = self.docs / "AGENTS.md"
         path.write_text("workspace guidance")
         with tempfile.TemporaryDirectory() as outside:
             secret = Path(outside) / "secret"
@@ -140,7 +142,7 @@ class FunctionDocsTests(unittest.TestCase):
             self.assertEqual(secret.read_text(), "host-only guidance")
 
     def test_failed_write_keeps_file(self):
-        path = self.work / "AGENTS.md"
+        path = self.docs / "AGENTS.md"
         path.write_text("Keep existing instructions")
         with (
             patch("klineage.tools.os.replace", side_effect=OSError("failed")),
@@ -148,7 +150,7 @@ class FunctionDocsTests(unittest.TestCase):
         ):
             tools.write_agent_docs(self.work)
         self.assertEqual(path.read_text(), "Keep existing instructions")
-        self.assertEqual(list(self.work.iterdir()), [path])
+        self.assertEqual(list(self.docs.iterdir()), [path])
 
 
 class ToolTests(unittest.TestCase):

@@ -32,7 +32,7 @@ The controller configures `HIP_HOME` or `ROCM_HOME`; report missing toolchains.
 Select architecture flags from the installed DCU; do not copy CUDA flags.
 The default layout has `config.toml` and `solution/kernel.hip`. Keep binaries,
 caches, expert repositories and measurements outside submission/.
-Follow an exact layout from `.klineage/specs/kernel.hip.json`; additional source
+Follow an exact layout from `HipKernel.kernel_spec()` (`from klineage.backend.hip import HipKernel`); additional source
 or header files must be declared in the Kernel class's Node layout.
 
 ## Binding and execution
@@ -52,8 +52,8 @@ or header files must be declared in the Kernel class's Node layout.
   outside the measured callable. Do not cache output values or call expert libraries
   from the candidate. An original-expert adapter may depend on its repository.
 
-Use `client.evaluate(Path("kernel"), Path.cwd())`; the client automatically appends
-the complete result under `kernels/0`, `kernels/1`, ... including failures.
+Use `client.evaluate(Path("current_kernel"), Path.cwd())`; the client automatically appends
+the complete result under `versions/0`, `versions/1`, ... including failures.
 Finish with an accepted latest version; use `client.result(job_id, work=Path.cwd())`
 to append an earlier accepted job as the latest version.
 With an explicitly supplied DTK runtime and DCU, diagnostic scripts may build and

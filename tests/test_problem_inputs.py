@@ -1,6 +1,7 @@
 """Input descriptions remain readable without the evaluator's filesystem."""
 
 from klineage.serialization import from_json
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,7 +10,7 @@ from unittest.mock import patch
 from kernel_fixtures import make_kernel
 from problem_fixtures import problem_spec
 
-from klineage.artifact import Problem
+from klineage.artifact import Node, Problem
 from klineage.backend import get_backend
 from klineage.serialization import to_json
 from klineage.server import Service
@@ -45,6 +46,17 @@ class ProblemInputTests(unittest.TestCase):
         self.assertEqual(self.problem.workloads[0]["axes"]["M"], 128)
         with self.assertRaisesRegex(ValueError, "changed"):
             self.problem.resolve_inputs()
+
+    def test_input_path_scope(self):
+        record = json.loads(self.problem.find("workloads.jsonl").content)
+        descriptor = record["workload"]["inputs"]["a"]
+        filename = Path(descriptor["path"]).name
+        for prefix in ("other", "../inputs", "inputs/nested", "inputs/..", "/inputs", "inputs/", "inputs/."):
+            with self.subTest(prefix=prefix):
+                descriptor["path"] = f"{prefix}/{filename}"
+                tree = self.problem.tree.with_child(Node.file("workloads.jsonl", json.dumps(record)))
+                with self.assertRaisesRegex(ValueError, "fixed input path"):
+                    Problem.from_tree("problem", tree)
 
     def test_replace_keeps_input_capture(self):
         updated = self.problem.replace(platform="sm90")

@@ -65,7 +65,7 @@ class CudaBundleExecutionTests(BundleCase):
         current = CudaKernel.load_kernel(
             write_kernel(
                 make_kernel(
-                    "python", self.problem, source_files(kernel.node("submission"))
+                    "python", self.problem, source_files(kernel.find("submission"))
                 ),
                 self.root / "kernel",
             )

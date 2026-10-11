@@ -7,7 +7,9 @@ See [Artifact](../concepts/artifacts.md) for the layouts and
 ## Trees and layouts
 
 Use Nodes to describe files and directories, and `check` to compare a tree with
-its expected layout. FileRefs keep external data referenced by path and hash.
+its expected layout. `find(name)` searches recursively by exact name and returns
+one Node, a list of matches, or `[]`. FileRefs keep external data referenced by
+path and hash.
 
 ::: klineage.artifact.FileRef
 
@@ -29,7 +31,7 @@ A Problem holds one definition and its workloads. Load a directory with
 ## Kernels and results
 
 Load an authored directory with `Kernel.load_kernel()` to build its callable.
-Evaluation clients save complete versions under `kernels/<N>/`, with measurements
+Evaluation clients save complete versions under `versions/<N>/`, with measurements
 in each version's metadata.
 
 ::: klineage.artifact.Kernel

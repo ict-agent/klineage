@@ -22,7 +22,7 @@ from klineage.serialization import raw_text, to_json
 
 
 class ArtifactPromptTests(unittest.TestCase):
-    def test_generated_contracts(self):
+    def test_layouts_are_queried(self):
         current = json.loads(to_json(kernel()))
         contexts = {
             "init": {
@@ -36,9 +36,9 @@ class ArtifactPromptTests(unittest.TestCase):
         for stage, context in contexts.items():
             with self.subTest(stage=stage):
                 prompt = render_prompt(stage, **context)
-                self.assertIn(
-                    raw_text(action_spec(stage)), prompt
-                )
+                self.assertIn("action_spec(", prompt)
+                self.assertNotIn(raw_text(action_spec(stage)), prompt)
+                self.assertNotIn(".klineage/specs", prompt)
                 self.assertNotIn(".klineage/message", prompt)
                 self.assertNotIn("verifier", prompt.lower())
                 self.assertNotIn("verify_", prompt)
@@ -80,7 +80,7 @@ entry_point = "main.py::run"
             patch("klineage.artifact.problem.trace_module", side_effect=AssertionError("reference executed")),
         ):
             root = Path(temporary)
-            directory = write_kernel(current, root / "kernels/0")
+            directory = write_kernel(current, root / "versions/0")
             manifest = save_artifact(current, root / "input.json")
             for value in (json.loads(to_json(current)), str(directory), str(root), str(manifest)):
                 for stage in ("apply", "decompose"):
@@ -116,7 +116,7 @@ entry_point = "main.py::run"
         scope = {"inputs": (2, 3)}
         with patch("klineage.artifact.Kernel.load_kernel", return_value=lambda x, y: x + y) as load:
             exec(examples[0], scope)
-        load.assert_called_once_with(build_root=Path("kernel"))
+        load.assert_called_once_with(build_root=Path("current_kernel"))
         self.assertEqual(scope["outputs"], 5)
 
     def run_client_examples(self, document):
@@ -134,11 +134,11 @@ entry_point = "main.py::run"
 
         with tempfile.TemporaryDirectory() as directory, chdir(directory):
             current = kernel()
-            problem_dir = Path(json.loads(current.node("metadata.json").content)["problem"]["path"])
+            problem_dir = Path(json.loads(current.find("metadata.json").content)["problem"]["path"])
             Path("problems").mkdir()
             Path("problems/gemm").symlink_to(problem_dir, target_is_directory=True)
             for name, text in SOURCES.items():
-                path = Path("kernel/submission") / name
+                path = Path("current_kernel/submission") / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(text)
             scope = {"reference": None, "problem_id": "gemm"}
@@ -151,7 +151,7 @@ entry_point = "main.py::run"
                 client.evaluate.side_effect = measure
                 for example in examples:
                     exec(example, scope)
-                client.evaluate.assert_called_once_with(Path("kernel"), Path.cwd(), reference=None)
+                client.evaluate.assert_called_once_with(Path("current_kernel"), Path.cwd(), reference=None)
             self.assertEqual(scope["reply"].kernel.validation, accepted())
             self.assertIsNone(scope["reply"].kernel.function)
             self.assertFalse(Path(".klineage/kernel.json").exists())
@@ -192,10 +192,10 @@ entry_point = "main.py::run"
             *(layout for backend in backends() for layout in kernel_layouts(backend.kernel_type)),
         ]
         for layout in layouts:
-            described = json.loads(raw_text(layout))
-            self.assertEqual(described["description"], layout.description)
-            self.assertIn("one_shot", described)
-            self.assertNotIn("rules", described)
+            described = raw_text(layout)
+            self.assertIn(layout.description.splitlines()[0], described)
+            for child in layout.children:
+                self.assertIn(child.name, described)
         root = Path(__file__).parents[1] / "src/klineage"
         self.assertFalse(list((root / "message").glob("*.md")))
         self.assertFalse(list((root / "prompts").rglob("verify*.j4")))

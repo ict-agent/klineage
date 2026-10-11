@@ -15,25 +15,21 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Literal, get_args
 
-from klineage.artifact import ACTION_TYPES, ArtifactKind, Problem
-from klineage.artifact.kernel import KERNEL, kernel_layouts
-from klineage.artifact.tree import ACTION_PREFIX
 from klineage.backend import backends
 from klineage.constants import (
+    AGENT_FILES,
     MEMORY_DIRECTORY,
     SKILL_DIRECTORY,
-    SPEC_DIRECTORY,
     STATE_DIRECTORY,
     STATS_DIRECTORY,
+    WORK_DIRECTORY,
     RunKind,
 )
 from klineage.harness.codex_skills import render_memory
 from klineage.harness.logging import LOG_ENV
 from klineage.harness.process import PROCESS_SCOPE_ENV, stop_process
 from klineage.harness.sandbox import AgentRuntime, Sandbox, runtime_paths
-from klineage.memory import SkillCard
-from klineage.prompts import action_spec
-from klineage.serialization import raw_text, to_json
+from klineage.serialization import to_json
 from klineage.tools import write_agent_docs
 from klineage.utils import DirectoryMode, operation_id, safe_directory, safe_file
 
@@ -87,7 +83,8 @@ class CodexRunResult:
 class CodexRunner:
     """Run Codex in an OS sandbox with scoped model and evaluation gateways.
 
-    Provider credentials remain in the host-side bridge. An evaluation client
+    Explicit provider keys remain in the host-side bridge. Codex reuses the
+    host CODEX_HOME for configuration and sessions. An evaluation client
     exposes its fixed problem set through a separate Unix socket. Device access and
     extra dependencies come from `AgentRuntime`.
 
@@ -181,21 +178,10 @@ class CodexRunner:
             from klineage.server import Client
             self.evaluation = Client()
 
-        # Expose packaged instructions through Codex's workspace skill discovery.
+        # Expose packaged backend and evaluation guidance for on-demand reading.
         skill_dir = self.work_dir / SKILL_DIRECTORY
         with safe_directory(skill_dir, DirectoryMode.CREATE):
             pass
-        spec_dir = self.work_dir / SPEC_DIRECTORY
-        specs = [
-            (Problem.artifact_kind, (Problem.problem_spec(),)),
-            (SkillCard.artifact_kind, (SkillCard.schema,)),
-            (ArtifactKind.KERNEL, (KERNEL,)),
-            *((kind, (action_spec(kind.removeprefix(ACTION_PREFIX)),)) for kind in sorted(ACTION_TYPES)),
-            *((backend.kernel_type.artifact_kind, kernel_layouts(backend.kernel_type)) for backend in backends()),
-        ]
-        for kind, layouts in specs:
-            with safe_file(spec_dir / f"{kind}.json", "w") as stream:
-                stream.write("[\n" + ",\n".join(raw_text(layout) for layout in layouts) + "\n]\n")
         skill_paths = {"bench": BENCH_SKILL, **{backend.language: backend.skill_root for backend in backends()}}
         resources = [(source, skill_dir / name) for name, source in skill_paths.items()]
         for source, destination in resources:
@@ -204,7 +190,7 @@ class CodexRunner:
     def mount_memory(
         self, memory: Path | None, *, exclude_skills: Sequence[str] = ()
     ) -> Path | None:
-        """Stage repository skillcards as discoverable native skills.
+        """Stage repository skillcards as agent-readable instructions.
 
         Args:
             memory: Memory repository directory, or `None` to require a workspace
@@ -278,6 +264,12 @@ class CodexRunner:
                 "only letters, digits, '.', '_' or '-' (maximum 128 characters)"
             )
 
+        prompt = (
+            f"Read `{AGENT_FILES[0]}` before starting. Read relevant guidance in "
+            f"`{SKILL_DIRECTORY}/` as needed. Keep scripts, diagnostics, backups, "
+            f"logs and other non-artifact files under `{WORK_DIRECTORY}/`.\n\n"
+            + prompt
+        )
         if self.timeout is not None:
             deadline = datetime.now(UTC) + timedelta(seconds=self.timeout)
             prompt += (
@@ -301,15 +293,12 @@ class CodexRunner:
         stderr_path = run_dir / "stderr.log"
         with safe_file(prompt_path, "w") as stream:
             stream.write(prompt)
-        reply_path = self.work_dir / STATE_DIRECTORY / "replies" / f"{resolved_run_id}.txt"
-        with safe_directory(reply_path.parent, DirectoryMode.CREATE):
-            pass
 
         with (
             safe_file(trace_path, "w") as trace_file,
             safe_file(stderr_path, "w+", errors="replace") as stderr_file,
-            safe_file(final_message_path, "w") as final_file,
-            self.execution(reply_path, run_dir) as (command, environment),
+            safe_file(final_message_path, "w+") as final_file,
+            self.execution(final_message_path, run_dir) as (command, environment),
         ):
             try:
                 process = subprocess.Popen(
@@ -358,9 +347,10 @@ class CodexRunner:
                     with safe_file(path) as current:
                         if not os.path.samestat(os.fstat(opened.fileno()), os.fstat(current.fileno())):
                             raise OSError(f"trace file changed during agent execution: {path}")
-                with safe_file(reply_path) as stream:
-                    final_message = stream.read()
-                final_file.write(final_message)
+                final_file.seek(0)
+                final_message = final_file.read()
+                if not final_message.strip():
+                    raise OSError("Codex produced no final response")
             except (OSError, UnicodeDecodeError) as error:
                 raise CodexRunnerError(
                     f"Codex reply is unreadable; trace: {trace_path}",
@@ -369,11 +359,14 @@ class CodexRunner:
         return CodexRunResult(final_message=final_message, trace_path=trace_path)
 
     @contextmanager
-    def execution(self, reply_path: Path, run_dir: Path):
-        """Expose only this workspace, declared inputs and scoped IPC endpoints."""
-        home = self.work_dir / STATE_DIRECTORY / "codex-home"
+    def execution(self, final_message_path: Path, run_dir: Path):
+        """Share Codex state and expose declared inputs and scoped IPC endpoints."""
+        home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser().resolve()
         with safe_directory(home, DirectoryMode.CREATE):
             pass
+        writable = [home]
+        if not final_message_path.is_relative_to(self.work_dir):
+            writable.append(final_message_path)
         environment = {
             **self.agent.environment,
             "PATH": f"{self.agent.python.parent}:{self.agent.environment.get('PATH', '/usr/bin:/bin')}",
@@ -434,14 +427,14 @@ class CodexRunner:
                 environment[key_env] = PROVIDER_KEY_PLACEHOLDER
                 sockets.append(bridge.socket_path)
             try:
-                command = self.command(reply_path)
+                command = self.command(final_message_path)
             finally:
                 self.api_base_url = original_url
             if bridge is not None:
                 command = bridge.command(command, python=self.agent.python)
 
             sandbox = Sandbox(
-                self.work_dir, read_only=read_only, sockets=sockets,
+                self.work_dir, read_only=read_only, writable=writable, sockets=sockets,
                 devices=self.agent.device_nodes,
                 environment=environment,
             )

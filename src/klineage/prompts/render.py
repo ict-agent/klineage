@@ -18,16 +18,16 @@ from jinja2 import (
     select_autoescape,
 )
 
-from klineage.artifact.kernel import KERNEL, Kernel, capture_kernel, kernel_layouts, latest_kernel
-from klineage.artifact.problem import Problem, load_problem
+from klineage.artifact.kernel import KERNEL, Kernel, capture_kernel, latest_kernel
+from klineage.artifact.problem import load_problem
 from klineage.artifact.tree import (
     Artifact,
     ArtifactKind,
     Node,
     load_artifact,
 )
-from klineage.backend import backends, get_backend
-from klineage.constants import BUNDLE_CONFIG, KERNELS_DIRECTORY
+from klineage.backend import backends
+from klineage.constants import BUNDLE_CONFIG, VERSIONS_DIRECTORY
 from klineage.memory import SkillCard
 from klineage.serialization import raw_text, restore, to_json
 
@@ -38,11 +38,11 @@ def action_spec(stage: str) -> Node:
     """Describe the artifacts an action asks the agent to produce."""
     common = (
         "Action.run returns an Artifact; JSON is serialization data, not an output-directory file.",
-        "Use kernel/ for trial sources. Client.evaluate and Client.result with work automatically append complete results under kernels/0, kernels/1, ...; agents do not save Kernels.",
+        "Use current_kernel/ for trial sources. Client.evaluate and Client.result with work automatically append complete results under versions/0, versions/1, ...; agents do not save Kernels.",
         "Action uses the largest numbered saved version, including failed results, without automatic fallback. Retrieve an earlier accepted job with Client.result(job_id, work=...) to append it as the latest version.",
         "With explicitly supplied devices and tools, write diagnostic scripts and use vendor profilers directly; their outputs are not validation.",
         "Do not run diagnostics and service benchmarks concurrently on the same device.",
-        "The framework nests that kernel Artifact under kernel/ in the returned tree.",
+        "The framework includes the measured Kernel as the kernel part of the returned Artifact.",
         "Treat upstream artifacts and mounted skills as read-only.",
         "Consume a result only after run succeeds; partial files are not a handoff.",
         "Read validation and evaluation diagnostics from the saved Kernel metadata.json or the reply. Explain source evidence in the final response; build caches are not output artifacts.",
@@ -51,7 +51,7 @@ def action_spec(stage: str) -> Node:
     descriptions = {
         "init": (
             "Reproduce the fixed expert instance without expert-library dependencies in the delivered bundle.",
-            "Stage the repository under repository/ and the original expert adapter under expert/.",
+            "Stage the repository under workspace/repository/ and the original expert adapter under workspace/expert/.",
             "Check correctness, paired performance and mechanism fidelity; explain source evidence in the final response.",
             "Preserve upstream release build settings and record the exact expert specialization and host call.",
         ),
@@ -123,9 +123,7 @@ def prompt_environment() -> Environment:
         lambda value, **options: to_json(value, indent=options.get("indent"))
     )
     environment.globals.update(
-        artifact_language=artifact_language, raw_text=raw_text,
-        action_spec=action_spec, Problem=Problem, SkillCard=SkillCard,
-        kernel_layouts=kernel_layouts, get_backend=get_backend, KERNEL=KERNEL,
+        artifact_language=artifact_language,
     )
     return environment
 
@@ -135,7 +133,7 @@ def artifact_language(value: Any) -> str:
         path = Path(value).expanduser()
         if not path.exists():
             return ""
-        if path.is_dir() and (path / KERNELS_DIRECTORY).exists():
+        if path.is_dir() and (path / VERSIONS_DIRECTORY).exists():
             path = latest_kernel(path)
         artifact = (
             Artifact(ArtifactKind.KERNEL, capture_kernel(path))
@@ -147,10 +145,16 @@ def artifact_language(value: Any) -> str:
         return ""
     if artifact.kind != ArtifactKind.KERNEL and not artifact.kind.startswith("kernel."):
         artifact = artifact.part("kernel", Kernel)
-    try:
-        config = artifact.node(f"submission/{BUNDLE_CONFIG}")
-    except KeyError:
+    submission = artifact.find("submission")
+    if not submission:
         return load_problem(artifact).language
+    if not isinstance(submission, Node):
+        raise ValueError("submission: expected exactly one directory")
+    config = submission.find(BUNDLE_CONFIG)
+    if not config:
+        return load_problem(artifact).language
+    if not isinstance(config, Node):
+        raise ValueError(f"submission/{BUNDLE_CONFIG}: expected exactly one file")
     return tomllib.loads(raw_text(config))["build"]["language"]
 
 

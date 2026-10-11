@@ -20,7 +20,7 @@ from klineage.constants import (
     FUNCTION_START,
     SKILL_FILE,
 )
-from klineage.utils import operation_id, safe_directory, safe_file
+from klineage.utils import DirectoryMode, operation_id, safe_directory, safe_file
 
 if TYPE_CHECKING:
     from klineage.artifact.kernel import Kernel
@@ -83,7 +83,7 @@ def function_docs(*, client=None) -> str:
 
 
 def write_agent_docs(workdir: Path, *, client=None):
-    """Refresh the generated block, preserving other workspace instructions."""
+    """Write workspace/ instructions, preserving user-authored content."""
 
     block = function_docs(client=client)
     updates = []
@@ -105,11 +105,11 @@ def write_agent_docs(workdir: Path, *, client=None):
             updates.append((path, updated, mode))
 
     # An existing override takes precedence over AGENTS.md; update both.
-    with safe_directory(workdir) as directory:
-        for path, updated, mode in updates:
+    for path, updated, mode in updates:
+        with safe_directory(path.parent, DirectoryMode.CREATE) as directory:
             temporary = operation_id("agent-docs") + ".tmp"
             try:
-                with safe_file(workdir / temporary, "w") as stream:
+                with safe_file(path.parent / temporary, "w") as stream:
                     stream.write(updated)
                     if mode is not None:
                         os.fchmod(stream.fileno(), mode)

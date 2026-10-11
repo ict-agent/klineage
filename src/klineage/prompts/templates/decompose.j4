@@ -10,19 +10,19 @@ The input kernel is: {{ input_kernel | tojson }}
 Given artifacts are read-only; your current working directory holds this step's
 outputs. Preserve the complete input problem, including its numerical requirements.
 
-Artifact output contract, generated from the annotated tree:
-{{ raw_text(action_spec("decompose")) }}
+Read the action layout when needed: `from klineage.prompts import action_spec`;
+inspect `action_spec("decompose")` with `klineage.serialization.raw_text`.
 
 {% set target_language = artifact_language(input_kernel) %}
 {% include "backend.j4" %}
 
-- Use .agents/skills/bench/SKILL.md for harness measurements.
-- Follow the Artifact contract above. Keep SKILL.md outside the submission/ subtree.
+- Use workspace/.agents/skills/bench/SKILL.md for harness measurements.
+- Query and follow the Artifact layout. Keep SKILL.md outside the submission/ subtree.
 - If the input is already naive, evaluate it unchanged and emit no SKILL.md.
   The client saves its complete Kernel automatically. Never invent a removal to fill a step.
 
-You should follow the following schema when emitting SKILL.md:
-{{ raw_text(SkillCard.schema) }}
+For the SkillCard layout, import `SkillCard` from `klineage.memory` and inspect
+`SkillCard.schema` with `klineage.serialization.raw_text` when needed.
 
 {% if target_language == "cuda" %}
 This CUDA-only GEMM example illustrates the card format. Its memory spaces,
@@ -32,12 +32,12 @@ thread mapping, and instructions are not prerequisites for HIP or AscendC cards.
 
 # Procedure
 
-1. Read the skills and tree contracts above. Import Artifact, Kernel and
+1. Read the skills and query the required layouts. Import Artifact, Kernel and
    load_artifact from klineage.artifact, and from_json from klineage.serialization.
    Load Kernel directories or JSON files with load_artifact(path, Kernel), and
    inline Kernel JSON with from_json(text, Kernel). Restore action JSON as
    Artifact and select part("kernel", Kernel). For an action directory, load
-   its last numbered kernels/<N> directory. Keep this Kernel as input.
+   its last numbered versions/<N> directory. Keep this Kernel as input.
    Inspect the complete
    bundle, config, ABI, launch path, and device code. Identify computation, data
    movement, layouts, synchronization, and scheduling patterns.
@@ -57,10 +57,10 @@ thread mapping, and instructions are not prerequisites for HIP or AscendC cards.
    choices belong in the recipe, not separate skills.
    Do not split tile 128 -> 64 -> 32 or vector width 4 -> 2 -> 1 into repeated cards.
 
-3. Write the complete deoptimized kernel under kernel/submission/. Preserve the input problem,
+3. Write the complete deoptimized kernel under current_kernel/submission/. Preserve the input problem,
    language, precision, required accumulation order/rounding, and output semantics.
    Use native computation without expert-library calls for native input.
-   Preserve its problem directory reference and compile_flags in kernel/metadata.json.
+   Preserve its problem directory reference and compile_flags in current_kernel/metadata.json.
    After source changes, submit the current directory through client.evaluate;
    the returned reply.kernel is deoptimized_kernel for the SkillCard recipe.
 
@@ -94,7 +94,7 @@ Correctness and timing once and the Progress and termination source audit.
 Do not invoke other actions or generate a forward roundtrip here.
 
 **Correctness and timing.** Use client.evaluate(input, Path.cwd()) and
-client.evaluate(Path("kernel"), Path.cwd()) without reference. Require both results
+client.evaluate(Path("current_kernel"), Path.cwd()) without reference. Require both results
 to be accepted. A deoptimized kernel may be slower; do not apply a relative speed floor
 to it. Read measurements from reply.validation; Kernels are saved automatically.
 For an unchanged terminal input, evaluate it once.

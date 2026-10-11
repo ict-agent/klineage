@@ -95,7 +95,7 @@ class BackendBundleTests(unittest.TestCase):
             load_entry(self.loader, current)
 
         self.assertEqual(len(self.compiles), 1)
-        self.assertEqual(current.node("submission/solution/kernel.hip").content, "// native kernel")
+        self.assertEqual(current.find("submission").find("solution").find("kernel.hip").content, "// native kernel")
 
     def test_build_lock_lifetime(self):
         with (self.root / BUILD_LOCK).open("a") as contender:

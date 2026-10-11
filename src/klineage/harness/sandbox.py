@@ -228,6 +228,7 @@ class Sandbox:
     Args:
         workspace: Existing dedicated writable directory.
         read_only: Additional mounts retaining their absolute paths.
+        writable: Explicit writable state directories or output files.
         sockets: Existing Unix sockets exposed as individual endpoints.
         devices: Explicit device nodes; no accelerator is mounted by default.
         environment: Variables added to a minimal environment. Host environment
@@ -239,6 +240,7 @@ class Sandbox:
         workspace: str | Path,
         *,
         read_only: Sequence[str | Path] = (),
+        writable: Sequence[str | Path] = (),
         sockets: Sequence[str | Path] = (),
         devices: Sequence[str | Path] = (),
         environment: Mapping[str, str] | None = None,
@@ -257,10 +259,11 @@ class Sandbox:
         self.read_only = tuple(dict.fromkeys([
             *runtime, *(absolute_path(path) for path in read_only),
         ]))
+        self.writable = tuple(absolute_path(path) for path in writable)
         self.sockets = tuple(absolute_path(path) for path in sockets)
         self.devices = tuple(absolute_path(path) for path in devices)
-        for path in self.read_only:
-            self.check_read_only(path)
+        for path in (*self.read_only, *self.writable):
+            self.check_mount(path)
         for path in self.sockets:
             if not stat.S_ISSOCK(path.stat().st_mode):
                 raise ValueError(f"sandbox socket is not a Unix socket: {path}")
@@ -269,18 +272,18 @@ class Sandbox:
             if not (stat.S_ISCHR(mode) or stat.S_ISBLK(mode)):
                 raise ValueError(f"sandbox device is not a device node: {path}")
 
-        # Never inherit provider keys, loader hooks, or host user configuration.
+        # Only inherit the explicitly supplied process environment.
         self.environment = {**BASE_ENVIRONMENT, **(environment or {})}
         for key in ("HOME", "TMPDIR"):
             if self.environment[key] != BASE_ENVIRONMENT[key]:
                 raise ValueError(f"sandbox {key} must use private storage")
 
-    def check_read_only(self, path: Path):
+    def check_mount(self, path: Path):
         source = path.resolve(strict=True)
         if self.workspace.is_relative_to(source) or Path.home().is_relative_to(source):
-            raise ValueError(f"read-only mount reveals host workspaces or home: {path}")
+            raise ValueError(f"mount reveals host workspaces or home: {path}")
         if any(source.is_relative_to(root) for root in PRIVATE_MOUNTS):
-            raise ValueError(f"read-only mount replaces private process or device state: {path}")
+            raise ValueError(f"mount replaces private process or device state: {path}")
 
     def command(self, argv: Sequence[str]) -> list[str]:
         if not argv:
@@ -294,6 +297,8 @@ class Sandbox:
             "--symlink", PRIVATE_TEMP, "/var/tmp",
             "--bind", str(self.workspace), str(self.workspace),
         ]
+        for path in self.writable:
+            command.extend(("--bind", str(path.resolve(strict=True)), str(path)))
         for path in self.read_only:
             command.extend(("--ro-bind", str(path.resolve(strict=True)), str(path)))
         for path in self.sockets:

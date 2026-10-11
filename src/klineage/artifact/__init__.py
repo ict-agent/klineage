@@ -1,6 +1,6 @@
 """Public artifact interfaces."""
 
-from .kernel import Kernel, ValidationResult
+from .kernel import Kernel, ValidationResult, kernel_layouts
 from .problem import Problem, load_problem, load_trace
 from .repository import looks_like_git_url, stage_repository
 from .tree import (
@@ -39,6 +39,7 @@ __all__ = [
     "load_problem",
     "load_trace",
     "Kernel",
+    "kernel_layouts",
     "ValidationResult",
     "stage_repository",
     "looks_like_git_url",

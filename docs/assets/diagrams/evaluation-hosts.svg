@@ -52,9 +52,9 @@
   </g>
   <text class="mono" x="126" y="195" text-anchor="middle">Client</text>
   <text class="mono" x="126" y="218" text-anchor="middle">evaluate(...)</text>
-  <g class="blue" transform="translate(74 270)"><use href="#file"/></g>
-  <text class="mono" x="103" y="265">kernel/</text>
-  <text class="mono" x="103" y="287">sources</text>
+  <g class="blue" transform="translate(56 270)"><use href="#file"/></g>
+  <text class="mono" x="82" y="265">current_kernel/</text>
+  <text class="mono" x="82" y="287">sources</text>
   <text class="body" x="42" y="332">Private network</text>
   <text class="body" x="42" y="354">Unix socket only</text>
   <path class="wire" d="M 159 145 H 330"/>

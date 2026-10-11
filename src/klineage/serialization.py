@@ -78,6 +78,9 @@ class ScopeHandler(DataclassHandler):
 
 
 class ArtifactHandler(SerializationHandler):
+    def raw_text(self, value):
+        return raw_text(value.tree)
+
     def default(self, value):
         return {
             "artifact_type": value.kind,
@@ -107,7 +110,7 @@ class NodeHandler(SerializationHandler):
         raise ValueError(f"{value.name}: file requires content or a reference")
 
     def raw_text(self, value):
-        from klineage.artifact.tree import NodeKind
+        from klineage.artifact.tree import FileRef, NodeKind
 
         if value.kind is NodeKind.FILE:
             if value.content is not None:
@@ -115,15 +118,33 @@ class NodeHandler(SerializationHandler):
             if value.reference is not None:
                 return raw_text(value.reference)
 
-        def resolve(node):
-            data = self.default(node)
-            if node.one_shot is not None:
-                data["one_shot"] = raw_text(node.one_shot)
-            if node.kind is NodeKind.DIRECTORY:
-                data["children"] = tuple(resolve(child) for child in node.children)
-            return data
+        def render(node, prefix="", branch=""):
+            name = node.name + ("/" if node.kind is NodeKind.DIRECTORY else "")
+            label = prefix + branch + name
+            continuation = prefix
+            if branch:
+                continuation += "│   " if branch == "├── " else "    "
 
-        return to_json(resolve(value))
+            description = node.description.rstrip()
+            if node.one_shot is not None:
+                example = node.one_shot
+                if isinstance(example, FileRef):
+                    example = example.path
+                example = example.replace("\r", "\\r").replace("\n", "\\n")
+                description += (" " if description else "") + f"(See: {example} as an example)"
+
+            lines = description.splitlines() or [""]
+            separator = " ---> "
+            yield label + (separator + lines[0] if lines[0] else "")
+            padding = " " * (len(label) + len(separator) - len(continuation))
+            for line in lines[1:]:
+                yield continuation + padding + line
+
+            for index, child in enumerate(node.children):
+                branch = "└── " if index == len(node.children) - 1 else "├── "
+                yield from render(child, continuation, branch)
+
+        return "\n".join(render(value))
 
     def default(self, value):
         from klineage.artifact.tree import NodeKind
@@ -301,9 +322,9 @@ def raw_text(value: Any) -> str:
     """Serialize text through the value's registered handler.
 
     Strings pass through unchanged. File nodes return their contents; FileRef
-    reads verify the file's type, size and hash before decoding UTF-8. Directories
-    and files without payload emit JSON trees with referenced examples resolved,
-    without mutation.
+    reads verify the file's type, size and hash before decoding UTF-8. Artifacts,
+    directories and files without payload render annotated file trees. Example
+    references appear as paths without being read; inline examples escape line breaks.
     JSON serialization preserves references without reading them.
 
     Raises:

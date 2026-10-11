@@ -15,13 +15,7 @@ from unittest.mock import Mock, patch
 
 import yaml
 from kernel_fixtures import skill
-from klineage.serialization import raw_text
 from klineage.memory import save_skill
-from klineage.artifact import ACTION_TYPES, ArtifactKind, Problem
-from klineage.artifact.kernel import KERNEL, kernel_layouts
-from klineage.artifact.tree import ACTION_PREFIX
-from klineage.prompts import action_spec
-from klineage.memory import SkillCard
 from klineage.backend import get_backend
 
 from klineage.harness import CodexRunner, CodexRunnerError
@@ -38,9 +32,9 @@ import time
 
 args = sys.argv[1:]
 received_prompt = sys.stdin.read()
-prompt = received_prompt.splitlines()[0]
+prompt = received_prompt.splitlines()[2]
 output_path = pathlib.Path(args[args.index("--output-last-message") + 1])
-memory = pathlib.Path(".agents/skills/memory")
+memory = pathlib.Path("workspace/.agents/skills/memory")
 
 print(
     json.dumps(
@@ -52,13 +46,13 @@ print(
             "pythonpath": os.environ.get("PYTHONPATH"),
             "home": os.environ.get("HOME"),
             "codex_home": os.environ.get("CODEX_HOME"),
-            "agents": pathlib.Path("AGENTS.md").read_text(),
+            "agents": pathlib.Path("workspace/AGENTS.md").read_text(),
             "memory": {
                 path.relative_to(memory).as_posix(): path.read_text()
                 for path in memory.rglob("SKILL.md")
             },
             "skills": {
-                name: (pathlib.Path(".agents/skills") / name / "SKILL.md").read_text()
+                name: (pathlib.Path("workspace/.agents/skills") / name / "SKILL.md").read_text()
                 for name in ("bench", "cuda", "hip", "ascendc")
             },
         }
@@ -123,28 +117,30 @@ if prompt.startswith("ISOLATION:"):
     }))
     raise SystemExit(0)
 if prompt.startswith("SYMLINK_REPLY:"):
+    output_path.unlink(missing_ok=True)
     output_path.symlink_to(prompt.removeprefix("SYMLINK_REPLY:"))
     raise SystemExit(0)
 if prompt == "FIFO_REPLY":
+    output_path.unlink(missing_ok=True)
     os.mkfifo(output_path)
     raise SystemExit(0)
 if prompt.startswith("REDIRECT_STATE:"):
     import shutil
-    state = pathlib.Path(".klineage/codex-runs")
+    state = pathlib.Path("workspace/.klineage/codex-runs")
     shutil.rmtree(state)
     state.symlink_to(prompt.removeprefix("REDIRECT_STATE:"), target_is_directory=True)
     output_path.write_text("replaced state")
     raise SystemExit(0)
 if prompt.startswith("REDIRECT_FINAL:"):
-    target = pathlib.Path(".klineage/codex-runs") / output_path.stem / "final_message.txt"
+    target = output_path
     target.unlink()
     target.symlink_to(prompt.removeprefix("REDIRECT_FINAL:"))
     output_path.write_text("redirected write")
     raise SystemExit(0)
 if prompt.startswith("REDIRECT_SKILLS:"):
     import shutil
-    shutil.rmtree(".agents")
-    pathlib.Path(".agents").symlink_to(prompt.removeprefix("REDIRECT_SKILLS:"), target_is_directory=True)
+    shutil.rmtree("workspace/.agents")
+    pathlib.Path("workspace/.agents").symlink_to(prompt.removeprefix("REDIRECT_SKILLS:"), target_is_directory=True)
     output_path.write_text("replaced skills")
     raise SystemExit(0)
 if prompt.startswith("READONLY:"):
@@ -169,7 +165,11 @@ if prompt == "STATE":
     raise SystemExit(0)
 if prompt == "RUNTIME":
     subprocess.run([sys.executable, "-c", "import klineage"], check=True)
-    assert pathlib.Path(".klineage/specs/action.init.json").is_file()
+    from klineage.artifact import Problem
+    from klineage.serialization import raw_text
+    assert "definition.json" in raw_text(Problem.problem_spec())
+if prompt == "NO_OUTPUT":
+    raise SystemExit(0)
 if prompt == "NO_FINAL":
     output_path.unlink(missing_ok=True)
     raise SystemExit(0)
@@ -219,12 +219,13 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertEqual(result.trace_path.parent.name, "successful-run")
         self.assertEqual(
             result.trace_path.parent.parent,
-            (self.work / ".klineage" / "codex-runs").resolve(),
+            (self.work / "workspace/.klineage" / "codex-runs").resolve(),
         )
-        self.assertEqual(
-            (result.trace_path.parent / "prompt.txt").read_text(),
-            "build the thing",
-        )
+        prompt = (result.trace_path.parent / "prompt.txt").read_text()
+        self.assertTrue(prompt.startswith("Read `workspace/AGENTS.md`"))
+        self.assertIn("`workspace/.agents/skills/`", prompt)
+        self.assertIn("non-artifact files under `workspace/`", prompt)
+        self.assertTrue(prompt.endswith("build the thing"))
         self.assertTrue((result.trace_path.parent / "final_message.txt").is_file())
         self.assertTrue((result.trace_path.parent / "stderr.log").is_file())
 
@@ -352,6 +353,11 @@ class CodexRunnerTests(unittest.TestCase):
     def test_missing_reply_has_trace(self):
         with self.assertRaises(CodexRunnerError) as caught:
             self.runner()("NO_FINAL", run_id="missing-reply")
+        self.assertTrue(caught.exception.trace_path.is_file())
+
+    def test_empty_reply_has_trace(self):
+        with self.assertRaises(CodexRunnerError) as caught:
+            self.runner()("NO_OUTPUT")
         self.assertTrue(caught.exception.trace_path.is_file())
 
     def test_timeout_kills_orphans(self):
@@ -487,7 +493,7 @@ class CodexRunnerTests(unittest.TestCase):
             self.assertEqual(runner.reasoning_effort, "low")
             self.assertEqual(self.runner(model="explicit-model").model, "explicit-model")
 
-    def test_codex_config_is_host_only(self):
+    def test_codex_config_is_shared(self):
         config = self.codex_home / "config.toml"
         config.write_text(
             'model = "configured-model"\n'
@@ -499,11 +505,12 @@ class CodexRunnerTests(unittest.TestCase):
         with patch.dict(os.environ, {"KLINEAGE_TEST_HOST_KEY": "host-secret"}):
             result = self.runner()(f"ISOLATION:{config}")
         reply = json.loads(result.final_message)
-        self.assertFalse(reply["host_secret"])
+        self.assertTrue(reply["host_secret"])
         self.assertEqual(reply["host_key"], "sandbox-provider")
         self.assertIn("configured-model", self.trace_args(result.trace_path))
         self.assertNotIn("host-secret", result.trace_path.read_text())
-        self.assertFalse((self.work / ".klineage/codex-home/config.toml").exists())
+        self.assertEqual(self.trace_event(result.trace_path)["codex_home"], str(self.codex_home))
+        self.assertFalse(list(self.work.rglob("codex-home")))
 
     def test_missing_provider_key(self):
         with patch.dict(os.environ):
@@ -536,7 +543,7 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertEqual(result.trace_path.parent.parent, directory / "codex-runs")
         self.assertEqual((result.trace_path.parent / "final_message.txt").read_text(), result.final_message)
         args = self.trace_args(result.trace_path)
-        self.assertEqual(Path(args[args.index("--output-last-message") + 1]).parent, self.work / ".klineage/replies")
+        self.assertEqual(Path(args[args.index("--output-last-message") + 1]), result.trace_path.parent / "final_message.txt")
 
     def test_relative_external_state(self):
         result = self.runner(state_dir=Path("../traces"))("external", run_id="relative")
@@ -570,11 +577,12 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertEqual(json.loads(result.final_message), {"value": "mounted input", "writable": False})
         self.assertEqual(reference.read_text(), "mounted input")
 
-    def test_resume_isolation(self):
+    def test_resume_shares_codex_home(self):
         with patch.dict(os.environ, {"KLINEAGE_TEST_HOST_KEY": "private"}):
             first = self.runner()("STATE")
             second = self.runner(resume_id="recorded-session")("STATE")
         self.assertEqual(json.loads(first.final_message)["count"], 1)
+        self.assertEqual((self.codex_home / "resume-marker").read_text(), "2")
         self.assertEqual(json.loads(second.final_message), {
             "count": 2, "home": "/home/agent", "host_key": None, "devices": [],
         })
@@ -590,12 +598,12 @@ class CodexRunnerTests(unittest.TestCase):
             self.assertEqual(
                 event["skills"][name], ((BENCH_SKILL if name == "bench" else get_backend(name).skill_root) / "SKILL.md").read_text()
             )
-        source = self.work / ".agents/skills/cuda/assets/add_one/solution/kernel.cu"
+        source = self.work / "workspace/.agents/skills/cuda/assets/add_one/solution/kernel.cu"
         self.assertTrue(source.is_file())
 
     def test_process_function_docs(self):
         runner = self.runner()
-        path = self.work / "AGENTS.md"
+        path = self.work / "workspace/AGENTS.md"
         path.write_text("# Local instructions\nKeep user guidance.\n")
         first = runner("inspect", run_id="first")
         docs = self.trace_event(first.trace_path)["agents"]
@@ -700,23 +708,20 @@ class CodexRunnerTests(unittest.TestCase):
         paths = self.trace_event(result.trace_path)["pythonpath"].split(os.pathsep)
         self.assertEqual(paths, [str(PACKAGE_ROOT.parent)])
 
-    def test_schema_exports(self):
-        self.runner()
-        schemas = [
-            (Problem.artifact_kind, (Problem.problem_spec(),)),
-            (SkillCard.artifact_kind, (SkillCard.schema,)),
-            (ArtifactKind.KERNEL, (KERNEL,)),
-            *((kind, (action_spec(kind.removeprefix(ACTION_PREFIX)),)) for kind in ACTION_TYPES),
-            *((get_backend(language).kernel_type.artifact_kind, kernel_layouts(get_backend(language).kernel_type)) for language in ("cuda", "hip", "ascendc")),
-        ]
-        for kind, layouts in schemas:
-            path = self.work / ".klineage/specs" / f"{kind}.json"
-            self.assertEqual(json.loads(path.read_text()), [json.loads(raw_text(layout)) for layout in layouts])
-        self.assertFalse((self.work / ".klineage/artifacts").exists())
-        self.assertFalse((self.work / ".klineage/message").exists())
+    def test_runtime_has_no_exports(self):
+        result = self.runner()("RUNTIME")
+        event = self.trace_event(result.trace_path)
+        self.assertEqual(event["codex_home"], str(self.codex_home))
+        self.assertEqual(set(self.work.iterdir()), {self.work / "workspace"})
+        state = self.work / "workspace/.klineage"
+        self.assertEqual(set(state.iterdir()), {state / "codex-runs"})
+        self.assertEqual(
+            Path(event["args"][event["args"].index("--output-last-message") + 1]),
+            result.trace_path.parent / "final_message.txt",
+        )
 
     def test_skill_conflict_preserved(self):
-        skill = self.work / ".agents/skills/cuda"
+        skill = self.work / "workspace/.agents/skills/cuda"
         skill.mkdir(parents=True)
         contents = "User skill"
         (skill / "SKILL.md").write_text(contents)

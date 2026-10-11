@@ -35,7 +35,7 @@ from urllib.request import Request, urlopen
 
 args = sys.argv[1:]
 # Task data precedes the runner's time-budget instructions.
-task = json.JSONDecoder().raw_decode(sys.stdin.read())[0]
+task = json.loads(sys.stdin.read().splitlines()[2])
 result = {
     "args": args,
     "host_secret": os.environ.get("KLINEAGE_TEST_HOST_KEY"),
@@ -72,19 +72,19 @@ if task["operation"] == "service":
     with socket.socket() as probe:
         probe.settimeout(0.1)
         result["host_tcp_blocked"] = probe.connect_ex(("127.0.0.1", task["port"])) != 0
-    reply = client.evaluate(Path("kernel"), Path.cwd())
+    reply = client.evaluate(Path("current_kernel"), Path.cwd())
     result["job_id"] = reply.job_id
     result["accepted"] = reply.accepted
-    result["docs"] = Path("AGENTS.md").read_text()
+    result["docs"] = Path("workspace/AGENTS.md").read_text()
 elif task["operation"] == "collection":
     from klineage.artifact import load_problem
     from klineage.server import Client
     client = Client()
-    results = [client.evaluate(Path("kernel"), Path.cwd(), problem_id=name)
+    results = [client.evaluate(Path("current_kernel"), Path.cwd(), problem_id=name)
                for name in client.info()["problems"]]
     result["problems"] = [reply.problem_id for reply in results]
     result["accepted"] = all(client.verify(reply.kernel, reply.job_id).accepted for reply in results)
-    result["references"] = [json.loads(reply.kernel.node("metadata.json").content)["problem"]["path"] for reply in results]
+    result["references"] = [json.loads(reply.kernel.find("metadata.json").content)["problem"]["path"] for reply in results]
     result["problem_mount"] = os.environ.get("KLINEAGE_PROBLEM")
 elif task["operation"] == "provider":
     overrides = dict(args[index + 1].split("=", 1) for index, value in enumerate(args) if value == "-c")
@@ -155,7 +155,7 @@ class AgentServerTests(unittest.TestCase):
         }, runtime_factory=RecordingRuntime)
         server = self.enterContext(service.start())
         client = Client(server.endpoint, "gemm", timeout=5)
-        write_kernel(kernel(), self.work / "kernel")
+        write_kernel(kernel(), self.work / "current_kernel")
         RecordingRuntime.calls = []
         with patch.dict(os.environ, {"KLINEAGE_TEST_HOST_KEY": "not-in-agent"}):
             result = self.runner(evaluation=client)(json.dumps({
@@ -204,7 +204,7 @@ class AgentServerTests(unittest.TestCase):
             self.root / "server", backend, {"gemm": problem}, runtime_factory=RecordingRuntime,
         )
         server = self.enterContext(service.start())
-        write_kernel(edit_kernel(kernel(), problem=problem), self.work / "kernel")
+        write_kernel(edit_kernel(kernel(), problem=problem), self.work / "current_kernel")
         result = self.runner(evaluation=Client(server.endpoint, "gemm"))(json.dumps({
             "operation": "service", "port": int(server.endpoint.rsplit(":", 1)[1]),
         }))
@@ -220,7 +220,7 @@ class AgentServerTests(unittest.TestCase):
             "gemm": problem_spec(), "other": problem_spec(),
         }, runtime_factory=RecordingRuntime)
         server = self.enterContext(service.start())
-        write_kernel(kernel(), self.work / "kernel")
+        write_kernel(kernel(), self.work / "current_kernel")
         with patch.dict(os.environ, {"KLINEAGE_PROBLEM": str(self.root / "host-problems")}):
             result = self.runner(evaluation=Client(server.endpoint))(
                 json.dumps({"operation": "collection"})

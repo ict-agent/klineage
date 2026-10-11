@@ -1,13 +1,14 @@
-Read AGENTS.md for the registered Python interfaces and limits.
+Read workspace/AGENTS.md for the registered Python interfaces and limits.
+Query artifact layouts on demand in Python; render the returned Node with
+`klineage.serialization.raw_text`:
+- Problem: `from klineage.artifact import Problem`; call `Problem.problem_spec()`.
+- Kernel: `from klineage.backend import get_backend`; call
+  `get_backend(problem.language, problem.platform).kernel_type.kernel_spec()`
+  using the selected `client.problem()` as problem. For all supported entry
+  layouts, use `kernel_layouts(backend.kernel_type)` from `klineage.artifact`.
+Read any referenced example files only when needed.
 {% if target_language is defined and target_language in ("cuda", "hip", "ascendc") %}
-{% for layout in kernel_layouts(get_backend(target_language).kernel_type) %}
-{{ raw_text(layout) }}
-{% endfor %}
-{% else %}
-{{ raw_text(KERNEL) }}
-{% endif %}
-{% if target_language is defined and target_language in ("cuda", "hip", "ascendc") %}
-Read .agents/skills/{{ target_language }}/SKILL.md for the native bundle, binding,
+Read workspace/.agents/skills/{{ target_language }}/SKILL.md for the native bundle, binding,
 and caller-stream contract. Preserve problem.language and problem.platform.
 {% elif target_language is defined and target_language == "python" %}
 Preserve config.toml with [solution] name, definition, author and [build] language="python".
@@ -16,16 +17,18 @@ implementation files under solution/, ordered problem inputs/outputs, and device
 {% else %}
 Read the native skill matching client.problem().language/platform:
 
-- CUDA / NVIDIA: .agents/skills/cuda/SKILL.md.
-- HIP / Hygon: .agents/skills/hip/SKILL.md.
-- AscendC / Ascend: .agents/skills/ascendc/SKILL.md.
+- CUDA / NVIDIA: workspace/.agents/skills/cuda/SKILL.md.
+- HIP / Hygon: workspace/.agents/skills/hip/SKILL.md.
+- AscendC / Ascend: workspace/.agents/skills/ascendc/SKILL.md.
 - Python: retain config.toml, solution/, the configured callable, and device backend.
 
 HIP tensors also use torch's cuda device; that spelling does not identify NVIDIA.
 {% endif %}
 
-The sandbox hides host HOME and other runs. Use only the devices, runtimes and
-tools explicitly supplied by the controller; write files in this workspace.
+Use only the devices, runtimes and tools explicitly supplied by the controller.
+Keep temporary sources, backups, helper scripts, diagnostics, reports, logs and
+compiled binaries under workspace/. Only artifact directories and their problem
+references belong at the workdir root. Codex uses the existing CODEX_HOME.
 Inputs and expert sources are read-only. Use klineage.server.Client for official
 correctness checks and acceptance timings.
 Client() reads KLINEAGE_SERVER. KLINEAGE_PROBLEM configures problem directories
@@ -53,7 +56,7 @@ config.toml's entry_point names the host entry function. Its source owns all lau
 parameters and obtains the current stream on each invocation. Calls pass ordered
 problem inputs; destination-style entries also receive runtime-allocated outputs.
 
-Use kernel/metadata.json and kernel/submission/ as trial source files. Preserve an
+Use current_kernel/metadata.json and current_kernel/submission/ as trial source files. Preserve an
 input Kernel's problem directory reference. For a fresh candidate, use the supplied
 problem directory, available through the framework's problems/<problem_id> link:
 
@@ -65,7 +68,7 @@ from klineage.server import Client
 client = Client(problem_id=problem_id)
 problem_spec = client.problem()
 problem_dir = (Path("problems") / problem_id).resolve(strict=True)
-root = Path("kernel")
+root = Path("current_kernel")
 root.mkdir(exist_ok=True)
 metadata = {
     "name": problem_spec.name,
@@ -87,13 +90,13 @@ assert reply.accepted, reply.diagnostics
 ```
 
 Each evaluate/result call with work automatically appends the complete returned
-Kernel under kernels/0, kernels/1, ... including failed results, and links the
+Kernel under versions/0, versions/1, ... including failed results, and links the
 original problem directory. Each version's metadata.json contains validation.workloads
 and evaluation with job_id, error and diagnostics. Read reply.validation and
 reply.diagnostics or this metadata; do not save Kernels manually or edit these fields.
 Action uses the largest numbered version; a failed latest version cannot fall back.
 To select an earlier accepted candidate, call client.result(job_id, work=Path.cwd());
-this appends it as a new latest version. kernel/ remains independent trial source space.
+this appends it as a new latest version. current_kernel/ remains independent trial source space.
 
 Read Kernel JSON with load_artifact(path, Kernel) or from_json(text, Kernel).
 Read action JSON as Artifact, then select part("kernel", Kernel). JSON restoration does not compile.

@@ -58,6 +58,22 @@ class SandboxTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.sandbox(read_only=(path,))
 
+    def test_reject_broad_writable(self):
+        for path in (Path("/"), self.root, Path.home(), Path("/proc"), Path("/dev")):
+            with self.subTest(path=path):
+                with self.assertRaises(ValueError):
+                    self.sandbox(writable=(path,))
+
+    def test_scoped_writable_mount(self):
+        state = self.root / "state"
+        state.mkdir()
+        self.run_code(f"""
+from pathlib import Path
+Path({str(state / 'session')!r}).write_text('resumable')
+assert not Path({str(self.secret)!r}).exists()
+""", self.sandbox(writable=(state,)))
+        self.assertEqual((state / "session").read_text(), "resumable")
+
     def test_reject_non_devices(self):
         with self.assertRaisesRegex(ValueError, "device"):
             self.sandbox(devices=(self.secret,))

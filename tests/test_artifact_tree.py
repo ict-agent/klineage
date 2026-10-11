@@ -21,6 +21,56 @@ class ArtifactTreeTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
+    def test_find_names(self):
+        first = Node.file("item", "first")
+        parent = Node.directory("item", (first,))
+        last = Node.file("item", "last")
+        unique = Node.file("unique.txt", "only")
+        tree = Node.directory(".", (
+            parent,
+            Node.directory("other", (last, unique)),
+        ))
+        self.assertEqual(tree.find("item"), [parent, first, last])
+        self.assertIs(tree.find("unique.txt"), unique)
+        self.assertIs(tree.find("."), tree)
+        self.assertIs(first.find("item"), first)
+        self.assertEqual(tree.find("missing"), [])
+        self.assertEqual(tree.find("other/unique.txt"), [])
+        self.assertEqual(tree.find(""), [])
+        with self.assertRaisesRegex(TypeError, "string"):
+            tree.find(Path("unique.txt"))
+
+        artifact = Artifact("example", tree)
+        self.assertEqual(artifact.find("item"), [parent, first, last])
+        self.assertIs(artifact.find("unique.txt"), unique)
+        self.assertEqual(artifact.find("missing"), [])
+
+    def test_part_needs_unique_name(self):
+        class Note(Artifact):
+            artifact_kind = "note"
+
+        note = Node.directory("note", (Node.file("text", "hello"),), artifact_type="note")
+        value = Artifact("bundle", Node.directory(".", (
+            Node.directory("nested", (note,)),
+            Node.file("plain", "text"),
+        )))
+        part = value.part("note", Note)
+        self.assertIsInstance(part, Note)
+        self.assertEqual(part.find("text").content, "hello")
+        self.assertEqual(part.tree.name, ".")
+        with self.assertRaisesRegex(KeyError, "missing"):
+            value.part("missing")
+        with self.assertRaisesRegex(ValueError, "plain.*typed artifact"):
+            value.part("plain")
+
+        ambiguous = Artifact("bundle", value.tree.with_child(note))
+        with self.assertRaisesRegex(ValueError, "note.*2 matches"):
+            ambiguous.part("note", Note)
+
+    def test_old_indexing_is_removed(self):
+        self.assertFalse(hasattr(Node, "child"))
+        self.assertFalse(hasattr(Artifact, "node"))
+
     def test_explicit_artifact_class(self):
         class Report(Artifact):
             artifact_kind = "report.direct"
@@ -47,7 +97,7 @@ class ArtifactTreeTests(unittest.TestCase):
             Node.directory("src", (Node.file("main.cu", "different"),)),
         ), description="Different annotations.")
         self.assertIsNone(expected.check(actual))
-        self.assertEqual(expected.child("src/main.cu").content, "expected")
+        self.assertEqual(expected.find("main.cu").content, "expected")
 
     def test_check_mismatch_paths(self):
         expected = Node.directory(".", (
@@ -90,19 +140,19 @@ class ArtifactTreeTests(unittest.TestCase):
             Node.directory("src", (Node.file("main.cu", ""),)),
         ))
         layout.check(value)
-        self.assertEqual(Artifact("example.layout", value).node("src/main.cu").content, "")
+        self.assertEqual(Artifact("example.layout", value).find("main.cu").content, "")
 
     def test_kernel_roundtrip(self):
         original = edit_kernel(kernel(), compile_flags=("-lineinfo",))
         restored = from_json(to_json(original), type(original))
         self.assertEqual(restored, original)
         self.assertEqual(
-            restored.node("submission/solution/kernel.cu").content,
-            source_files(original.node("submission"))["solution/kernel.cu"],
+            restored.find("kernel.cu").content,
+            source_files(original.find("submission"))["solution/kernel.cu"],
         )
         self.assertEqual(restored.tree.description, original.tree.description)
         self.assertNotIn(
-            "source_files", json.loads(restored.node("metadata.json").content)
+            "source_files", json.loads(restored.find("metadata.json").content)
         )
 
     def test_reference_digest(self):
@@ -112,7 +162,7 @@ class ArtifactTreeTests(unittest.TestCase):
         result = Artifact("example", Node.directory(".", (node,)))
         source.write_bytes(b"edited")
         with self.assertRaisesRegex(ValueError, "digest|changed"):
-            raw_text(result.node("data.bin"))
+            raw_text(result.find("data.bin"))
 
     def test_invalid_nodes(self):
         for name in ("../escape", "/absolute", "a/b", "a\\b", ".."):
@@ -124,14 +174,14 @@ class ArtifactTreeTests(unittest.TestCase):
     def test_skill_roundtrip(self):
         original = skill("tiling")
         self.assertEqual(from_json(to_json(original), type(original)), original)
-        self.assertIn("preconditions", original.node("SKILL.md").content)
+        self.assertIn("preconditions", original.find("SKILL.md").content)
 
     def test_exact_schema_collects_files(self):
         (self.root / "report.txt").write_text("measured result")
         (self.root / "data").mkdir()
         (self.root / "data" / "result.json").write_text('{"latency_ms": 1}')
-        (self.root / ".klineage").mkdir()
-        (self.root / "AGENTS.md").write_text("runner instructions")
+        (self.root / "workspace" / ".klineage").mkdir(parents=True)
+        (self.root / "workspace" / "AGENTS.md").write_text("runner instructions")
         schema = Node.directory(".", (
             Node.file("report.txt"),
             Node.directory("data", (Node.file("result.json"),)),
@@ -140,7 +190,7 @@ class ArtifactTreeTests(unittest.TestCase):
         schema.check(tree)
         result = Artifact("report.files", tree)
         self.assertEqual({node.name for node in result.tree.children}, {"report.txt", "data"})
-        self.assertEqual(result.node("data/result.json").content, '{"latency_ms": 1}')
+        self.assertEqual(result.find("result.json").content, '{"latency_ms": 1}')
         (self.root / "extra.txt").write_text("unexpected")
         with self.assertRaisesRegex(ValueError, "extra.txt.*unexpected"):
             schema.check(capture_output(self.root, schema))

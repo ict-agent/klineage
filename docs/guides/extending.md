@@ -36,7 +36,7 @@ class LatencyReport(Artifact):
 
     def validate(self):
         super().validate()
-        result = json.loads(raw_text(self.node("result.json")))
+        result = json.loads(raw_text(self.find("result.json")))
         if not isinstance(result, dict) or set(result) != {"latency_ms"}:
             raise ValueError("result.json: expected only latency_ms")
         latency = result["latency_ms"]
@@ -63,8 +63,10 @@ method, such as `Problem.problem_spec()`, call `check` on the returned tree inst
 Descriptions and examples explain a format; `validate()` enforces its contents.
 
 Pass the concrete class when loading a directory or JSON so its checks run.
-`Action(..., output_type=LatencyReport)` can collect the same format from an
-agent workspace. No Artifact format registration is needed.
+Define the class in an importable module to use
+`Action(..., output_type=LatencyReport)`. The agent imports that class to inspect
+its `schema`; the action collects and checks the resulting files. No Artifact
+format registration is needed.
 
 ## Register a JSON handler
 

@@ -11,7 +11,7 @@ the directory layout, build configuration, tensor ABI, and runtime constraints.
 1. Read the supplied Problem and resolve its ordered tensor signature.
 2. Implement the requested mechanisms in raw CUDA C/C++.
 3. Export the host wrapper through pybind11 using the caller's device and stream.
-4. Write the complete bundle in kernel/submission/; clear stale validation.
+4. Write the complete bundle in current_kernel/submission/; clear stale validation.
 5. Use klineage.server.Client and the `bench` skill; the client automatically saves each returned Kernel.
 
 Start from [the add-one bundle](assets/add_one/config.toml) and its

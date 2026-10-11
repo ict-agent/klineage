@@ -68,7 +68,7 @@ def kernel_fields(kernel: Any) -> dict[str, Any]:
     """Identify a kernel without embedding its sources."""
 
     try:
-        metadata = json.loads(raw_text(kernel.node("metadata.json")))
+        metadata = json.loads(raw_text(kernel.find("metadata.json")))
         return {
             "kernel_name": metadata["name"],
             "platform": metadata["problem"]["platform"],

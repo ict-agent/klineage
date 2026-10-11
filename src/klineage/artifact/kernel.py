@@ -30,11 +30,11 @@ from klineage.constants import (
     BUILD_DIRECTORY,
     BUNDLE_CONFIG,
     BUNDLE_SOLUTION,
-    KERNEL_DIRECTORY,
+    CURRENT_KERNEL_DIRECTORY,
     KERNEL_METADATA,
-    KERNELS_DIRECTORY,
     STATE_DIRECTORY,
     SUBMISSION_DIRECTORY,
+    VERSIONS_DIRECTORY,
 )
 from klineage.serialization import raw_bytes, raw_text, restore
 from klineage.tools import agent_function
@@ -139,10 +139,10 @@ KERNEL = Node.directory(
     description="\n".join(
         (
             "A kernel source tree with a checked reference to its problem.",
-            "Kernel files live under build_root. The framework saves measured versions under kernels/<N>/.",
+            "Kernel files live under build_root. The framework saves measured versions under versions/<N>/.",
             "The agent submits this directory with klineage.server.Client.evaluate; the service checks kernel_spec and builds it.",
             "After source edits reconstruct the Kernel before evaluating it.",
-            "The client automatically saves returned Kernels under kernels/<N>; the service owns validation.",
+            "The client automatically saves returned Kernels under versions/<N>; the service owns validation.",
         )
     ),
     children=(
@@ -208,6 +208,9 @@ class Kernel(Artifact, ABC):
             break
         else:
             raise ValueError(f"{self.kind}: no kernel layout matches; " + "; ".join(dict.fromkeys(errors)))
+        for name in (KERNEL_METADATA, SUBMISSION_DIRECTORY.name):
+            if not isinstance(self.find(name), Node):
+                raise ValueError(f"{name}: expected exactly one kernel node")
         Artifact.__post_init__(self)
         object.__setattr__(self, "function", None)
 
@@ -237,7 +240,7 @@ class Kernel(Artifact, ABC):
     @classmethod
     @agent_function
     def load_kernel(
-        cls, build_root: Path = KERNEL_DIRECTORY, *, include_paths: Sequence[Path] = ()
+        cls, build_root: Path = CURRENT_KERNEL_DIRECTORY, *, include_paths: Sequence[Path] = ()
     ) -> Kernel:
         """Read a kernel directory, check its specification and build its callable.
 
@@ -257,7 +260,7 @@ class Kernel(Artifact, ABC):
             ValueError: The tree, problem reference or target is invalid.
                 Structural errors identify the failing subtree.
 
-        Builds use ``.klineage/build`` beside ``build_root``. JSON representations
+        Builds use ``workspace/.klineage/build`` beside ``build_root``. JSON representations
         are read separately with ``load_artifact`` and do not carry compiled code.
         """
         from klineage.artifact.problem import load_problem
@@ -312,7 +315,7 @@ class Kernel(Artifact, ABC):
     @property
     def validation(self):
         """Return stored measurements, or ``None`` when no validation is attached."""
-        value = json.loads(raw_text(self.node(KERNEL_METADATA)))["validation"]
+        value = json.loads(raw_text(self.find(KERNEL_METADATA)))["validation"]
         return restore(value, ValidationResult) if value is not None else None
 
     def __call__(self, *inputs: Any) -> Any:
@@ -381,7 +384,7 @@ def capture_kernel(path: Path) -> Node:
 
 def latest_kernel(work: Path) -> Path:
     """Return the highest numbered kernel directory without following links."""
-    root = Path(work).expanduser().absolute() / KERNELS_DIRECTORY
+    root = Path(work).expanduser().absolute() / VERSIONS_DIRECTORY
     versions = []
     with safe_directory(root) as directory:
         for name in os.listdir(directory):
@@ -405,8 +408,8 @@ def next_version(work: Path) -> int:
 
 
 def snapshot_kernel(kernel: Kernel, work: Path) -> Path:
-    """Publish a complete kernel file tree under work/kernels/<N>."""
-    root = Path(work).expanduser().absolute() / KERNELS_DIRECTORY
+    """Publish a complete kernel file tree under work/versions/<N>."""
+    root = Path(work).expanduser().absolute() / VERSIONS_DIRECTORY
     with safe_directory(root, DirectoryMode.CREATE) as directory:
         # Serialize publishers; only complete trees receive a version number.
         fcntl.flock(directory, fcntl.LOCK_EX)

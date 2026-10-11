@@ -74,7 +74,7 @@ class BackendTests(unittest.TestCase):
                 current = make_kernel(
                     "example", problem, {("kernel" + backend.kernel_type.entry_suffixes[0]): "// source"}
                 )
-                self.assertEqual(current.node("submission/solution/" + ("kernel" + backend.kernel_type.entry_suffixes[0])).content, "// source")
+                self.assertEqual(current.find("submission").find("solution").find("kernel" + backend.kernel_type.entry_suffixes[0]).content, "// source")
                 self.assertEqual(from_json(to_json(current), type(current)), current)
 
 

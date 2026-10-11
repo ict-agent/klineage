@@ -129,7 +129,7 @@ class Node:
 
     Examples:
         >>> tree = Node.directory(".", (Node.file("note.txt", "hello"),))
-        >>> tree.child("note.txt").content
+        >>> tree.find("note.txt").content
         'hello'
     """
 
@@ -192,27 +192,26 @@ class Node:
             reference=reference,
         )
 
-    def child(self, path: str) -> Node:
-        """Find a descendant by normalized relative POSIX path; ``.`` is self.
+    def find(self, name: str) -> Node | list[Node]:
+        """Match exact names throughout this tree, including this node.
+
+        Return the node for one match, a list for multiple matches, or an empty
+        list for no match. Lists follow preorder and preserve child order.
+        Names are not interpreted as paths.
 
         Raises:
-            ValueError: The path contains invalid or unnormalized components.
-            KeyError: The descendant does not exist.
+            TypeError: ``name`` is not a string.
         """
-        if path == ROOT_NAME:
-            return self
-        parts = PurePosixPath(path).parts
-        if not parts or "/".join(parts) != path:
-            raise ValueError("tree path must be normalized and relative")
-        current = self
-        for part in parts:
-            node_name(part)
-            current = next(
-                (node for node in current.children if node.name == part), None
-            )
-            if current is None:
-                raise KeyError(path)
-        return current
+        if not isinstance(name, str):
+            raise TypeError("node name must be a string")
+        matches = []
+        pending = [self]
+        while pending:
+            node = pending.pop()
+            if node.name == name:
+                matches.append(node)
+            pending.extend(reversed(node.children))
+        return matches[0] if len(matches) == 1 else matches
 
     def with_child(self, node: Node) -> Node:
         """Return a directory with this child added or replaced by name."""
@@ -317,15 +316,24 @@ class Artifact:
         if self.schema is not None:
             self.schema.check(self.tree)
 
-    def node(self, path: str) -> Node:
-        """Return a node by its normalized path relative to the artifact root."""
-        return self.tree.child(path)
+    def find(self, name: str) -> Node | list[Node]:
+        """Find exact names in the tree; return one Node or a list of matches."""
+        return self.tree.find(name)
 
-    def part(self, path: str, artifact_type: type[Artifact] | None = None) -> Artifact:
-        """Return a subtree, optionally validating it as an explicit Artifact class."""
-        node = self.node(path)
+    def part(self, name: str, artifact_type: type[Artifact] | None = None) -> Artifact:
+        """Extract one named subtree as an Artifact, optionally checking its class.
+
+        Raises:
+            KeyError: No node has this name.
+            ValueError: Multiple nodes match, or the node is not a typed artifact.
+        """
+        node = self.find(name)
+        if isinstance(node, list):
+            if not node:
+                raise KeyError(f"{name}: artifact not found")
+            raise ValueError(f"{name}: expected one artifact, found {len(node)} matches")
         if node.artifact_type is None:
-            raise ValueError(f"{path} is not a typed artifact")
+            raise ValueError(f"{name} is not a typed artifact")
         return (artifact_type or Artifact).from_tree(node.artifact_type, replace(node, name=ROOT_NAME))
 
     @classmethod

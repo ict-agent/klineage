@@ -27,7 +27,7 @@ class ArtifactFlowTests(unittest.TestCase):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.enterContext(patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex-home")}))
         self.naive = kernel(source="naive")
-        self.problem = Path(json.loads(self.naive.node("metadata.json").content)["problem"]["path"])
+        self.problem = Path(json.loads(self.naive.find("metadata.json").content)["problem"]["path"])
         self.expert = kernel(source="expert")
         self.optimized = kernel(source="optimized")
         self.repo = self.root / "repo"

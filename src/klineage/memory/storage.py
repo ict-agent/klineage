@@ -39,7 +39,7 @@ def load_skill(path: str | os.PathLike[str]) -> SkillCard:
 
 
 def skill_text(card: SkillCard) -> str:
-    return raw_text(card.node(SKILL_FILE))
+    return raw_text(card.find(SKILL_FILE))
 
 
 def parse_skill(text: str) -> SkillCard:

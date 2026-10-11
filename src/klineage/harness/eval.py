@@ -588,7 +588,7 @@ def evaluate(
 ) -> ValidationResult:
     """Build and measure frozen Kernel sources for every problem workload.
 
-    Write builds under work/build and results into kernels/<N>/metadata.json.
+    Write builds under work/build and results into versions/<N>/metadata.json.
     The problem oracle checks correctness; optional reference supplies only the
     performance baseline and must share the problem contract. include_paths
     supplies build headers. Return ValidationResult with each workload's results;
@@ -596,10 +596,10 @@ def evaluate(
     Reconstruct the Kernel tree after source edits. Omit reference for standalone checks.
     timeout overrides the shared workload budget in seconds; it changes neither the
     sampling policy nor the enclosing action deadline. None uses the default.
-    Each call also snapshots the input tree under work/kernels/<N>, numbered
+    Each call also snapshots the input tree under work/versions/<N>, numbered
     from zero before evaluation.
     """
-    metadata = json.loads(raw_text(kernel.node(KERNEL_METADATA)))
+    metadata = json.loads(raw_text(kernel.find(KERNEL_METADATA)))
     metadata["validation"] = None
     metadata.pop("evaluation", None)
     kernel = type(kernel)(kernel.tree.with_child(json_node(KERNEL_METADATA, metadata)))

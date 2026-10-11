@@ -22,7 +22,7 @@ class KernelSnapshotTests(unittest.TestCase):
 
     def test_snapshot_writes_tree(self):
         path = storage.snapshot_kernel(self.current, self.work)
-        self.assertEqual(path, self.work / "kernels/0")
+        self.assertEqual(path, self.work / "versions/0")
         self.assertEqual({child.name for child in path.iterdir()}, {"metadata.json", "submission"})
         restored = load_artifact(path, artifact_type=type(self.current))
         self.assertEqual(source_files(restored.tree), source_files(self.current.tree))
@@ -34,7 +34,7 @@ class KernelSnapshotTests(unittest.TestCase):
         first = storage.snapshot_kernel(self.current, self.work)
         changed = edit_kernel(self.current, source_files={"other.cu": "changed"})
         second = storage.snapshot_kernel(changed, self.work)
-        self.assertEqual(second, self.work / "kernels/1")
+        self.assertEqual(second, self.work / "versions/1")
         self.assertTrue((first / "submission/solution/kernel.cu").is_file())
         self.assertFalse((second / "submission/solution/kernel.cu").exists())
         self.assertEqual((second / "submission/solution/other.cu").read_text(), "changed")
@@ -59,8 +59,8 @@ class KernelSnapshotTests(unittest.TestCase):
         self.assertEqual((path / "notes.txt").read_text(), "backend notes")
         self.assertTrue((path / "assets").is_dir())
         restored = storage.capture_kernel(path)
-        self.assertEqual(restored.child("notes.txt").content, "backend notes")
-        self.assertEqual(restored.child("assets").children, ())
+        self.assertEqual(restored.find("notes.txt").content, "backend notes")
+        self.assertEqual(restored.find("assets").children, ())
 
     def test_binary_reference_snapshot(self):
         from klineage.artifact import file_ref
@@ -83,21 +83,21 @@ class KernelSnapshotTests(unittest.TestCase):
 
     def test_large_text_stays_inline(self):
         current = edit_kernel(self.current, source_files={"large.cu": "x" * (MAX_INLINE_BYTES + 1)})
-        metadata = json.loads(current.node("metadata.json").content)
+        metadata = json.loads(current.find("metadata.json").content)
         metadata["evaluation"] = {"diagnostics": {"build.log": "x" * (MAX_INLINE_BYTES + 1)}}
         current = type(current)(current.tree.with_child(json_node("metadata.json", metadata)))
         path = storage.snapshot_kernel(current, self.work)
         tree = storage.capture_kernel(path)
-        self.assertEqual(tree.child("metadata.json").content, current.node("metadata.json").content)
-        self.assertEqual(tree.child("submission/solution/large.cu").content, "x" * (MAX_INLINE_BYTES + 1))
+        self.assertEqual(tree.find("metadata.json").content, current.find("metadata.json").content)
+        self.assertEqual(tree.find("submission").find("solution").find("large.cu").content, "x" * (MAX_INLINE_BYTES + 1))
         restored = load_artifact(path, artifact_type=type(current))
-        self.assertIsNotNone(restored.node("metadata.json").content)
-        self.assertIsNotNone(restored.node("submission/solution/large.cu").content)
+        self.assertIsNotNone(restored.find("metadata.json").content)
+        self.assertIsNotNone(restored.find("submission").find("solution").find("large.cu").content)
 
     def test_metadata_not_source_budget(self):
         path = storage.snapshot_kernel(self.current, self.work)
         (path / "metadata.json").write_text("x" * (SOURCE_BYTE_LIMIT + 1))
-        self.assertEqual(len(storage.capture_kernel(path).child("metadata.json").content), SOURCE_BYTE_LIMIT + 1)
+        self.assertEqual(len(storage.capture_kernel(path).find("metadata.json").content), SOURCE_BYTE_LIMIT + 1)
         (path / "submission/solution/kernel.cu").write_text("x" * (SOURCE_BYTE_LIMIT + 1))
         with self.assertRaisesRegex(StructuredOutputError, "source bundle exceeds"):
             storage.capture_kernel(path)
@@ -116,8 +116,8 @@ class KernelSnapshotTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             storage.latest_kernel(self.work)
         for name in ("2", "10", "notes"):
-            (self.work / "kernels" / name).mkdir(parents=True)
-        self.assertEqual(storage.latest_kernel(self.work), self.work / "kernels/10")
+            (self.work / "versions" / name).mkdir(parents=True)
+        self.assertEqual(storage.latest_kernel(self.work), self.work / "versions/10")
         self.assertEqual(storage.next_version(self.work), 11)
 
     def test_failed_write_is_not_a_version(self):
@@ -128,12 +128,12 @@ class KernelSnapshotTests(unittest.TestCase):
         ):
             storage.snapshot_kernel(self.current, self.work)
         self.assertEqual(storage.latest_kernel(self.work), first)
-        self.assertEqual(list((self.work / "kernels").iterdir()), [first])
+        self.assertEqual(list((self.work / "versions").iterdir()), [first])
 
     def test_symlink_paths_rejected(self):
         external = self.work / "external"
         external.mkdir()
-        for relative in ("work", "work/kernels", "work/kernels/0"):
+        for relative in ("work", "work/versions", "work/versions/0"):
             with self.subTest(relative=relative):
                 work = self.work / relative.replace("/", "-")
                 target = work if relative == "work" else work / relative.removeprefix("work/")

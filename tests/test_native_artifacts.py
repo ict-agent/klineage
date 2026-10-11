@@ -33,14 +33,14 @@ class NativeArtifactTests(unittest.TestCase):
         payload = json.loads(to_json(original))
         restored = restore(payload, type(original))
         self.assertEqual(
-            source_files(restored.node("submission")),
-            source_files(original.node("submission")),
+            source_files(restored.find("submission")),
+            source_files(original.find("submission")),
         )
         self.assertIsInstance(load_problem(restored), Artifact)
         changed = edit_kernel(restored, source_files={"kernel.cu": "new source"})
-        self.assertEqual(changed.node("submission/solution/kernel.cu").content, "new source")
-        self.assertNotEqual(changed.node("submission"), original.node("submission"))
-        self.assertEqual(source_files(original.node("submission")), source_files(restored.node("submission")))
+        self.assertEqual(changed.find("submission").find("solution").find("kernel.cu").content, "new source")
+        self.assertNotEqual(changed.find("submission"), original.find("submission"))
+        self.assertEqual(source_files(original.find("submission")), source_files(restored.find("submission")))
 
     def test_json_changes_are_visible(self):
         original = kernel()
@@ -55,9 +55,9 @@ class NativeArtifactTests(unittest.TestCase):
         metadata["content"] = json.dumps(value)
         restored = restore(payload, type(original))
         self.assertEqual(
-            json.loads(raw_text(restored.node("metadata.json")))["name"], "renamed"
+            json.loads(raw_text(restored.find("metadata.json")))["name"], "renamed"
         )
-        self.assertNotEqual(json.loads(raw_text(original.node("metadata.json")))["name"], json.loads(raw_text(restored.node("metadata.json")))["name"])
+        self.assertNotEqual(json.loads(raw_text(original.find("metadata.json")))["name"], json.loads(raw_text(restored.find("metadata.json")))["name"])
 
     def test_example_reference(self):
         path = self.root / "example.txt"
@@ -70,13 +70,16 @@ class NativeArtifactTests(unittest.TestCase):
         self.assertEqual(node.one_shot, example)
         self.assertEqual(raw_text(node.one_shot), "one complete example\n")
         self.assertEqual(
-            json.loads(raw_text(spec))["one_shot"], "one complete example\n"
+            raw_text(spec), f"kernel.cu ---> Kernel source. (See: {path} as an example)"
         )
         self.assertNotIn("rules", json.loads(to_json(node)))
         self.assertEqual(from_json(to_json(node), Node), node)
         path.write_text("changed example\n")
         with self.assertRaisesRegex(ValueError, "changed"):
-            raw_text(spec)
+            raw_text(node.one_shot)
+        self.assertEqual(
+            raw_text(spec), f"kernel.cu ---> Kernel source. (See: {path} as an example)"
+        )
 
     def test_example_keeps_bytes(self):
         path = self.root / "example.txt"

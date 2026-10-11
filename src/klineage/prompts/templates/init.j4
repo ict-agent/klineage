@@ -21,18 +21,17 @@ their complete definition and workloads.
 The controller stages the repository and mounts it read-only. The expert kernel
 is a source path or name to locate there. Do not clone or modify the mounted source.
 
-Artifact output contract, generated from the annotated tree:
-{{ raw_text(action_spec("init")) }}
-{{ raw_text(Problem.problem_spec()) }}
+Read the action layout when needed: `from klineage.prompts import action_spec`;
+inspect `action_spec("init")` with `klineage.serialization.raw_text`.
 
 {% include "backend.j4" %}
 
-- Use .agents/skills/bench/SKILL.md for correctness and performance measurements.
-- Client.evaluate automatically saves each complete result under kernels/0, kernels/1, ... .
+- Use workspace/.agents/skills/bench/SKILL.md for correctness and performance measurements.
+- Client.evaluate automatically saves each complete result under versions/0, versions/1, ... .
 
 # Procedure
 
-1. Read the bench skill and directory contracts listed above.
+1. Read the bench skill and layouts available through the Python APIs above.
    Use client.problem() for the controller-registered Problem, named problem_spec.
    Read the native skill matching problem_spec.language/platform. Derive the ABI
    from its ordered definition inputs/outputs and each workload's axis
@@ -58,19 +57,19 @@ Artifact output contract, generated from the annotated tree:
    probes or preprocessing to resolve templates, and target compiler reports or
    disassembly to resolve remaining uncertainty. Establish the actual arithmetic,
    data movement, layouts, synchronization, and work assignment.
-   Prepare expert/metadata.json, expert/submission/config.toml and expert/submission/solution/ using the bench skill's
+   Prepare workspace/expert/metadata.json, workspace/expert/submission/config.toml and workspace/expert/submission/solution/ using the bench skill's
    original-expert adapter contract. Supply its host binding and launch parameters. It must call the fixed expert instance on the supplied stream;
    it may depend on the registered expert headers, and must remain independent of candidate code.
    Use client.evaluate for acceptance. Compilation probes and tool-based inspection
    may use the explicitly supplied diagnostic runtime; keep their evidence separate.
 
-4. Implement the standalone kernel under kernel/submission/ using the selected native skill's
+4. Implement the standalone kernel under current_kernel/submission/ using the selected native skill's
    bundle format and binding contract. Match the ABI derived from problem_spec.
    Expand the expert's abstractions into explicit target code while preserving its
    mechanisms and relevant license notices. Keep expert-library calls and
-   implementations out of the candidate; only the adapter in expert/ may use them.
+   implementations out of the candidate; only the adapter in workspace/expert/ may use them.
 
-5. Prepare kernel/ and its problem directory reference, then perform the service comparisons
+5. Prepare current_kernel/ and its problem directory reference, then perform the service comparisons
    below. Each evaluation automatically saves the returned Kernel with its measurements
    and diagnostics. Explain source comparisons in the final response. Submit after every source edit and finish
    with an accepted latest saved version.
@@ -80,13 +79,13 @@ Artifact output contract, generated from the annotated tree:
 Perform both checks and repair the candidate before finishing. Leave the accepted
 service Kernel as the latest saved version; do not fill validation yourself.
 
-**Performance and correctness.** Use the adapter under expert/
+**Performance and correctness.** Use the adapter under workspace/expert/
 that calls the original, fixed expert implementation on all supplied workloads. It may
 depend on the staged repository; the delivered bundle may not. Preserve the
 expert's schedule and execution path. The adapter must not call candidate code.
 
 Follow the bench skill's original-expert comparison procedure. Check the expert
-against the problem oracle with client.evaluate(Path("expert"), Path.cwd()), then
+against the problem oracle with client.evaluate(Path("workspace/expert"), Path.cwd()), then
 evaluate the candidate with reference=expert_reply.job_id. Keep that expert fixed.
 Require both results to be accepted, including the paired performance gate.
 Read reply.validation and report latency_ms and reference_latency_ms for each UUID in reply.validation.workloads. Do not average

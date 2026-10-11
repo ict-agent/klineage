@@ -262,9 +262,9 @@ class BundleLoader:
         target = get_backend(problem.language, problem.platform)
         if target.kind != backend.kind:
             raise ValueError("kernel backend differs from its problem target")
-        sources = source_files(kernel.node("submission"))
+        sources = source_files(kernel.find("submission"))
         entry = bundle_entry(sources, backend)
-        metadata = json.loads(raw_text(kernel.node("metadata.json")))
+        metadata = json.loads(raw_text(kernel.find("metadata.json")))
         function = self.load_entry(sources, entry, backend, metadata.get("compile_flags", ()))
         if (
             entry.language == "python"

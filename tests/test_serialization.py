@@ -46,9 +46,32 @@ class SerializationTests(unittest.TestCase):
             path.write_bytes(b"altered\r\n")
             with self.assertRaisesRegex(ValueError, "changed"):
                 raw_text(reference)
-        self.assertEqual(json.loads(raw_text(Node.directory(".")))["children"], [])
+        self.assertEqual(raw_text(Node.directory(".")), "./")
 
-    def test_raw_text_spec(self):
+    def test_raw_text_layout(self):
+        reference = FileRef("/examples/main.cu", "0" * 64, 4)
+        layout = Node.directory(".", (
+            Node.directory("src", (
+                Node.file(
+                    "main.cu", "source contents are omitted",
+                    description="Host entry.\nInclude launch parameters.",
+                    one_shot=reference,
+                ),
+                Node.directory("empty"),
+            ), description="Sources."),
+            Node.file("config.toml", reference=reference, description="Build settings."),
+        ), description="Kernel.")
+        self.assertEqual(raw_text(layout), (
+            "./ ---> Kernel.\n"
+            "├── src/ ---> Sources.\n"
+            "│   ├── main.cu ---> Host entry.\n"
+            "│   │                Include launch parameters."
+            " (See: /examples/main.cu as an example)\n"
+            "│   └── empty/\n"
+            "└── config.toml ---> Build settings."
+        ))
+
+    def test_layout_example_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "example.txt"
             path.write_text("a complete example")
@@ -57,14 +80,35 @@ class SerializationTests(unittest.TestCase):
                 Node.file("source.txt", description="Source.", one_shot=reference),
             ), description="Sources.", one_shot=reference)
             text = raw_text(spec)
-            data = json.loads(text)
-            self.assertEqual(data["one_shot"], "a complete example")
-            self.assertEqual(data["children"][0]["one_shot"], "a complete example")
+            self.assertEqual(text, (
+                f"./ ---> Sources. (See: {path} as an example)\n"
+                f"└── source.txt ---> Source. (See: {path} as an example)"
+            ))
             self.assertEqual(spec.one_shot, reference)
             path.unlink()
             self.assertEqual(from_json(to_json(spec), Node), spec)
-            with self.assertRaisesRegex(ValueError, "regular file"):
-                raw_text(spec)
+            with patch.object(Path, "open", side_effect=AssertionError("unexpected read")):
+                self.assertEqual(raw_text(spec), text)
+
+    def test_layout_no_description(self):
+        self.assertEqual(raw_text(Node.file("plain.txt")), "plain.txt")
+        self.assertEqual(
+            raw_text(Node.file("example.txt", one_shot="first\nsecond\r\n")),
+            "example.txt ---> (See: first\\nsecond\\r\\n as an example)",
+        )
+
+    def test_raw_text_artifact(self):
+        value = Artifact("report", Node.directory(".", (
+            Node.directory("results", (
+                Node.file("result.txt", "42\n", description="Measured value."),
+            )),
+        ), description="Run report."))
+        self.assertEqual(raw_text(value), (
+            "./ ---> Run report.\n"
+            "└── results/\n"
+            "    └── result.txt ---> Measured value."
+        ))
+        self.assertEqual(raw_text(value.find("result.txt")), "42\n")
 
     def test_dataclass_roundtrips(self):
         values = (
@@ -109,7 +153,10 @@ class SerializationTests(unittest.TestCase):
             ),
         )
         self.assertEqual(from_json(to_json(schema), Node), schema)
-        self.assertEqual(json.loads(raw_text(schema)), json.loads(to_json(schema)))
+        self.assertEqual(
+            raw_text(schema),
+            "./ ---> Report.\n└── result.txt ---> Result. (See: example as an example)",
+        )
 
     def test_artifact_types_and_format(self):
         for value in (kernel(), problem_spec(), skill("tiling")):
@@ -174,7 +221,7 @@ class SerializationTests(unittest.TestCase):
     def test_evaluation_transport(self):
         current = kernel()
         validation = measured(current)
-        metadata = json.loads(current.node("metadata.json").content)
+        metadata = json.loads(current.find("metadata.json").content)
         current = type(current)(
             current.tree.with_child(
                 json_node(

@@ -109,7 +109,7 @@ class LoggingTests(unittest.TestCase):
         from klineage.harness.logging import kernel_fields
 
         current = fake_kernel()
-        metadata = json.loads(raw_text(current.node("metadata.json")))
+        metadata = json.loads(raw_text(current.find("metadata.json")))
         metadata["problem"]["path"] = str(self.root / "missing-problem")
         current = type(current)(current.tree.with_child(json_node("metadata.json", metadata)))
         self.assertEqual(kernel_fields(current), {"kernel_name": "k", "platform": "sm120"})
@@ -161,7 +161,7 @@ class LoggingTests(unittest.TestCase):
 
         current = fake_kernel()
         path = self.root / "metadata.json"
-        path.write_text(raw_text(current.node("metadata.json")))
+        path.write_text(raw_text(current.find("metadata.json")))
         referenced = type(current)(
             current.tree.with_child(
                 Node.file("metadata.json", reference=file_ref(path))

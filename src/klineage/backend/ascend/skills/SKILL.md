@@ -34,7 +34,7 @@ Do not guess a compiler architecture from a marketing model name. Older CANN
 installations lacking this compiler mode need a supported toolkit.
 The default layout has `config.toml` and `solution/kernel.cpp`. Keep binaries,
 caches, expert repositories and measurements outside submission/.
-Follow an exact layout from `.klineage/specs/kernel.ascendc.json`; other filenames
+Follow an exact layout from `AscendKernel.kernel_spec()` (`from klineage.backend.ascend import AscendKernel`); other filenames
 or headers must be declared in the Kernel class's Node layout.
 
 ## Binding and execution
@@ -62,8 +62,8 @@ or headers must be declared in the Kernel class's Node layout.
 - The candidate must not call expert libraries or cache outputs. Only the original
   expert adapter may depend on the supplied repository.
 
-Use `client.evaluate(Path("kernel"), Path.cwd())`; the client automatically appends
-the complete result under `kernels/0`, `kernels/1`, ... including failures.
+Use `client.evaluate(Path("current_kernel"), Path.cwd())`; the client automatically appends
+the complete result under `versions/0`, `versions/1`, ... including failures.
 Finish with an accepted latest version; use `client.result(job_id, work=Path.cwd())`
 to append an earlier accepted job as the latest version.
 With an explicitly supplied CANN runtime and NPU, write diagnostic scripts and use

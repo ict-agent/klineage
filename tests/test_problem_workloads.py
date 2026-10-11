@@ -73,20 +73,20 @@ class ProblemWorkloadsTests(unittest.TestCase):
         self.assertEqual(tuple(node.name for node in item.tree.children), (
             "target.json", "definition.json", "workloads.jsonl",
         ))
-        self.assertEqual(item.node("workloads.jsonl").content, "")
+        self.assertEqual(item.find("workloads.jsonl").content, "")
         self.assertFalse(hasattr(item, "workload"))
         self.assertEqual(item.values("inputs")["x"]["shape"], ["N", 4])
         self.assertEqual(from_json(to_json(item), Problem), item)
 
     def test_workloads_file_required(self):
         item = problem()
-        tree = Node.directory(".", (item.node("target.json"), item.node("definition.json")))
+        tree = Node.directory(".", (item.find("target.json"), item.find("definition.json")))
         with self.assertRaisesRegex(ValueError, "workloads.jsonl"):
             Problem.from_tree("problem", tree)
         for text in ("", "\n"):
             with self.subTest(text=text):
                 tree = Node.directory(".", (
-                    item.node("target.json"), item.node("definition.json"),
+                    item.find("target.json"), item.find("definition.json"),
                     Node.file("workloads.jsonl", text),
                 ))
                 restored = Problem.from_tree("problem", tree)
@@ -104,7 +104,7 @@ class ProblemWorkloadsTests(unittest.TestCase):
         cases = (workload("small", 2), workload("large", 8))
         item = problem(*cases)
         self.assertEqual(item.workloads, cases)
-        records = item.node("workloads.jsonl").content.splitlines()
+        records = item.find("workloads.jsonl").content.splitlines()
         self.assertEqual(len(records), 2)
         self.assertEqual([json.loads(line)["workload"]["uuid"] for line in records],
                          ["small", "large"])
@@ -128,7 +128,7 @@ class ProblemWorkloadsTests(unittest.TestCase):
                 problem(*cases)
 
         item = problem(workload("first"), workload("second"))
-        records = item.node("workloads.jsonl").content.splitlines()
+        records = item.find("workloads.jsonl").content.splitlines()
         tree = item.tree.with_child(Node.file("workloads.jsonl", "\n".join((records[0], records[0]))))
         with self.assertRaisesRegex(ValueError, "duplicate.*uuid|uuid.*duplicate"):
             Problem.from_tree("problem", tree)
@@ -151,7 +151,7 @@ class ProblemWorkloadsTests(unittest.TestCase):
         first.write_bytes(b"same fixed data")
         second.write_bytes(first.read_bytes())
         item = problem(workload("first", path=first), workload("second", path=second))
-        self.assertEqual(len(item.node("inputs").children), 1)
+        self.assertEqual(len(item.find("inputs").children), 1)
         self.assertEqual(len(item.resolve_inputs()), 2)
         restored = from_json(to_json(item), Problem)
         first.unlink()

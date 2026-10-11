@@ -177,11 +177,11 @@ class ServerBoundaryTests(unittest.TestCase):
         with self.assertRaises((OSError, ValueError)):
             self.client.evaluate(kernel(), work)
         self.assertEqual(list(outside.iterdir()), [])
-        self.assertFalse((work / "kernels").exists())
+        self.assertFalse((work / "versions").exists())
 
     def test_old_hardlink_untouched(self):
         work = self.root / "agent"
-        previous = work / "kernels/0"
+        previous = work / "versions/0"
         previous.mkdir(parents=True)
         outside = self.root / "outside"
         outside.write_text("preserve")
@@ -189,7 +189,7 @@ class ServerBoundaryTests(unittest.TestCase):
         reply = self.client.evaluate(kernel(), work)
         self.assertEqual(outside.read_text(), "preserve")
         self.assertTrue((previous / "metadata.json").samefile(outside))
-        self.assertEqual(latest_kernel(work), work / "kernels/1")
+        self.assertEqual(latest_kernel(work), work / "versions/1")
         metadata = json.loads((latest_kernel(work) / "metadata.json").read_text())
         self.assertEqual(metadata["evaluation"]["job_id"], reply.job_id)
 
@@ -227,7 +227,7 @@ else:
     def test_registered_problem_stays_pinned(self):
         path = self.service.problem_paths["first"] / "workloads.jsonl"
         before = path.read_text()
-        path.write_text(problem_spec(size=64).node("workloads.jsonl").content)
+        path.write_text(problem_spec(size=64).find("workloads.jsonl").content)
         with self.assertRaisesRegex(ServerError, "changed"):
             self.client.evaluate(kernel(), self.root / "agent")
         self.assertFalse(FakeRuntime.calls)

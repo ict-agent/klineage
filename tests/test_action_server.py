@@ -63,7 +63,7 @@ class ActionServerTests(unittest.TestCase):
         return SimpleNamespace(final_message="done")
 
     def metadata(self, current, **changes):
-        metadata = json.loads(current.node("metadata.json").content)
+        metadata = json.loads(current.find("metadata.json").content)
         return type(current)(current.tree.with_child(json_node("metadata.json", metadata | changes)))
 
     def test_measured_unchanged_handoff(self):
@@ -196,7 +196,7 @@ class ActionServerTests(unittest.TestCase):
 
     def test_scratch_sources_ignored(self):
         def generate(*args, **kwargs):
-            write_kernel(kernel(source="unfinished trial"), self.work / "kernel")
+            write_kernel(kernel(source="unfinished trial"), self.work / "current_kernel")
             return self.emit()
 
         self.runner.side_effect = generate
@@ -219,6 +219,6 @@ class ActionServerTests(unittest.TestCase):
             result = self.action().run().part("kernel", Kernel)
         metadata = latest_kernel(self.work) / "metadata.json"
         self.assertGreater(metadata.stat().st_size, MAX_INLINE_BYTES)
-        self.assertIsNotNone(result.node("metadata.json").content)
+        self.assertIsNotNone(result.find("metadata.json").content)
         self.assertTrue(self.client.verify(result).accepted)
         self.assertFalse((self.work / "evaluations").exists())

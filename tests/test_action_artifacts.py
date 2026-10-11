@@ -29,6 +29,23 @@ from klineage.serialization import raw_text
 from klineage.server import Client, Service
 
 
+class Program(Artifact):
+    artifact_kind = "device.example"
+    schema = Node.directory(
+        ".",
+        description="Custom device artifact.",
+        children=(Node.file("program.txt", description="Device program."),),
+    )
+
+
+class Report(Artifact):
+    artifact_kind = "device.report"
+    schema = Node.directory(".", (
+        Node.file("result.txt"),
+        Node.directory("build", (Node.file("proof.txt"),)),
+    ))
+
+
 class ActionArtifactTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
@@ -39,7 +56,7 @@ class ActionArtifactTests(unittest.TestCase):
         (self.repo / "expert.cu").write_text("expert source")
         backend = get_backend("cuda")
         self.enterContext(patch.object(type(backend), "info", return_value={"available": True}))
-        self.problem = Path(json.loads(kernel().node("metadata.json").content)["problem"]["path"])
+        self.problem = Path(json.loads(kernel().find("metadata.json").content)["problem"]["path"])
         service = Service(
             self.root / "server", backend, {"gemm": self.problem},
             runtime_factory=lambda **_: SimpleNamespace(
@@ -51,7 +68,7 @@ class ActionArtifactTests(unittest.TestCase):
         self.client = Client(running.endpoint, "gemm")
         self.enterContext(patch("klineage.action.action.Client", return_value=self.client))
         self.current = self.measure(kernel())
-        shutil.rmtree(self.work / "kernels")
+        shutil.rmtree(self.work / "versions")
         self.runner = Mock(return_value=SimpleNamespace(final_message="done"))
         self.enterContext(
             patch("klineage.action.action.CodexRunner", return_value=self.runner)
@@ -71,7 +88,7 @@ class ActionArtifactTests(unittest.TestCase):
         saved = load_artifact(latest_kernel(self.work), artifact_type=type(self.current))
         self.assertEqual(source_files(saved.tree), source_files(result.part("kernel", Kernel).tree))
         self.assertFalse((self.work / ".klineage/kernel.json").exists())
-        staged = self.work / "repository"
+        staged = self.work / "workspace/repository"
         self.assertEqual((staged / "expert.cu").read_text(), "expert source")
         self.assertIn(staged, self.runner.read_only)
 
@@ -84,8 +101,8 @@ class ActionArtifactTests(unittest.TestCase):
         self.assertTrue(same_implementation(actual, expected))
         self.assertEqual(actual.validation, expected.validation)
         self.assertEqual(
-            json.loads(actual.node("metadata.json").content)["name"],
-            json.loads(expected.node("metadata.json").content)["name"],
+            json.loads(actual.find("metadata.json").content)["name"],
+            json.loads(expected.find("metadata.json").content)["name"],
         )
 
     def emit(self, candidate, card=None):
@@ -131,16 +148,16 @@ class ActionArtifactTests(unittest.TestCase):
         problem.mkdir()
         alias = self.root / "problem-link"
         alias.symlink_to(problem, target_is_directory=True)
-        metadata = json.loads(self.current.node("metadata.json").content)
+        metadata = json.loads(self.current.find("metadata.json").content)
         metadata["problem"] = {"path": str(alias), **load_problem(self.current).target()}
         current = type(self.current)(self.current.tree.with_child(json_node("metadata.json", metadata)))
         self.assertEqual(input_paths(current), (problem.resolve(),))
 
     def test_changed_problem(self):
-        metadata = json.loads(self.current.node("metadata.json").content)
+        metadata = json.loads(self.current.find("metadata.json").content)
         metadata["problem"]["name"] = "different"
         candidate = type(self.current)(self.current.tree.with_child(json_node("metadata.json", metadata)))
-        self.runner.side_effect = lambda *args, **kwargs: write_kernel(candidate, self.work / "kernels/0")
+        self.runner.side_effect = lambda *args, **kwargs: write_kernel(candidate, self.work / "versions/0")
         with self.assertRaisesRegex(ValueError, "problem reference differs"):
             Apply(self.current, workdir=self.work, max_retries=0).run()
 
@@ -264,16 +281,6 @@ class ActionArtifactTests(unittest.TestCase):
         self.assertIn(path, self.runner.read_only)
 
     def test_custom_action_format(self):
-        schema = Node.directory(
-            ".",
-            description="Custom device artifact.",
-            children=(Node.file("program.txt", description="Device program."),),
-        )
-        class Program(Artifact):
-            artifact_kind = "device.example"
-
-        Program.schema = schema
-
         def generate(*args, **kwargs):
             (self.work / "program.txt").write_text("device code")
             return SimpleNamespace(final_message="done")
@@ -282,25 +289,29 @@ class ActionArtifactTests(unittest.TestCase):
         action = Action("write device code", self.work, output_type=Program)
         result = action.run()
         self.assertEqual(result.kind, "device.example")
-        self.assertEqual(result.node("program.txt").content, "device code")
-        self.assertIn(raw_text(schema), action.prompt)
+        self.assertEqual(result.find("program.txt").content, "device code")
+        self.assertIn("from test_action_artifacts import Program", action.prompt)
+        self.assertIn("Program.schema", action.prompt)
+        self.assertNotIn(raw_text(Program.schema), action.prompt)
+
+    def test_local_output_rejected(self):
+        class LocalProgram(Program):
+            pass
+
+        with self.assertRaisesRegex(ValueError, "importable"):
+            Action("write device code", self.work, output_type=LocalProgram)
 
     def test_collects_declared_build(self):
-        first = Node.directory(".", (Node.file("result.txt"),))
-        second = first.with_child(Node.directory("build", (Node.file("proof.txt"),)))
-        class Report(Artifact):
-            artifact_kind = "device.report"
-            schema = second
         (self.work / "result.txt").write_text("result")
         (self.work / "build").mkdir()
         (self.work / "build/proof.txt").write_text("proof")
         result = Action("collect files", self.work, output_type=Report).run()
-        self.assertEqual(result.node("build/proof.txt").content, "proof")
+        self.assertEqual(result.find("build").find("proof.txt").content, "proof")
 
     def test_metadata_evidence_inline(self):
         self.runner.side_effect = lambda *args, **kwargs: self.emit(self.current)
         result = Apply(self.current, workdir=self.work, max_retries=0).run()
-        metadata = json.loads(result.part("kernel", Kernel).node("metadata.json").content)
+        metadata = json.loads(result.part("kernel", Kernel).find("metadata.json").content)
         self.assertEqual(
             metadata["evaluation"],
             {"job_id": self.reply.job_id, "error": self.reply.error, "diagnostics": self.reply.diagnostics},

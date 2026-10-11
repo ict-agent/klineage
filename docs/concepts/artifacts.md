@@ -39,6 +39,20 @@ structure. It ignores contents, annotations and child order, and reports the
 path of a mismatch. Artifact classes apply this check when loading their trees
 and add content checks where needed.
 
+Use `find(name)` on a Node or Artifact to search by exact name, including the
+root. One match returns a Node, multiple matches return a list, and no match
+returns `[]`:
+
+```python
+note.find("note.txt").content  # "hello"
+note.find("missing.txt")       # []
+note.find(".")                 # The root Node
+```
+
+Names are not paths. To narrow a search, query a subtree first:
+`kernel.find("submission").find("solution")`. If several subtrees share a name,
+select the intended Node from the returned list before continuing.
+
 To define another format, subclass Artifact and give it a Node layout. See
 [Define an artifact class](../guides/extending.md#define-an-artifact-class).
 
@@ -85,7 +99,7 @@ See the [Artifact API](../reference/artifacts.md) for signatures.
 needed to build an implementation:
 
 ```text
-kernel/
+current_kernel/
   metadata.json         # Problem reference and evaluation results
   submission/
     config.toml         # Entry function and build settings
@@ -136,5 +150,18 @@ contents. Shared handlers provide these representations for every Artifact class
 | --- | --- |
 | `to_json(artifact)` | Serialize the type and annotated file tree |
 | `from_json(text, Problem)` | Restore and validate a specific Artifact class |
-| `raw_text(node_or_reference)` | Read file text or render a layout with its examples |
+| `raw_text(value)` | Render an Artifact or Node tree, or read file text |
 | `raw_bytes(node_or_reference)` | Read file bytes, including binary data |
+
+For an Artifact or layout, `raw_text` draws tree branches, marks directories with `/`, and
+places descriptions after `--->`. Examples appear as
+`(See: <path or inline example> as an example)`. Referenced examples keep their
+paths so the agent can read them when needed. A file with a payload returns its
+contents instead. Use `to_json` when a JSON representation is needed.
+
+The note layout above renders as:
+
+```text
+./
+└── note.txt ---> Plain text. (See: hello as an example)
+```

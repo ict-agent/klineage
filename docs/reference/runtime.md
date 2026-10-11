@@ -11,6 +11,10 @@ Direct AgentRuntime instances have no device nodes by default. Local generation
 supplies backend resources automatically. Accepted results come from the
 configured evaluation service.
 
+Sessions reuse the configured `CODEX_HOME`. Run records live under
+`workspace/.klineage/codex-runs/` in the action directory. See
+[Model access](../guides/evaluation.md#model-access) for credential visibility.
+
 ::: klineage.harness.AgentRuntime
 
 ::: klineage.harness.CodexRunner

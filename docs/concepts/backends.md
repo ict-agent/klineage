@@ -91,7 +91,7 @@ from pathlib import Path
 from klineage.artifact import Kernel
 from klineage.backend import bench
 
-kernel = Kernel.load_kernel(build_root=Path("kernel"), include_paths=())
+kernel = Kernel.load_kernel(build_root=Path("current_kernel"), include_paths=())
 timing = bench(kernel, args=inputs)
 print(timing.median_ms)
 ```

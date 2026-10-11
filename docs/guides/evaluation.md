@@ -150,8 +150,8 @@ Evaluation saves each returned Kernel, including failed evaluations:
 
 | Path under `work` | Contents |
 | --- | --- |
-| `kernels/<N>/` | Complete Kernel versions, starting at 0 |
-| `kernels/<N>/metadata.json` | Validation, workload timings, job ID and diagnostics |
+| `versions/<N>/` | Complete Kernel versions, starting at 0 |
+| `versions/<N>/metadata.json` | Validation, workload timings, job ID and diagnostics |
 | `problems/<problem_id>` | Symlink to the original problem directory |
 
 Actions select the last numbered version. To return to an earlier accepted job,
@@ -213,11 +213,12 @@ Model and provider settings come from `$CODEX_HOME/config.toml`, or
 [Configure model access](../getting-started.md#configure-model-access) for the
 variables.
 
-The host-side provider bridge reads the configured API-key variable or Codex
-login in `auth.json`. Credentials stay outside the agent sandbox. Renew expired
-login on the host before rerunning. Named profiles, keyring-only credentials and
-credential commands are unsupported; use root-level settings and a host key
-variable when needed.
+The provider bridge reads the configured API-key variable or Codex login in
+`auth.json`. Host API-key variables are not forwarded to the agent. The agent
+reuses `CODEX_HOME`, so files there, including saved credentials, remain visible
+inside its sandbox. Renew expired login before rerunning. Named profiles,
+keyring-only credentials and credential commands are unsupported; use root-level
+settings and a host key variable when needed.
 
 ## Optional device diagnostics
 
@@ -262,8 +263,10 @@ on a shared device so they do not affect each other's measurements.
 
 ## Isolation and embedding
 
-The agent can write its workspace and read declared inputs and runtimes. A task
-gateway provides evaluation access, and a separate bridge handles model requests.
+The agent can write its run directory and access its existing Codex home, declared
+inputs and runtimes. Trial sources belong in `current_kernel/`; helper scripts,
+diagnostics and logs belong in `workspace/`. A task gateway provides evaluation
+access, and a separate bridge handles model requests.
 Workers receive the configured devices and problem inputs; service records stay
 outside their writable directories. Missing sandbox support fails startup.
 Candidate code and its checker share a worker process, so this isolation does not

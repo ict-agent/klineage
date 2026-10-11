@@ -85,7 +85,7 @@ Omit `--memory-dir` to optimize without memory. `--max-apply-step 0` returns the
 input without running an action.
 
 A Kernel directory contains `metadata.json` and `submission/`. An action directory
-supplies its last numbered `kernels/` snapshot. Keep the optimization work
+supplies its last numbered `versions/` snapshot. Keep the optimization work
 directory outside the memory directory.
 
 ## Start an evaluation server

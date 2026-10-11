@@ -24,9 +24,10 @@ class RunKind(StrEnum):
 #: Parent directory for automatically allocated workspaces.
 WORKSPACE_DIR = "experiment"
 KERNEL_METADATA = "metadata.json"
-KERNEL_DIRECTORY = Path("kernel")
+#: Agent-owned trial sources within the workspace.
+CURRENT_KERNEL_DIRECTORY = Path("current_kernel")
 #: Framework-owned kernel snapshots, numbered from zero.
-KERNELS_DIRECTORY = Path("kernels")
+VERSIONS_DIRECTORY = Path("versions")
 #: Source bundle configuration filename.
 BUNDLE_CONFIG = "config.toml"
 #: Digest prefix length used in generated module names.
@@ -37,14 +38,16 @@ BUNDLE_SOLUTION = "solution"
 SUBMISSION_DIRECTORY = Path("submission")
 #: Skill card filename within a skill directory.
 SKILL_FILE = "SKILL.md"
+#: Supporting files kept outside artifact directories.
+WORK_DIRECTORY = Path("workspace")
 #: Internal workspace state directory.
-STATE_DIRECTORY = ".klineage"
+STATE_DIRECTORY = "workspace/.klineage"
 #: Measurement timeline relative to the workspace state directory.
 STATS_DIRECTORY = Path(STATE_DIRECTORY) / "stats"
 #: Directory name for generated or mounted skill memory.
 MEMORY_DIR = "memory"
-#: Workspace directory discovered by the agent for skills.
-SKILL_DIRECTORY = Path(".agents") / "skills"
+#: Skill files available to the agent on demand.
+SKILL_DIRECTORY = WORK_DIRECTORY / ".agents" / "skills"
 #: Generated native memory skills relative to the agent workspace.
 MEMORY_DIRECTORY = SKILL_DIRECTORY / MEMORY_DIR
 #: Maximum name length in Codex SKILL.md frontmatter.
@@ -53,12 +56,10 @@ CODEX_SKILL_NAME_LIMIT = 64
 CODEX_SKILL_DESCRIPTION_LIMIT = 1024
 #: Digest suffix distinguishing normalized or shortened skill IDs.
 CODEX_SKILL_HASH_LENGTH = 12
-#: Generated artifact tree declarations relative to the agent workspace.
-SPEC_DIRECTORY = Path(STATE_DIRECTORY) / "specs"
 #: Build artifacts relative to the working directory.
 BUILD_DIRECTORY = Path("build")
 #: Workspace instruction files; a nonempty override takes precedence.
-AGENT_FILES = ("AGENTS.md", "AGENTS.override.md")
+AGENT_FILES = ("workspace/AGENTS.md", "workspace/AGENTS.override.md")
 #: Modules defining functions for the generated API catalog.
 AGENT_MODULES = (
     "klineage.backend",
@@ -73,13 +74,19 @@ Use only the devices, runtimes and tools explicitly supplied to this sandbox.
 Official correctness and acceptance timings come from the configured evaluation
 server through `klineage.server.Client`.
 
-`.klineage/specs/` contains format descriptions. Read artifact data from the input paths supplied in the task.
+Query artifact layouts through Python when needed; print Node layouts with
+`klineage.serialization.raw_text`. Use `Problem.problem_spec()` from
+`klineage.artifact`, the selected backend's `kernel_type.kernel_spec()` from
+`klineage.backend.get_backend(language, platform)`, `SkillCard.schema` from
+`klineage.memory`, and `action_spec(stage)` from `klineage.prompts`.
+Read artifact data from the input paths supplied in the task.
 
 Requirements:
 - Read `Client().info()` for the device and registered problems. Select the task's ID with `Client(problem_id=...)`.
-- Write trial metadata.json and submission/ under kernel/. The entry source owns launch parameters.
-- Submit with the selected client's `evaluate(Path("kernel"), Path.cwd())`; read reply.validation/reply.diagnostics or the saved Kernel metadata.json.
-- Client.evaluate/result with work automatically append complete Kernel directories under kernels/0, kernels/1, ... including failures; metadata.json contains validation.workloads and evaluation={job_id,error,diagnostics}. Do not save or edit these versions.
+- Write trial metadata.json and submission/ under current_kernel/. The entry source owns launch parameters.
+- Submit with the selected client's `evaluate(Path("current_kernel"), Path.cwd())`; read reply.validation/reply.diagnostics or the saved Kernel metadata.json.
+- Client.evaluate/result with work automatically append complete Kernel directories under versions/0, versions/1, ... including failures; metadata.json contains validation.workloads and evaluation={job_id,error,diagnostics}. Do not save or edit these versions.
+- Keep all files outside the artifact directories under workspace/: temporary sources, backups, scripts, diagnostics, logs, reports and compiled binaries. Keep the workdir root free of scratch files.
 - The final result is the largest numbered version; a failed latest version does not fall back. Retrieve an earlier accepted job with client.result(job_id, work=Path.cwd()) to append it as the latest version.
 - With supplied device/toolchain access, write diagnostic scripts and invoke vendor tools directly, such as CUDA ncu or HIP/CANN profilers.
 - Diagnostic measurements do not populate validation or replace service results; keep the oracle and evaluation policy fixed.

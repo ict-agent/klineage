@@ -87,8 +87,8 @@ The returned Artifact contains a `kernel` part, an optional `skillcard`, and any
 runner records. Use `.part("kernel", Kernel)` to obtain the backend-specific
 Kernel. Its metadata holds validation, workload timings and diagnostics.
 
-During a round, evaluation saves complete versions under `kernels/0`,
-`kernels/1`, and so on. The action returns the last version after checking it
+During a round, evaluation saves complete versions under `versions/0`,
+`versions/1`, and so on. The action returns the last version after checking it
 against the service record. Every workload must pass. A failed latest version
 is rejected; to select an earlier accepted job, fetch it as a new final version:
 
@@ -97,13 +97,38 @@ client.result(best_job_id, work=Path("runs/apply"))
 ```
 
 `best_job_id` must come from a previous accepted evaluation. The scratch
-`kernel/` directory can differ from the saved result. See
+`current_kernel/` directory can differ from the saved result. See
 [Evaluation guide](../guides/evaluation.md#submit-and-recover-a-result) for the
 result files and recovery workflow.
 
 The service checks correctness and performance. Review the source change and
 recipe to assess whether Decompose removed the intended mechanism or Apply
 achieved the requested improvement.
+
+## Inspect an artifact layout
+
+Prompts tell the agent which Artifact to produce. The agent reads
+`workspace/AGENTS.md` and `workspace/.agents/skills/`, then queries the relevant
+Node layouts through Python when needed:
+
+```python
+from klineage.artifact import Problem, kernel_layouts
+from klineage.backend import get_backend
+from klineage.memory import SkillCard
+from klineage.prompts import action_spec
+from klineage.serialization import raw_text
+
+print(raw_text(Problem.problem_spec()))
+for layout in kernel_layouts(get_backend("cuda").kernel_type):
+    print(raw_text(layout))
+print(raw_text(SkillCard.schema))
+print(raw_text(action_spec("apply")))
+```
+
+Each layout includes descriptions and examples. Layouts are not copied into
+prompts or saved as spec files. Diagnostic scripts, backups, binaries and logs
+stay under `workspace/`; its `.klineage/codex-runs/` directory keeps the prompts,
+traces and final replies.
 
 ## Stop or retry
 

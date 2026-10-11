@@ -64,16 +64,22 @@ must have at least one workload. Results are stored as Kernel artifacts:
 
 | Path under the work directory | Contents |
 | --- | --- |
-| `kernel/` | Candidate scratch directory; may differ from the final Kernel |
-| `kernels/<N>/` | Automatic complete Kernel snapshots, starting at 0; failed evaluations are retained |
-| `kernels/<N>/metadata.json` | Validation, per-workload timings and diagnostics |
+| `current_kernel/` | Candidate scratch directory; may differ from the final Kernel |
+| `versions/<N>/` | Automatic complete Kernel snapshots, starting at 0; failed evaluations are retained |
+| `versions/<N>/metadata.json` | Validation, per-workload timings and diagnostics |
 | `problems/<problem_id>` | Symlink to the original problem directory |
-| `.klineage/codex-runs/` | Agent prompts, traces, replies and stderr |
+| `workspace/` | Diagnostic scripts, source backups, binaries and logs |
+| `workspace/AGENTS.md` | Agent instructions and available Python APIs |
+| `workspace/.agents/skills/` | Backend guidance and supplied skill memory |
+| `workspace/.klineage/codex-runs/` | Agent prompts, traces, final replies and stderr |
 
 Each version keeps its source and evaluation together, so its metadata lets you
 compare correctness and latency across workloads and versions. A successful run
 returns the last numbered version after every workload passes. The problem link
 points to the original inputs; keep those files available.
+
+Codex reuses your existing `CODEX_HOME`; no separate Codex home is created for
+each run. Artifact layouts are queried through Python when needed.
 
 ## Start an evaluation server
 

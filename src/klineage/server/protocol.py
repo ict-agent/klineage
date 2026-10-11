@@ -137,7 +137,7 @@ def submission(value: Artifact | Path, kind: str | None = None) -> dict[str, Any
             value = load_artifact(path, Kernel)
     if not isinstance(value, Kernel):
         raise TypeError("submission must be a Kernel artifact or directory")
-    metadata_node = value.node("metadata.json")
+    metadata_node = value.find("metadata.json")
     if metadata_node.content is None:
         raise ValueError("metadata.json must contain inline text")
     metadata = json.loads(raw_text(metadata_node))
@@ -153,7 +153,7 @@ def submission(value: Artifact | Path, kind: str | None = None) -> dict[str, Any
                 raise ValueError(f"{name}: source FileRefs are not accepted")
             sources[name] = child.content
 
-    visit(value.node("submission"))
+    visit(value.find("submission"))
     return check_submission(
         {
             "name": metadata["name"],

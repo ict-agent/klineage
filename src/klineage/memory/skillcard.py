@@ -133,7 +133,7 @@ class SkillCard(Artifact):
 
     def document(self):
         """Parse and return fresh frontmatter plus the stripped Markdown body."""
-        text = raw_text(self.node("SKILL.md"))
+        text = raw_text(self.find("SKILL.md"))
         header, separator, body = text[len(FRONTMATTER) :].partition(
             f"\n{FRONTMATTER}\n"
         )

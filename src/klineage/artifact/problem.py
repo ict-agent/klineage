@@ -20,6 +20,7 @@ from klineage.artifact.tree import (
     check_ref,
     file_ref,
     json_node,
+    relative_source_path,
 )
 from klineage.constants import KERNEL_METADATA, MODULE_HASH_LENGTH
 from klineage.serialization import from_json, raw_text, restore
@@ -319,9 +320,10 @@ def load_problem(
         if value.kind == Problem.artifact_kind:
             return Problem.from_tree(value.kind, value.tree)
         try:
-            metadata = mapping(
-                json.loads(raw_text(value.node(KERNEL_METADATA))), KERNEL_METADATA
-            )
+            node = value.find(KERNEL_METADATA)
+            if not isinstance(node, Node):
+                raise ValueError(f"expected exactly one {KERNEL_METADATA}")
+            metadata = mapping(json.loads(raw_text(node)), KERNEL_METADATA)
             return load_problem(mapping(metadata["problem"], "problem reference"))
         except (KeyError, TypeError, ValueError, OSError) as error:
             raise ValueError(f"{KERNEL_METADATA}/problem: {error}") from error
@@ -516,6 +518,9 @@ class Problem(Artifact):
         layout.check(Node.directory(self.tree.name, (
             child for child in self.tree.children if child.name != "inputs"
         )))
+        for child in layout.children:
+            if not isinstance(self.find(child.name), Node):
+                raise ValueError(f"{child.name}: expected exactly one problem node")
         target = self.target()
         for field in ("name", "language", "platform"):
             nonempty(target[field], f"problem {field}")
@@ -525,7 +530,7 @@ class Problem(Artifact):
             for descriptor in workload.get("inputs", {}).values():
                 if descriptor.get("type") != InputSource.SAFETENSORS:
                     continue
-                path = Path(descriptor["path"])
+                path = Path(relative_source_path(descriptor["path"], "fixed input path"))
                 if len(path.parts) != 2 or path.parts[0] != "inputs":
                     raise ValueError("fixed input path must be inputs/<filename>")
                 inputs[path.name] = Node.file(path.name)
@@ -535,7 +540,7 @@ class Problem(Artifact):
 
     def target(self):
         """Return a fresh mapping containing name, language and platform."""
-        return json.loads(raw_text(self.node(TARGET_FILE)))
+        return json.loads(raw_text(self.find(TARGET_FILE)))
 
     @property
     def name(self):
@@ -555,12 +560,12 @@ class Problem(Artifact):
     @property
     def definition(self):
         """Return a fresh Trace definition mapping, preserving tensor order."""
-        return json.loads(raw_text(self.node(DEFINITION_FILE)))
+        return json.loads(raw_text(self.find(DEFINITION_FILE)))
 
     def workload_records(self) -> tuple[dict[str, Any], ...]:
         """Read workload records with tree-relative fixed-input paths."""
         return parse_workloads(
-            raw_text(self.node(WORKLOADS_FILE)), self.definition.get("name", self.name)
+            raw_text(self.find(WORKLOADS_FILE)), self.definition.get("name", self.name)
         )
 
     @property
@@ -575,8 +580,11 @@ class Problem(Artifact):
             for descriptor in workload.get("inputs", {}).values():
                 if descriptor.get("type") != "safetensors":
                     continue
-                node = self.node(descriptor["path"])
-                if node.reference is None:
+                inputs = self.find("inputs")
+                if not isinstance(inputs, Node):
+                    raise ValueError("inputs: expected exactly one directory")
+                node = inputs.find(Path(descriptor["path"]).name)
+                if not isinstance(node, Node) or node.reference is None:
                     raise ValueError("binary inputs require a checked file reference")
                 descriptor["path"] = node.reference.path
         return workloads
@@ -603,9 +611,13 @@ class Problem(Artifact):
             for descriptor in workload.get("inputs", {}).values():
                 if descriptor.get("type") != "safetensors":
                     continue
-                reference = self.node(descriptor["path"]).reference
-                if reference is None:
+                inputs = self.find("inputs")
+                if not isinstance(inputs, Node):
+                    raise ValueError("inputs: expected exactly one directory")
+                node = inputs.find(Path(descriptor["path"]).name)
+                if not isinstance(node, Node) or node.reference is None:
                     raise ValueError("binary inputs require a checked file reference")
+                reference = node.reference
                 if reference not in checked:
                     check_ref(reference)
                     checked.add(reference)

@@ -57,7 +57,7 @@ class ProviderTests(unittest.TestCase):
             root = Path(temporary)
             work = root / "work"
             runner_type(work, codex_bin="/bin/true")
-            catalog = work / ".klineage/model.json"
+            catalog = work / "workspace/.klineage/model.json"
             catalog.unlink()
             secret = root / "host-file"
             secret.write_text("host content")

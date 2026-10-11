@@ -18,7 +18,7 @@ from klineage.server import Client
 client = Client(problem_id=problem_id)
 info = client.info()
 problem = client.problem()
-reply = client.evaluate(Path("kernel"), Path.cwd())
+reply = client.evaluate(Path("current_kernel"), Path.cwd())
 assert reply.accepted, reply.diagnostics
 ```
 
@@ -29,8 +29,8 @@ problem fixed. Do not start a server, modify its configuration, change the oracl
 inputs, tolerance or timing policy. Use `client.info()` for the server's device
 and toolchain; local device detection describes only the agent's supplied runtime.
 
-Author `kernel/metadata.json`, `kernel/submission/config.toml` and complete sources
-under `kernel/submission/solution/`. Follow the backend skill. Preserve name and
+Author `current_kernel/metadata.json`, `current_kernel/submission/config.toml` and complete sources
+under `current_kernel/submission/solution/`. Follow the backend skill. Preserve name and
 compile_flags when editing an input; clear stale validation. Pass the directory
 as a `Path`; the client reads text without compiling. The server reconstructs the
 Kernel from the registered problem and checks the backend spec before building.
@@ -55,7 +55,7 @@ and invoke vendor tools directly, such as CUDA `ncu` or the platform's HIP/CANN
 profiler. Local builds and exploratory checks may support that investigation.
 KLineage provides no dedicated profiling API or prescribed metric set.
 
-For local builds, prefer `Kernel.load_kernel(Path("kernel"))` from
+For local builds, prefer `Kernel.load_kernel(Path("current_kernel"))` from
 `klineage.artifact`; it applies the backend's build settings and returns a callable
 with the problem's input ABI. Reuse it across diagnostic calls. The controller
 mounts the supplied problem directory read-only. Fixed inputs outside that directory
@@ -94,17 +94,17 @@ requires at least one workload's ratio to exceed 1; inspect each case independen
 without averaging shapes. The host checks matching service results and the per-case
 gates; the stricter improvement objective remains an agent responsibility.
 
-For Init, author an original-expert adapter under `expert/metadata.json` and
-`expert/submission/{config.toml,solution/}`. Its host entry calls the fixed expert,
+For Init, author an original-expert adapter under `workspace/expert/metadata.json` and
+`workspace/expert/submission/{config.toml,solution/}`. Its host entry calls the fixed expert,
 preserves its schedule, and uses the caller stream. It may use controller-registered
 repository headers; the candidate must be standalone. Only the controller registers
 include paths. Preserve the upstream release macros, optimization settings,
 assertion mode and architecture in metadata.json compile_flags.
 
 ```python
-expert_reply = client.evaluate(Path("expert"), Path.cwd())
+expert_reply = client.evaluate(Path("workspace/expert"), Path.cwd())
 assert expert_reply.accepted, expert_reply.diagnostics
-reply = client.evaluate(Path("kernel"), Path.cwd(), reference=expert_reply.job_id)
+reply = client.evaluate(Path("current_kernel"), Path.cwd(), reference=expert_reply.job_id)
 assert reply.accepted, reply.diagnostics
 ```
 
@@ -145,7 +145,7 @@ remain as saved versions.
 Server errors that occur before a job exists raise `ServerError`.
 
 Each `evaluate` or `result` call with `work` automatically appends the complete
-returned Kernel under `kernels/0`, `kernels/1`, ... including failed results.
+returned Kernel under `versions/0`, `versions/1`, ... including failed results.
 Do not save Kernels manually or edit these versions. The controller checks the
 largest numbered version against its service record. A failed latest version
 does not fall back to an earlier accepted one.
@@ -158,7 +158,7 @@ assert reply.accepted, reply.diagnostics
 ```
 
 This appends that measured Kernel as a new latest version with its diagnostics in metadata.json.
-`kernel/` is independent trial source space; no source restoration or cleanup is required.
+`current_kernel/` is independent trial source space; no source restoration or cleanup is required.
 Evaluating an unchanged terminal input also saves its complete Kernel automatically,
 with the same name and sources and fresh validation. Emit no SkillCard for that result.
 

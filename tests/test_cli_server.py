@@ -65,7 +65,7 @@ class CliServerTests(unittest.TestCase):
         directory = write_kernel(original, self.root / "kernel")
         notes = directory / "notes.txt"
         notes.write_text("platform metadata")
-        problem = Path(json.loads(original.node("metadata.json").content)["problem"]["path"])
+        problem = Path(json.loads(original.find("metadata.json").content)["problem"]["path"])
         with (
             patch.dict(os.environ, {}, clear=True),
             patch("klineage.backend.get_backend", return_value=SimpleNamespace(kernel_type=ExtendedKernel)),
@@ -76,7 +76,7 @@ class CliServerTests(unittest.TestCase):
             with self.subTest(entry="optimize"):
                 result = optimize(directory, workdir=self.root / "read", max_apply_step=0)
                 self.assertIsInstance(result, ExtendedKernel)
-                self.assertEqual(result.node("notes.txt").content, notes.read_text())
+                self.assertEqual(result.find("notes.txt").content, notes.read_text())
             notes.unlink()
             with self.assertRaisesRegex(ValueError, "notes.txt: missing"):
                 optimize(directory, workdir=self.root / "invalid", max_apply_step=0)

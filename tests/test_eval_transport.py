@@ -133,15 +133,15 @@ print('diagnostic', file=sys.stderr)
             self.assertEqual(
                 tuple(
                     json.loads(
-                        raw_text(request[key].node("metadata.json"))
+                        raw_text(request[key].find("metadata.json"))
                     ).get("compile_flags", ())
                 ),
                 ("-DNDEBUG",),
             )
             self.assertEqual(request[key].kind, "kernel.cuda")
             self.assertEqual(
-                source_files(request[key].node("submission")),
-                source_files(kernel.node("submission")),
+                source_files(request[key].find("submission")),
+                source_files(kernel.find("submission")),
             )
         self.assertNotIn("problem_path", request["config"])
         self.assertEqual(request["workload_id"], load_problem(kernel).workloads[0]["uuid"])
@@ -215,7 +215,7 @@ print('diagnostic', file=sys.stderr)
         self.assertEqual(requests[0], requests[1])
         records = [
             json.loads(text)
-            for path in (self.root / "kernels").glob("*/metadata.json")
+            for path in (self.root / "versions").glob("*/metadata.json")
             for name, text in json.loads(path.read_text())["evaluation"]["diagnostics"].items()
             if name.endswith("eval-0001-process.json")
         ]
@@ -241,20 +241,20 @@ print('diagnostic', file=sys.stderr)
             for _ in range(3):
                 evaluate(kernel, self.root)
 
-        versions = self.root / "kernels"
+        versions = self.root / "versions"
         self.assertEqual(sorted(p.name for p in versions.iterdir()), ["0", "1", "2"])
         for number in ("0", "1", "2"):
             from klineage.artifact import load_artifact
 
             saved = load_artifact(versions / number, artifact_type=type(kernel))
             self.assertEqual(
-                json.loads(raw_text(saved.node("metadata.json")))["name"], "kernel"
+                json.loads(raw_text(saved.find("metadata.json")))["name"], "kernel"
             )
-            self.assertEqual(source_files(saved.node("submission")), source_files(kernel.node("submission")))
+            self.assertEqual(source_files(saved.find("submission")), source_files(kernel.find("submission")))
 
     def test_timings_saved_in_metadata(self):
         kernel = make_kernel("test", problem_spec(), {"kernel.cu": "// source"})
-        metadata = json.loads(raw_text(kernel.node("metadata.json")))
+        metadata = json.loads(raw_text(kernel.find("metadata.json")))
         metadata["evaluation"] = {"job_id": "previous", "error": None, "diagnostics": {}}
         kernel = type(kernel)(kernel.tree.with_child(json_node("metadata.json", metadata)))
         validation = ValidationResult.combine({
@@ -263,7 +263,7 @@ print('diagnostic', file=sys.stderr)
         logs = []
 
         def measure(candidate, **options):
-            initial = json.loads((self.root / "kernels/0/metadata.json").read_text())
+            initial = json.loads((self.root / "versions/0/metadata.json").read_text())
             self.assertIsNone(initial["validation"])
             self.assertNotIn("evaluation", initial)
             logs.append(options["log_dir"])
@@ -272,7 +272,7 @@ print('diagnostic', file=sys.stderr)
 
         with patch.object(EvaluationRuntime, "evaluate", side_effect=measure):
             self.assertEqual(evaluate(kernel, self.root), validation)
-        saved = json.loads((self.root / "kernels/0/metadata.json").read_text())
+        saved = json.loads((self.root / "versions/0/metadata.json").read_text())
         self.assertEqual(saved["validation"], json.loads(to_json(validation)))
         self.assertEqual(saved["evaluation"], {"error": None, "diagnostics": {"stderr.log": "compiler note"}})
         self.assertFalse(logs[0].exists())
@@ -290,7 +290,7 @@ print('diagnostic', file=sys.stderr)
             self.assertRaisesRegex(ValueError, "runtime failed"),
         ):
             evaluate(kernel, self.root)
-        metadata = json.loads((self.root / "kernels/0/metadata.json").read_text())
+        metadata = json.loads((self.root / "versions/0/metadata.json").read_text())
         self.assertIn("runtime failed", metadata["evaluation"]["error"])
         self.assertEqual(metadata["evaluation"]["diagnostics"], {"stderr.log": "before failure"})
         self.assertFalse(metadata["validation"]["compile_passed"])
@@ -307,11 +307,11 @@ print('diagnostic', file=sys.stderr)
         with patch("klineage.harness.eval.run_process", side_effect=OSError("no worker")):
             self.assertFalse(evaluate(kernel, self.root).accepted)
 
-        saved = self.root / "kernels" / "0" / "metadata.json"
+        saved = self.root / "versions" / "0" / "metadata.json"
         self.assertTrue(saved.is_file())
 
     def test_next_version_ignores_gaps_and_foreign_directories(self):
-        versions = self.root / "kernels"
+        versions = self.root / "versions"
         (versions / "1").mkdir(parents=True)
         (versions / "3").mkdir()
         (versions / "notes").mkdir()

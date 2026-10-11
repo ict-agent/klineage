@@ -50,7 +50,7 @@ def kernel(
 ) -> Kernel:
     return make_kernel(
         name=name,
-        source_files={get_backend(language, platform).kernel_type.kernel_spec().child("submission/solution").children[0].name: source},
+        source_files={get_backend(language, platform).kernel_type.kernel_spec().find("submission").find("solution").children[0].name: source},
         problem=problem_spec(case, language, platform),
         validation=validation,
     )
@@ -127,13 +127,13 @@ def make_kernel(name, problem, source_files=None, validation=None, compile_flags
 
 
 def edit_kernel(current, **changes):
-    metadata = json.loads(raw_text(current.node("metadata.json")))
+    metadata = json.loads(raw_text(current.find("metadata.json")))
     metadata.pop("evaluation", None)
     values = {
         **metadata,
         "validation": current.validation,
         "problem": load_problem(current),
-        "source_files": source_files(current.node("submission")),
+        "source_files": source_files(current.find("submission")),
     }
     if {"source_files", "compile_flags", "problem"} & changes.keys():
         values["validation"] = None
@@ -145,8 +145,8 @@ def load_entry(loader, kernel):
 
     problem = load_problem(kernel)
     backend = get_backend(problem.language, problem.platform)
-    sources = source_files(kernel.node("submission"))
-    flags = json.loads(raw_text(kernel.node("metadata.json"))).get("compile_flags", ())
+    sources = source_files(kernel.find("submission"))
+    flags = json.loads(raw_text(kernel.find("metadata.json"))).get("compile_flags", ())
     return loader.load_entry(sources, bundle_entry(sources, backend), backend, flags)
 
 
@@ -154,8 +154,8 @@ def write_kernel(current, directory):
     """Prepare authored test files, not a serialized artifact directory."""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "metadata.json").write_text(raw_text(current.node("metadata.json")))
-    for name, content in source_files(current.node("submission")).items():
+    (directory / "metadata.json").write_text(raw_text(current.find("metadata.json")))
+    for name, content in source_files(current.find("submission")).items():
         path = directory / "submission" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
