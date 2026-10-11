@@ -140,9 +140,9 @@ KERNEL = Node.directory(
         (
             "A kernel source tree with a checked reference to its problem.",
             "Kernel files live under build_root. The framework saves measured versions under versions/<N>/.",
-            "The agent submits this directory with klineage.server.Client.evaluate; the service checks kernel_spec and builds it.",
+            "Evaluate this directory with klineage.evaluate; it checks kernel_spec and builds the kernel.",
             "After source edits reconstruct the Kernel before evaluating it.",
-            "The client automatically saves returned Kernels under versions/<N>; the service owns validation.",
+            "Evaluation automatically saves returned Kernels under versions/<N>, including measurements and diagnostics.",
         )
     ),
     children=(

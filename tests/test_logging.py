@@ -268,6 +268,17 @@ class LoggingTests(unittest.TestCase):
             collector.feed(payload[offset:offset + 13])
         self.assertEqual(collector.finish()["total_tokens"], 12)
 
+    def test_usage_without_header(self):
+        response = json.loads(completed_frame().split(b"data: ")[1].strip())["response"]
+        for payload in (completed_frame(), json.dumps(response).encode()):
+            with self.subTest(streaming=payload.startswith(b"event:")):
+                collector = ResponseUsage("")
+                collector.feed(b" \r\n")
+                for byte in payload:
+                    collector.feed(bytes([byte]))
+                self.assertEqual(collector.finish()["total_tokens"], 12)
+                self.assertEqual(collector.finish()["response_id"], "r1")
+
     def test_oversized_frames(self):
         collector = ResponseUsage("text/event-stream")
         for _ in range(3):

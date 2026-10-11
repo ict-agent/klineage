@@ -6,7 +6,7 @@ description: Write or inspect KLineage AscendC bundles for Ascend NPUs, includin
 # AscendC
 
 The service uses CANN and compatible PyTorch/torch_npu. Tensors use `device="npu"`.
-Use `client.info()` from `klineage.server.Client` for its SoC and toolchain.
+Use `klineage.info()` for its SoC and toolchain.
 Inspect the actual SoC's execution units, memory levels,
 alignment, supported types, and synchronization rules; CUDA thread and shared-memory
 assumptions do not describe an Ascend kernel.
@@ -62,9 +62,9 @@ or headers must be declared in the Kernel class's Node layout.
 - The candidate must not call expert libraries or cache outputs. Only the original
   expert adapter may depend on the supplied repository.
 
-Use `client.evaluate(Path("current_kernel"), Path.cwd())`; the client automatically appends
+Use `klineage.evaluate(Path("current_kernel"))`; evaluation automatically appends
 the complete result under `versions/0`, `versions/1`, ... including failures.
-Finish with an accepted latest version; use `client.result(job_id, work=Path.cwd())`
+Finish with an accepted latest version; use `klineage.result(best_reply)`
 to append an earlier accepted job as the latest version.
 With an explicitly supplied CANN runtime and NPU, write diagnostic scripts and use
 CANN profiling tools directly. Diagnostic timings do not replace service validation;

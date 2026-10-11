@@ -83,7 +83,19 @@ class FunctionDocsTests(unittest.TestCase):
         self.assertTrue(contents.startswith(before))
         self.assertTrue(contents.endswith(after))
         self.assertEqual(contents.count(FUNCTION_START), 1)
-        self.assertIn("extra_tool", contents)
+        self.assertNotIn("extra_tool", contents)
+
+    def test_writes_template_guidance(self):
+        with patch.object(tools, "function_docs", side_effect=AssertionError("catalog dumped")):
+            tools.write_agent_docs(self.work)
+        contents = (self.docs / "AGENTS.md").read_text()
+        for expected in (
+            "klineage.evaluate", "klineage.info", "klineage.problem", "klineage.result",
+            "find(name)", "kernel_spec()", "raw_text", "current_kernel/", "versions/", "workspace/",
+        ):
+            self.assertIn(expected, contents)
+        self.assertNotIn("Signature:", contents)
+        self.assertNotIn("Client", contents)
 
     def test_updates_active_override(self):
         path = self.docs / "AGENTS.override.md"
@@ -91,14 +103,14 @@ class FunctionDocsTests(unittest.TestCase):
         tools.write_agent_docs(self.work)
         self.assertTrue(path.read_text().startswith("# Override\nKeep these rules.\n"))
         for filename in AGENT_FILES:
-            self.assertIn("klineage.harness.evaluate", (self.work / filename).read_text())
+            self.assertIn("klineage.evaluate", (self.work / filename).read_text())
 
     def test_keeps_empty_override(self):
         override = self.docs / "AGENTS.override.md"
         override.write_text("\n")
         tools.write_agent_docs(self.work)
         self.assertEqual(override.read_text(), "\n")
-        self.assertIn("klineage.harness.evaluate", (self.docs / "AGENTS.md").read_text())
+        self.assertIn("klineage.evaluate", (self.docs / "AGENTS.md").read_text())
 
     def test_rejects_damaged_markers(self):
         path = self.docs / "AGENTS.md"

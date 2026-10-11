@@ -90,7 +90,7 @@ with the fixed-input filenames declared by its workloads:
       heading_level: 3
 
 Use `load_problem(problem_directory)` to load the directory, or
-`Client.problem(problem_id)` to obtain the Problem from an evaluation service.
+`klineage.problem(problem_id)` to obtain the Problem from an evaluation service.
 See the [Artifact API](../reference/artifacts.md) for signatures.
 
 ## CUDA Kernel Artifact

@@ -12,7 +12,7 @@ requirements. Return the best validated implementation reached in this round.
 
 For a source-free input, first write a simple correct implementation and submit
 it to the evaluation service. Obtain an accepted result before optional profiling,
-architecture experiments or parameter sweeps. Keep its job ID so you can restore
+architecture experiments or parameter sweeps. Keep its Evaluation so you can restore
 that result and finish within the time budget if later trials fail.
 
 Read the action layout when needed: `from klineage.prompts import action_spec`;
@@ -44,7 +44,7 @@ Read workspace/.agents/skills/bench/SKILL.md for correctness and performance mea
 
 3. Write trial implementations under current_kernel/submission/ using the target backend's
    bundle format. Preserve metadata.json compile_flags. Submit the current directory
-   with client.evaluate(Path("current_kernel"), Path.cwd(), reference=reference) after edits;
+   with klineage.evaluate(Path("current_kernel"), reference=reference) after edits;
    compilation, correctness, and timing run on the service. Read reply.diagnostics.
 
 4. For an input with sources, evaluate every candidate with reference=current_kernel.
@@ -59,10 +59,10 @@ Read workspace/.agents/skills/bench/SKILL.md for correctness and performance mea
    or the saved metadata.json. A definition without workloads cannot produce an accepted
    measurement; report missing evaluation inputs rather than inventing them.
 
-5. Client.evaluate automatically appends each complete result, including failures,
+5. klineage.evaluate automatically appends each complete result, including failures,
    under versions/0, versions/1, ... . Action uses the largest numbered version.
-   Select an earlier accepted best job with client.result(best_job_id, work=Path.cwd());
-   the client appends it as the latest version. If no validated improvement exists,
+   Select an earlier accepted best job with klineage.result(best_reply);
+   evaluation appends it as the latest version. If no validated improvement exists,
    evaluate the unchanged input without a reference to append its complete version.
    Do not save Kernels manually or emit SKILL.md. Explain the evidence and techniques
    in the final response. current_kernel/ remains trial source space and need not be synchronized.

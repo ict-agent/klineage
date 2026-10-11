@@ -122,11 +122,11 @@ entry_point = "main.py::run"
 
     def test_kernel_example_runs(self):
         prompt = render_prompt("backend", target_language="cuda")
-        self.run_client_examples(prompt)
+        self.run_service_examples(prompt)
 
     def test_cuda_skill_example(self):
         document = (get_backend("cuda").skill_root / "cuda.md").read_text()
-        self.run_client_examples(document.split("## Local checks")[0])
+        self.run_service_examples(document.split("## Local checks")[0])
 
     def test_cuda_local_example(self):
         document = (get_backend("cuda").skill_root / "cuda.md").read_text()
@@ -139,7 +139,7 @@ entry_point = "main.py::run"
         load.assert_called_once_with(build_root=Path("current_kernel"))
         self.assertEqual(scope["outputs"], 5)
 
-    def run_client_examples(self, document):
+    def run_service_examples(self, document):
         from kernel_fixtures import accepted
         from test_kernel_build import SOURCES
 
@@ -147,7 +147,7 @@ entry_point = "main.py::run"
 
         examples = re.findall(r"```python\n(.*?)\n```", document, re.DOTALL)
 
-        def measure(root, work, **kwargs):
+        def measure(root, **kwargs):
             candidate = load_artifact(root, artifact_type=CudaKernel)
             measured = edit_kernel(candidate, validation=accepted())
             return SimpleNamespace(kernel=measured, accepted=True, diagnostics={}, validation=accepted())
@@ -162,16 +162,15 @@ entry_point = "main.py::run"
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(text)
             scope = {"reference": None, "problem_id": "gemm"}
-            with patch("klineage.server.Client") as client_type, patch(
-                "klineage.backend.cuda.CudaKernel.build_kernel",
-                side_effect=AssertionError("service example compiled locally"),
+            with (
+                patch("klineage.problem", return_value=load_problem(current)),
+                patch("klineage.evaluate", side_effect=measure) as evaluate,
+                patch("klineage.backend.cuda.CudaKernel.build_kernel",
+                      side_effect=AssertionError("service example compiled locally")),
             ):
-                client = client_type.return_value
-                client.problem.return_value = load_problem(current)
-                client.evaluate.side_effect = measure
                 for example in examples:
                     exec(example, scope)
-                client.evaluate.assert_called_once_with(Path("current_kernel"), Path.cwd(), reference=None)
+                evaluate.assert_called_once_with(Path("current_kernel"), reference=None)
             self.assertEqual(scope["reply"].kernel.validation, accepted())
             self.assertIsNone(scope["reply"].kernel.function)
             self.assertFalse(Path(".klineage/kernel.json").exists())
@@ -186,6 +185,7 @@ entry_point = "main.py::run"
         for path in paths:
             with self.subTest(path=path):
                 document = path.read_text()
+                self.assertNotIn("Client(", document)
                 self.assertNotIn("klineage.harness.evaluate", document)
                 self.assertNotIn("from klineage.harness import evaluate", document)
                 self.assertNotIn("metadata[\"validation\"] = result", document)
@@ -197,13 +197,13 @@ entry_point = "main.py::run"
                 ):
                     self.assertNotIn(removed, document)
         bench = (root / "harness/resources/bench/SKILL.md").read_text()
-        self.assertIn("client.result(", bench)
+        self.assertIn("klineage.evaluate(", bench)
+        self.assertIn("klineage.result(", bench)
         self.assertIn("metadata.json", bench)
-        self.assertIn("evaluation = {job_id, error, diagnostics}", bench)
         self.assertNotIn("evaluations/", bench)
-        self.assertIn("diagnostic scripts", bench)
+        self.assertIn("workspace/", bench)
         self.assertIn("ncu", bench)
-        self.assertIn("same device", bench)
+        self.assertIn("counter permissions", bench)
 
     def test_contract_catalog(self):
         layouts = [

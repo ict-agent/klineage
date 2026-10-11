@@ -23,15 +23,15 @@ Read workspace/.agents/skills/bench/SKILL.md for correctness and timing.
 
 2. Write current_kernel/metadata.json and current_kernel/submission/ with a simple
    implementation. Its entry function owns launch parameters. Submit it
-   with client.evaluate(Path("current_kernel"), Path.cwd()). Obtain an accepted
+   with klineage.evaluate(Path("current_kernel")). Obtain an accepted
    result across every workload before optional performance experiments.
 
 3. Improve the implementation within the remaining time. Evaluate each edited
    candidate against the problem oracle with reference=None. Read each workload's
-   correctness, latency and diagnostics; keep job IDs for accepted candidates.
+   correctness, latency and diagnostics; keep the replies for accepted candidates.
 
 4. Finish with the best accepted candidate as the last numbered versions/<N>/.
-   Select an earlier accepted job with client.result(job_id, work=Path.cwd())
+   Select an earlier accepted job with klineage.result(best_reply)
    when needed; it appends that measured Kernel as the latest version. Leave
    saved versions unchanged and explain the implementation and measurements
    in the final response. Produce a Kernel only.

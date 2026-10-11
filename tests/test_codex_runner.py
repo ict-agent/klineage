@@ -630,18 +630,18 @@ class CodexRunnerTests(unittest.TestCase):
         source = self.work / "workspace/.agents/skills/cuda/assets/add_one/solution/kernel.cu"
         self.assertTrue(source.is_file())
 
-    def test_process_function_docs(self):
+    def test_process_agent_guidance(self):
         runner = self.runner()
         path = self.work / "workspace/AGENTS.md"
         path.write_text("# Local instructions\nKeep user guidance.\n")
         first = runner("inspect", run_id="first")
         docs = self.trace_event(first.trace_path)["agents"]
         self.assertIn("Keep user guidance.", docs)
-        self.assertIn("from klineage.harness import evaluate", docs)
-        self.assertIn("Signature: `evaluate(kernel:", docs)
-        self.assertNotIn("### klineage.tools.retrieve\n", docs)
+        self.assertIn("klineage.evaluate", docs)
+        self.assertNotIn("Signature:", docs)
+        self.assertNotIn("Client", docs)
 
-        path.write_text(docs.replace("klineage.harness.evaluate", "obsolete.evaluate"))
+        path.write_text(docs.replace("klineage.evaluate", "obsolete.evaluate"))
         second = runner("inspect", run_id="second")
         self.assertEqual(self.trace_event(second.trace_path)["agents"], docs)
 

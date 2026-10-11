@@ -1,14 +1,24 @@
 # Evaluation service API
 
-Use Client to submit kernels and retrieve measured results. Use Service to embed
+Use `klineage.evaluate` to measure kernels locally or through a configured service.
+Use Service to embed
 an evaluator in a Python application. The [Evaluation guide](../guides/evaluation.md)
 covers server startup, problem registration and device access.
 
 ## Submit and retrieve
 
-Bind a Client to `problem_id` when the service contains several problems.
 Evaluation returns the measured Kernel and saves a numbered snapshot. Check
 `Evaluation.accepted` for the complete job status, including errors.
+
+::: klineage.evaluate
+
+::: klineage.info
+
+::: klineage.problem
+
+::: klineage.result
+
+Client remains available for explicit service connections and controller code.
 
 ::: klineage.server.Client
     options:

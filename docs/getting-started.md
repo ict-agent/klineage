@@ -119,7 +119,7 @@ other runtimes and [Command-line tools](guides/cli.md) for options.
   see [Action Primitive](concepts/actions.md).
 - **Author and evaluate a Kernel:** follow the
   [CUDA file layout](concepts/artifacts.md) and submit the completed directory
-  with `Client.evaluate`, which saves the measured Kernel automatically.
+  with `klineage.evaluate`, which saves the measured Kernel automatically.
 
 Work directories must be fresh. Backend services own acceptance measurements;
 an authorized local `Kernel.load_kernel` call builds a callable but does not

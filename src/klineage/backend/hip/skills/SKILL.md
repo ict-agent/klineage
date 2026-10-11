@@ -7,7 +7,7 @@ description: Write or inspect KLineage native HIP bundles for Hygon DCUs, includ
 
 The service uses Hygon's DTK compiler and HIP-enabled PyTorch. Tensors use `device="cuda"`
 and `torch.cuda`; this API spelling does not make the target NVIDIA CUDA.
-Use `client.info()` from `klineage.server.Client` for the target; inspect supplied headers.
+Use `klineage.info()` for the target; inspect supplied headers.
 Do not assume NVIDIA warp size,
 instructions, memory limits, or architecture flags.
 
@@ -52,9 +52,9 @@ or header files must be declared in the Kernel class's Node layout.
   outside the measured callable. Do not cache output values or call expert libraries
   from the candidate. An original-expert adapter may depend on its repository.
 
-Use `client.evaluate(Path("current_kernel"), Path.cwd())`; the client automatically appends
+Use `klineage.evaluate(Path("current_kernel"))`; evaluation automatically appends
 the complete result under `versions/0`, `versions/1`, ... including failures.
-Finish with an accepted latest version; use `client.result(job_id, work=Path.cwd())`
+Finish with an accepted latest version; use `klineage.result(best_reply)`
 to append an earlier accepted job as the latest version.
 With an explicitly supplied DTK runtime and DCU, diagnostic scripts may build and
 inspect the kernel using vendor tools. Their timings do not replace service

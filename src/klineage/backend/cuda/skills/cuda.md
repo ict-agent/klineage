@@ -2,7 +2,7 @@
 
 ## Layout and build
 
-Read the server's hardware information with `Client().info()` from `klineage.server`.
+Read the server's hardware information with `klineage.info()`.
 Its backend information reports SM, thread, register, shared-memory and L2 capacities.
 Local device queries describe only the explicitly supplied diagnostic device;
 check it against the service target before interpreting results.
@@ -56,7 +56,7 @@ Call the loaded Kernel as `outputs = kernel(*inputs)`, using tensors matching a
 registered workload. It allocates destination tensors for the native host entry;
 only that entry receives the trailing output arguments.
 Do not add AKO4X benchmark settings to config.toml.
-The controller configures the service's target architecture. Use client.info()
+The controller configures the service's target architecture. Use klineage.info()
 before choosing architecture-specific instructions; do not override its environment.
 
 ## Tensor ABI
@@ -94,7 +94,7 @@ expert adapter used for measurement may depend on its repository; the candidate 
 
 ## Evaluation
 
-Use `Client().evaluate(Path("current_kernel"), Path.cwd())` for service-side correctness and
+Use `klineage.evaluate(Path("current_kernel"))` for service-side correctness and
 CUPTI latency across all registered workloads. Read individual outcomes from
 `reply.validation.workloads[uuid]`; every case must pass. Multi-case top-level
 latencies are `None`, so do not average shapes or use them as a scalar speedup.
@@ -110,22 +110,21 @@ and prepare launch resources outside the measured path. Preserve the caller stre
 The [two-file example](assets/add_one/config.toml) computes `y = x + 1` for contiguous
 float32 CUDA tensors. Adapt its signature, checks, and computation to the target.
 Read these assets as templates; write the candidate into current_kernel/submission/.
-Submit it through the client for official validation. An authorized diagnostic
+Submit it through klineage.evaluate for official validation. An authorized diagnostic
 runtime may also build it for local inspection.
 
 ## Submit and evaluate
 
 With authored current_kernel/submission/ files, set `reference` to the action's fixed
 baseline, or None for a standalone/Decompose measurement. Select `problem_id`
-from `Client().info()["problems"]` for the assigned task:
+from `klineage.info()["problems"]` for the assigned task:
 
 ```python
 from pathlib import Path
 from klineage.serialization import to_json
-from klineage.server import Client
+import klineage
 
-client = Client(problem_id=problem_id)
-problem_spec = client.problem()
+problem_spec = klineage.problem()
 problem_dir = (Path("problems") / problem_id).resolve(strict=True)
 root = Path("current_kernel")
 metadata = {
@@ -135,17 +134,17 @@ metadata = {
     "compile_flags": [],
 }
 (root / "metadata.json").write_text(to_json(metadata))
-reply = client.evaluate(root, Path.cwd(), reference=reference)
+reply = klineage.evaluate(root, reference=reference)
 assert reply.accepted, reply.diagnostics
 ```
 
 Edit the source files and metadata.json in the directory, clearing stale validation.
-Re-submit after changes. Client appends every complete result under versions/0,
+Re-submit after changes. Evaluation appends every complete result under versions/0,
 versions/1, ... including failures. Each version's metadata.json stores validation
 and evaluation diagnostics; read it or reply.validation/reply.diagnostics.
 The original problem directory is linked under problems/<problem_id>; input binaries are not copied. Do not save or edit returned Kernel versions.
 Action uses the largest numbered version, without falling back after failure.
-Use client.result(job_id, work=Path.cwd()) to append an earlier accepted job
+Use klineage.result(best_reply) to append an earlier accepted job
 as the latest version. current_kernel/ remains independent trial source space.
 
 ## Local checks

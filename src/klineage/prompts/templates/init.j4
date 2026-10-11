@@ -27,12 +27,12 @@ inspect `action_spec("init")` with `klineage.serialization.raw_text`.
 {% include "backend.j4" %}
 
 - Use workspace/.agents/skills/bench/SKILL.md for correctness and performance measurements.
-- Client.evaluate automatically saves each complete result under versions/0, versions/1, ... .
+- klineage.evaluate automatically saves each complete result under versions/0, versions/1, ... .
 
 # Procedure
 
 1. Read the bench skill and layouts available through the Python APIs above.
-   Use client.problem() for the controller-registered Problem, named problem_spec.
+   Use klineage.problem() for the controller-registered Problem, named problem_spec.
    Read the native skill matching problem_spec.language/platform. Derive the ABI
    from its ordered definition inputs/outputs and each workload's axis
    bindings: argument order, dtypes, shapes, layouts, and output semantics.
@@ -60,7 +60,7 @@ inspect `action_spec("init")` with `klineage.serialization.raw_text`.
    Prepare workspace/expert/metadata.json, workspace/expert/submission/config.toml and workspace/expert/submission/solution/ using the bench skill's
    original-expert adapter contract. Supply its host binding and launch parameters. It must call the fixed expert instance on the supplied stream;
    it may depend on the registered expert headers, and must remain independent of candidate code.
-   Use client.evaluate for acceptance. Compilation probes and tool-based inspection
+   Use klineage.evaluate for acceptance. Compilation probes and tool-based inspection
    may use the explicitly supplied diagnostic runtime; keep their evidence separate.
 
 4. Implement the standalone kernel under current_kernel/submission/ using the selected native skill's
@@ -85,14 +85,14 @@ depend on the staged repository; the delivered bundle may not. Preserve the
 expert's schedule and execution path. The adapter must not call candidate code.
 
 Follow the bench skill's original-expert comparison procedure. Check the expert
-against the problem oracle with client.evaluate(Path("workspace/expert"), Path.cwd()), then
-evaluate the candidate with reference=expert_reply.job_id. Keep that expert fixed.
+against the problem oracle with klineage.evaluate(Path("workspace/expert")), then
+evaluate the candidate with reference=expert_reply. Keep that expert fixed.
 Require both results to be accepted, including the paired performance gate.
 Read reply.validation and report latency_ms and reference_latency_ms for each UUID in reply.validation.workloads. Do not average
 different workloads or use unset multi-workload summary latencies. Explain unexpected speed differences by
 inspecting both implementations, their build settings, and the adapter. Repair
 missing expert build settings before accepting the comparison. After source
-changes, resubmit the final directory; the client automatically saves the result.
+changes, resubmit the final directory; evaluation automatically saves the result.
 
 **Mechanism fidelity.** Judge the candidate against the instantiated expert code
 yourself. Include a concise comparison in the final response with expert and candidate

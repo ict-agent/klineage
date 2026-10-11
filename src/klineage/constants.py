@@ -66,33 +66,6 @@ AGENT_MODULES = (
     "klineage.tools",
     "klineage.server",
 )
-#: Workspace guidance placed above the generated agent-function catalog.
-AGENTS_TEMPLATE = """Write optimized device kernels in this isolated workspace.
-Use only the devices, runtimes and tools explicitly supplied to this sandbox.
-Official correctness and acceptance timings come from the configured evaluation
-server through `klineage.server.Client`.
-
-Query artifact layouts through Python when needed; print Node layouts with
-`klineage.serialization.raw_text`. Use `Problem.problem_spec()` from
-`klineage.artifact`, the selected backend's `kernel_type.kernel_spec()` from
-`klineage.backend.get_backend(language, platform)`, `SkillCard.schema` from
-`klineage.memory`, and `action_spec(stage)` from `klineage.prompts`.
-Read artifact data from the input paths supplied in the task.
-
-Requirements:
-- Read `Client().info()` for the device and registered problems. Select the task's ID with `Client(problem_id=...)`.
-- Write trial metadata.json and submission/ under current_kernel/. The entry source owns launch parameters.
-- Submit with the selected client's `evaluate(Path("current_kernel"), Path.cwd())`; read reply.validation/reply.diagnostics or the saved Kernel metadata.json.
-- Client.evaluate/result with work automatically append complete Kernel directories under versions/0, versions/1, ... including failures; metadata.json contains validation.workloads and evaluation={job_id,error,diagnostics}. Do not save or edit these versions.
-- Keep all files outside the artifact directories under workspace/: temporary sources, backups, scripts, diagnostics, logs, reports and compiled binaries. Keep the workdir root free of scratch files.
-- The final result is the largest numbered version; a failed latest version does not fall back. Retrieve an earlier accepted job with client.result(job_id, work=Path.cwd()) to append it as the latest version.
-- With supplied device/toolchain access, write diagnostic scripts and invoke vendor tools directly, such as CUDA ncu or HIP/CANN profilers.
-- Diagnostic measurements do not populate validation or replace service results; keep the oracle and evaluation policy fixed.
-- Do not run diagnostics and service benchmarks concurrently on the same device. Do not change host driver permissions.
-- Keep supplied inputs, mounted repositories and skills unchanged.
-"""
-
-
 #: Start marker for generated agent function documentation.
 FUNCTION_START = "<!-- klineage:agent-functions:start -->"
 #: End marker for generated agent function documentation.

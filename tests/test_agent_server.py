@@ -44,13 +44,13 @@ result = {
     "devices": list(str(path) for path in Path("/dev").glob("nvidia*")),
 }
 if task["operation"] == "service":
-    from klineage.server import Client, ServerError
+    import klineage
+    from klineage.server import ServerError
     from klineage.serialization import to_json
-    client = Client()
-    result["endpoint"] = client.endpoint
+    result["endpoint"] = os.environ["KLINEAGE_SERVER"]
     result["evaluation_token"] = os.environ.get("KLINEAGE_SERVER_TOKEN")
-    result["info"] = client.info()
-    result["problem"] = json.loads(to_json(client.problem()))
+    result["info"] = klineage.info()
+    result["problem"] = json.loads(to_json(klineage.problem()))
     from klineage.artifact import load_problem
     local_problem = Path("problems/gemm")
     result["problem_link"] = local_problem.is_symlink()
@@ -65,25 +65,31 @@ if task["operation"] == "service":
             pass
     result["problem_mount"] = os.environ.get("KLINEAGE_PROBLEM")
     try:
-        client.problem("other")
+        klineage.problem("other")
         result["scope_enforced"] = False
     except ServerError:
         result["scope_enforced"] = True
     with socket.socket() as probe:
         probe.settimeout(0.1)
         result["host_tcp_blocked"] = probe.connect_ex(("127.0.0.1", task["port"])) != 0
-    reply = client.evaluate(Path("current_kernel"), Path.cwd())
+    reply = klineage.evaluate(Path("current_kernel"))
     result["job_id"] = reply.job_id
     result["accepted"] = reply.accepted
+    result["recovered"] = klineage.result(reply).job_id == reply.job_id
     result["docs"] = Path("workspace/AGENTS.md").read_text()
 elif task["operation"] == "collection":
-    from klineage.artifact import load_problem
-    from klineage.server import Client
-    client = Client()
-    results = [client.evaluate(Path("current_kernel"), Path.cwd(), problem_id=name)
-               for name in client.info()["problems"]]
+    import klineage
+    details = klineage.info()
+    results = []
+    for name in details["problems"]:
+        spec = klineage.problem(name)
+        path = Path("current_kernel/metadata.json")
+        metadata = json.loads(path.read_text())
+        metadata["problem"] = {"path": details["problem_paths"][name], **spec.target()}
+        path.write_text(json.dumps(metadata))
+        results.append(klineage.evaluate(Path("current_kernel")))
     result["problems"] = [reply.problem_id for reply in results]
-    result["accepted"] = all(client.verify(reply.kernel, reply.job_id).accepted for reply in results)
+    result["accepted"] = all(klineage.result(reply).accepted for reply in results)
     result["references"] = [json.loads(reply.kernel.find("metadata.json").content)["problem"]["path"] for reply in results]
     result["problem_mount"] = os.environ.get("KLINEAGE_PROBLEM")
 elif task["operation"] == "provider":
@@ -163,6 +169,7 @@ class AgentServerTests(unittest.TestCase):
             }))
         reply = json.loads(result.final_message)
         self.assertTrue(reply["accepted"])
+        self.assertTrue(reply["recovered"])
         self.assertTrue(reply["scope_enforced"])
         self.assertTrue(reply["host_tcp_blocked"])
         self.assertEqual(reply["info"]["problems"], ["gemm"])
@@ -182,7 +189,7 @@ class AgentServerTests(unittest.TestCase):
         self.assertNotIn("klineage.harness.eval.evaluate", reply["docs"])
         self.assertNotIn("klineage.tools.profile", reply["docs"])
         self.assertNotIn("load_kernel(build_root", reply["docs"])
-        self.assertIn("Client.evaluate", reply["docs"])
+        self.assertIn("klineage.evaluate", reply["docs"])
         record = latest_kernel(self.work) / "metadata.json"
         self.assertEqual(json.loads(record.read_text())["evaluation"]["job_id"], reply["job_id"])
         self.assertFalse((self.work / "evaluations").exists())

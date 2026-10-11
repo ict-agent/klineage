@@ -126,7 +126,7 @@ class ServerCampaignTests(unittest.TestCase):
         self.assertEqual(state["agent_device_nodes"], ["/dev/null"])
         self.assertIn(str(agent.python), action.prompt)
         self.assertIn("ncu", action.prompt)
-        self.assertIn("Client.evaluate", action.prompt)
+        self.assertIn("klineage.evaluate", action.prompt)
         self.assertIn("never overlap", action.prompt)
         self.assertIn("workspace/AGENTS.md", action.prompt)
         self.assertIn("workspace/.agents/skills/", action.prompt)

@@ -38,8 +38,8 @@ def action_spec(stage: str) -> Node:
     """Describe the artifacts an action asks the agent to produce."""
     common = (
         "Action.run returns an Artifact; JSON is serialization data, not an output-directory file.",
-        "Use current_kernel/ for trial sources. Client.evaluate and Client.result with work automatically append complete results under versions/0, versions/1, ...; agents do not save Kernels.",
-        "Action uses the largest numbered saved version, including failed results, without automatic fallback. Retrieve an earlier accepted job with Client.result(job_id, work=...) to append it as the latest version.",
+        "Use current_kernel/ for trial sources. klineage.evaluate and klineage.result with work automatically append complete results under versions/0, versions/1, ...; agents do not save Kernels.",
+        "Action uses the largest numbered saved version, including failed results, without automatic fallback. Retrieve an earlier accepted job with klineage.result(job_id, work=...) to append it as the latest version.",
         "With explicitly supplied devices and tools, write diagnostic scripts and use vendor profilers directly; their outputs are not validation.",
         "Do not run diagnostics and service benchmarks concurrently on the same device.",
         "The framework includes the measured Kernel as the kernel part of the returned Artifact.",

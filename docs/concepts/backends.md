@@ -98,7 +98,7 @@ print(timing.median_ms)
 
 Here `inputs` is the tuple of tensors required by the problem. `bench` detects
 the backend and measures the callable; it does not check correctness. Use
-`Client.evaluate()` for the complete evaluation used by actions.
+`klineage.evaluate()` for the complete evaluation used by actions.
 
 An agent with device and tool access can also inspect performance with vendor
 tools such as `ncu`. Finish this work before benchmarking on the same device.

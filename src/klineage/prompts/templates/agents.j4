@@ -1,0 +1,52 @@
+# KLineage
+
+KLineage supplies the problem, evaluates kernels, and records each candidate.
+Write the task's implementation and use its measurements to choose the result.
+
+## Artifacts and backends
+
+Artifacts are file trees: a Problem holds a definition and workloads; a Kernel
+holds metadata, configuration and sources. `find(name)` searches a tree by exact
+name, returning one Node, a list of matches, or `[]`. Use `raw_text` to read a
+file or display an annotated layout.
+
+Query the problem, evaluation hardware and toolchain, and backend layout:
+
+```python
+import klineage
+from klineage.artifact import Problem
+from klineage.backend import get_backend
+from klineage.serialization import raw_text
+
+problem = klineage.problem()
+backend = get_backend(problem.language, problem.platform)
+print(klineage.info())
+print(raw_text(Problem.problem_spec()))
+print(raw_text(backend.kernel_type.kernel_spec()))
+```
+
+For alternate entry layouts, use `kernel_layouts(backend.kernel_type)` from
+`klineage.artifact`. Skill and action layouts are `SkillCard.schema` from
+`klineage.memory` and `action_spec(stage)` from `klineage.prompts`.
+Read relevant guidance under `workspace/.agents/skills/` when needed.
+
+## Evaluate
+
+From the run directory, call `klineage.evaluate(Path("current_kernel"))`, importing
+`Path` from `pathlib`. Supply `reference=...` when the task requests paired timing.
+The returned Evaluation contains `accepted`, per-workload results in
+`validation.workloads`, and `diagnostics`. Each call saves a complete version.
+Use `klineage.result(best_reply)` to append an earlier accepted job as the final
+version. Keep saved versions unchanged; the action returns the last version.
+
+Use available tools such as `ncu` for local diagnostics. Run diagnostics and
+evaluation separately when they share a device.
+
+## Files
+
+```text
+current_kernel/    Candidate metadata and submission sources
+versions/<N>/     Saved kernels with evaluation results
+problems/         References to the supplied problem directories
+workspace/        Helpers, backups, binaries, diagnostics and run records
+```

@@ -124,25 +124,26 @@ Submit an authored Kernel directory containing `metadata.json` and `submission/`
 ```python
 from pathlib import Path
 
-from klineage.server import Client
+import klineage
 
-client = Client(problem_id="gemm")
-problem = client.problem()
+problem = klineage.problem("gemm")
 work = Path("agent-workspace/evaluation")
-reply = client.evaluate(Path("candidate"), work, timeout=300)
+reply = klineage.evaluate(Path("candidate"), work=work, timeout=300)
 
 print(reply.job_id, reply.accepted)
 if not reply.accepted:
     raise RuntimeError(reply.error or "Inspect the evaluation diagnostics")
-best_job_id = reply.job_id
+best_reply = reply
 ```
 
-Use `client.info()["problems"]` to list available IDs. A Client bound to an ID
-uses it for subsequent requests. An unbound Client selects the sole problem,
-or requires an explicit ID when several are registered.
+Use `klineage.info()["problems"]` to list available IDs. Evaluation selects the
+task from the Kernel's problem reference. Ambiguous references raise an error.
 
-Submission reads source files without compiling locally. The service builds
-them, checks correctness and measures every workload. An optional `reference`
+With `KLINEAGE_SERVER` configured, source files are submitted without local
+compilation. Otherwise evaluation runs directly on the local backend, without
+starting a server listener. Both paths return the same Evaluation and save the
+same version layout. A remote failure does not trigger local evaluation.
+An optional `reference`
 provides a timing baseline; the problem's reference implementation remains the
 correctness oracle.
 
@@ -158,14 +159,14 @@ Actions select the last numbered version. To return to an earlier accepted job,
 fetch it as a new final version:
 
 ```python
-restored = client.result(best_job_id, work=work)
+restored = klineage.result(best_reply, work=work)
 if not restored.accepted:
     raise RuntimeError("The recorded evaluation was not accepted")
 ```
 
 The saved version contains the matching sources and measurements. Scratch files
 can remain unchanged. Actions check the final Kernel against its service record;
-Python controllers can do the same with `client.verify(kernel)` and then inspect
+Python controllers using Client can do the same with `client.verify(kernel)` and inspect
 `accepted`.
 
 A remote client can submit and retrieve results without local device libraries.
@@ -258,7 +259,7 @@ and runtime paths. Command-line equivalents are listed under
 Performance counters may require host permissions beyond device access.
 
 Diagnostic reports help the agent improve a kernel; evaluation still goes through
-`Client.evaluate()`. Run diagnostics and service benchmarks at different times
+`klineage.evaluate()`. Run diagnostics and service benchmarks at different times
 on a shared device so they do not affect each other's measurements.
 
 ## Isolation and embedding

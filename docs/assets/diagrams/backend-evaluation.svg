@@ -48,7 +48,7 @@
   <text class="mono" x="47" y="149">config.toml</text>
   <text class="mono" x="47" y="175">solution/</text>
   <text class="title" x="99" y="260" text-anchor="middle">Sources</text>
-  <text class="mono" x="99" y="284" text-anchor="middle">Client.evaluate</text>
+  <text class="mono" x="99" y="284" text-anchor="middle">klineage.evaluate</text>
   <path class="wire" d="M 174 165 H 251"/>
   <text class="label" x="213" y="151" text-anchor="middle">submit</text>
 

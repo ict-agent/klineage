@@ -1,10 +1,10 @@
-Read workspace/AGENTS.md for the registered Python interfaces and limits.
+Read workspace/AGENTS.md for the harness and its Python interfaces.
 Query artifact layouts on demand in Python; render the returned Node with
 `klineage.serialization.raw_text`:
 - Problem: `from klineage.artifact import Problem`; call `Problem.problem_spec()`.
 - Kernel: `from klineage.backend import get_backend`; call
   `get_backend(problem.language, problem.platform).kernel_type.kernel_spec()`
-  using the selected `client.problem()` as problem. For all supported entry
+  using the selected `klineage.problem()` as problem. For all supported entry
   layouts, use `kernel_layouts(backend.kernel_type)` from `klineage.artifact`.
 Read any referenced example files only when needed.
 {% if target_language is defined and target_language in ("cuda", "hip", "ascendc") %}
@@ -23,7 +23,7 @@ Retain the configured callable, entry_point, and destination_passing_style. Keep
 implementation files under solution/, ordered problem inputs/outputs, and device backend.
 {% endif %}
 {% else %}
-Read the native skill matching client.problem().language/platform:
+Read the native skill matching klineage.problem().language/platform:
 
 - CUDA / NVIDIA: workspace/.agents/skills/cuda/SKILL.md.
 - HIP / Hygon: workspace/.agents/skills/hip/SKILL.md.
@@ -37,16 +37,11 @@ Use only the devices, runtimes and tools explicitly supplied by the controller.
 Keep temporary sources, backups, helper scripts, diagnostics, reports, logs and
 compiled binaries under workspace/. Only artifact directories and their problem
 references belong at the workdir root. Codex uses the existing CODEX_HOME.
-Inputs and expert sources are read-only. Use klineage.server.Client for official
-correctness checks and acceptance timings.
-Client() reads KLINEAGE_SERVER. KLINEAGE_PROBLEM configures problem directories
-on the server; it is not a client task ID. Read client.info()["problems"] and set
-problem_id to the task's registered ID. Bind Client(problem_id=problem_id) for
-this action; a server exposing one problem can select it automatically.
-client.info() reports the server's backend and device; client.problem() returns
-the selected Problem. Local hardware queries describe only the supplied diagnostic
-device, which may differ from the server. Keep the service environment fixed;
-repository include paths for submissions are registered by the controller.
+Inputs and expert sources are read-only. Use klineage.evaluate for correctness
+and timing. Read klineage.info() for the evaluation target and its problem IDs;
+klineage.problem(problem_id) returns the selected Problem. Local hardware queries
+describe the diagnostic device, which can differ from the evaluation target.
+Keep the supplied problem and evaluation configuration fixed.
 
 With an authorized device and toolchain, write diagnostic scripts and use vendor
 tools directly: for example, CUDA ncu or the corresponding HIP/Ascend tools.
@@ -74,10 +69,9 @@ problem directory, available through the framework's problems/<problem_id> link:
 ```python
 from pathlib import Path
 from klineage.serialization import to_json
-from klineage.server import Client
+import klineage
 
-client = Client(problem_id=problem_id)
-problem_spec = client.problem()
+problem_spec = klineage.problem(problem_id)
 problem_dir = (Path("problems") / problem_id).resolve(strict=True)
 root = Path("current_kernel")
 root.mkdir(exist_ok=True)
@@ -103,7 +97,7 @@ the accepted expert job for Init, or None for standalone/Decompose measurements.
 {% endif %}
 
 ```python
-reply = client.evaluate(root, Path.cwd(), reference=reference)
+reply = klineage.evaluate(root, reference=reference)
 assert reply.accepted, reply.diagnostics
 ```
 
@@ -113,13 +107,13 @@ original problem directory. Each version's metadata.json contains validation.wor
 and evaluation with job_id, error and diagnostics. Read reply.validation and
 reply.diagnostics or this metadata; do not save Kernels manually or edit these fields.
 Action uses the largest numbered version; a failed latest version cannot fall back.
-To select an earlier accepted candidate, call client.result(job_id, work=Path.cwd());
+To select an earlier accepted candidate, call klineage.result(best_reply);
 this appends it as a new latest version. current_kernel/ remains independent trial source space.
 
 Read Kernel JSON with load_artifact(path, Kernel) or from_json(text, Kernel).
 Read action JSON as Artifact, then select part("kernel", Kernel). JSON restoration does not compile.
 {% if not generation | default(false) %}
-For an unchanged result, evaluate the input through the service. The client saves
+For an unchanged result, evaluate the input through the service. Evaluation saves
 its complete Kernel with the same name and sources and fresh measured validation.
 Do not emit SKILL.md for an unchanged result.
 {% endif %}

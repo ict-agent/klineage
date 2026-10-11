@@ -164,7 +164,7 @@ This is a fresh, source-free campaign. Use only this task and workspace.
 Read workspace/AGENTS.md and the relevant workspace/.agents/skills/ guidance.
 Use `{agent.python}` in the configured agent sandbox. Its selected devices and
 available tools, such as ncu, may be used directly for performance diagnosis.
-Use klineage.server.Client.evaluate for authoritative correctness and timing.
+Use klineage.evaluate for authoritative correctness and timing.
 When local diagnostics share a device with the server, run them sequentially;
 never overlap local device work with server evaluations.
 Implement computation in native {problem.language}; do not delegate the operation
@@ -173,10 +173,10 @@ The fixed Problem, inputs and measurement policy belong to the server.
 Deliver the best accepted artifact and retain its matching service result by
 {state['generation_deadline']}. Check `date -u` before optional trials.
 For this source-free start, first submit a native implementation with a simple
-execution schedule. The client automatically appends complete results under
+execution schedule. Evaluation automatically appends complete results under
 versions/0, versions/1, ... including failures. Use the remaining time to improve it.
 Action uses the largest numbered version; do not save Kernels manually. To finish
-with an earlier accepted best job, call client.result(best_job_id, work=Path.cwd())
+with an earlier accepted best job, call klineage.result(best_reply)
 to append it as the latest version. current_kernel/ remains trial source space.
 Keep helpers, diagnostics, source backups, binaries and logs under workspace/.
 Read server diagnostics and retain tool output that explains your changes.

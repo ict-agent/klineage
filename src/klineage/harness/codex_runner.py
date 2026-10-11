@@ -280,7 +280,7 @@ class CodexRunner:
                 "must fit within the remaining time."
             )
 
-        write_agent_docs(self.work_dir, client=self.evaluation)
+        write_agent_docs(self.work_dir)
 
         run_dir = self.trace_root / resolved_run_id
         with safe_directory(self.trace_root) as parent:

@@ -19,7 +19,7 @@ inspect `action_spec("decompose")` with `klineage.serialization.raw_text`.
 - Use workspace/.agents/skills/bench/SKILL.md for harness measurements.
 - Query and follow the Artifact layout. Keep SKILL.md outside the submission/ subtree.
 - If the input is already naive, evaluate it unchanged and emit no SKILL.md.
-  The client saves its complete Kernel automatically. Never invent a removal to fill a step.
+  Evaluation saves its complete Kernel automatically. Never invent a removal to fill a step.
 
 For the SkillCard layout, import `SkillCard` from `klineage.memory` and inspect
 `SkillCard.schema` with `klineage.serialization.raw_text` when needed.
@@ -42,7 +42,7 @@ thread mapping, and instructions are not prerequisites for HIP or AscendC cards.
    bundle, config, ABI, launch path, and device code. Identify computation, data
    movement, layouts, synchronization, and scheduling patterns.
    If the input is already naive, emit no SKILL.md; skip steps 2-5.
-   Evaluate the unchanged input once; the client appends its complete saved version.
+   Evaluate the unchanged input once; evaluation appends its complete saved version.
    Perform the naive source audit under Progress and termination below, then finish.
 
 2. Choose one semantic transformation to undo. Remove dependent mechanisms before
@@ -61,7 +61,7 @@ thread mapping, and instructions are not prerequisites for HIP or AscendC cards.
    language, precision, required accumulation order/rounding, and output semantics.
    Use native computation without expert-library calls for native input.
    Preserve its problem directory reference and compile_flags in current_kernel/metadata.json.
-   After source changes, submit the current directory through client.evaluate;
+   After source changes, submit the current directory through klineage.evaluate;
    the returned reply.kernel is deoptimized_kernel for the SkillCard recipe.
 
 4. Create one SkillCard named card explaining how to apply the removed optimization
@@ -82,7 +82,7 @@ thread mapping, and instructions are not prerequisites for HIP or AscendC cards.
    End body with a Code Change Snippet section showing focused Before and After code
    for the forward optimization, as specified in the SkillCard template.
 
-5. The client automatically saves the evaluated Kernel. Use klineage.memory.save_skill
+5. Evaluation automatically saves the evaluated Kernel. Use klineage.memory.save_skill
    to write card to SKILL.md. Keep four top-level YAML metadata fields and the
    independent Markdown body. Finish with the accepted deoptimized Kernel as the
    latest saved version. Never synthesize validation in metadata.json.
@@ -93,8 +93,8 @@ For a removal, perform all checks below. For an unchanged naive input, run only
 Correctness and timing once and the Progress and termination source audit.
 Do not invoke other actions or generate a forward roundtrip here.
 
-**Correctness and timing.** Use client.evaluate(input, Path.cwd()) and
-client.evaluate(Path("current_kernel"), Path.cwd()) without reference. Require both results
+**Correctness and timing.** Use klineage.evaluate(input) and
+klineage.evaluate(Path("current_kernel")) without reference. Require both results
 to be accepted. A deoptimized kernel may be slower; do not apply a relative speed floor
 to it. Read measurements from reply.validation; Kernels are saved automatically.
 For an unchanged terminal input, evaluate it once.

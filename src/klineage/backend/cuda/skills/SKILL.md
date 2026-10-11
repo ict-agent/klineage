@@ -12,7 +12,7 @@ the directory layout, build configuration, tensor ABI, and runtime constraints.
 2. Implement the requested mechanisms in raw CUDA C/C++.
 3. Export the host wrapper through pybind11 using the caller's device and stream.
 4. Write the complete bundle in current_kernel/submission/; clear stale validation.
-5. Use klineage.server.Client and the `bench` skill; the client automatically saves each returned Kernel.
+5. Use klineage.evaluate and the `bench` skill; evaluation automatically saves each returned Kernel.
 
 Start from [the add-one bundle](assets/add_one/config.toml) and its
 [CUDA source](assets/add_one/solution/kernel.cu). Follow cuda.md to submit sources,

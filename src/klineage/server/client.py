@@ -188,17 +188,7 @@ class Client:
         expected = self.problem_id if problem_id is None else problem_id
         if expected is not None and result.problem_id != expected:
             raise ValueError("result belongs to another problem")
-        metadata = json.loads(result.kernel.find("metadata.json").content)
-        link_problem(work, result.problem_id, metadata["problem"])
-        metadata["evaluation"] = {
-            "job_id": result.job_id,
-            "error": result.error,
-            "diagnostics": result.diagnostics,
-        }
-        kernel = type(result.kernel)(
-            result.kernel.tree.with_child(json_node("metadata.json", metadata))
-        )
-        return replace(result, kernel=kernel)
+        return save_result(result, work)
 
     @agent_function
     def evaluate(
@@ -249,9 +239,7 @@ class Client:
             },
             timeout=budget,
         )
-        result = self.local_result(payload, work, problem_id=selected)
-        snapshot_kernel(result.kernel, work)
-        return result
+        return self.local_result(payload, work, problem_id=selected)
 
     @agent_function
     def result(self, job_id: str, *, work: Path | None = None) -> Evaluation:
@@ -268,9 +256,7 @@ class Client:
         """
         payload = self.request("GET", "/jobs/" + quote(job_id, safe=""))
         work = work or Path.cwd()
-        result = self.local_result(payload, work)
-        snapshot_kernel(result.kernel, work)
-        return result
+        return self.local_result(payload, work)
 
     def verify(self, kernel: Kernel, job_id: str | None = None) -> Evaluation:
         """Match a handed-off kernel to the server's recorded measurement.
@@ -321,6 +307,21 @@ class Client:
             result.kernel.tree.with_child(json_node("metadata.json", metadata))
         )
         return replace(result, kernel=current)
+
+
+def save_result(result: Evaluation, work: Path) -> Evaluation:
+    """Attach diagnostics and persist one measured Kernel with its problem link."""
+    metadata = json.loads(raw_text(result.kernel.find("metadata.json")))
+    link_problem(work, result.problem_id, metadata["problem"])
+    metadata["evaluation"] = {
+        "job_id": result.job_id, "error": result.error, "diagnostics": result.diagnostics,
+    }
+    kernel = type(result.kernel)(
+        result.kernel.tree.with_child(json_node("metadata.json", metadata))
+    )
+    saved = replace(result, kernel=kernel)
+    snapshot_kernel(saved.kernel, work)
+    return saved
 
 
 def link_problem(work: Path, problem_id: str, reference: dict) -> Path:

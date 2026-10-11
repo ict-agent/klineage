@@ -203,12 +203,20 @@ class ResponseUsage:
     """Inspect streamed frames or JSON with bounded buffering, retaining usage only."""
 
     def __init__(self, content_type: str):
-        self.streaming = content_type.partition(";")[0].strip().lower() == "text/event-stream"
+        media_type = content_type.partition(";")[0].strip().lower()
+        self.streaming = media_type == "text/event-stream" if media_type else None
         self.pending = b""
         self.discarding = False
         self.usage = {}
 
     def feed(self, data: bytes) -> None:
+        # Some Responses providers stream SSE without a Content-Type header.
+        if self.streaming is None:
+            data = data.lstrip()
+            if not data:
+                return
+            self.streaming = not data.startswith((b"{", b"["))
+
         if not self.streaming:
             if self.discarding:
                 return
