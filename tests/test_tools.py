@@ -7,63 +7,16 @@ from unittest.mock import patch
 from kernel_fixtures import kernel, skill
 
 from klineage import tools
-from klineage.constants import AGENT_FILES, FUNCTION_END, FUNCTION_START
+from klineage.constants import AGENT_DOCS_END, AGENT_DOCS_START, AGENT_FILES
 from klineage.memory import save_skill
+from klineage.prompts import render_prompt
 
 
-def extra_tool(value: int = 1) -> int:
-    """Increment a value for the caller."""
-    return value + 1
-
-
-class FunctionDocsTests(unittest.TestCase):
+class AgentDocsTests(unittest.TestCase):
     def setUp(self):
         self.work = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.docs = self.work / "workspace"
         self.docs.mkdir()
-        tools.function_docs()
-        self.enterContext(patch.dict(tools._FUNCTIONS))
-
-    def test_register_refreshes_docs(self):
-        self.assertIs(tools.agent_function(extra_tool), extra_tool)
-        docs = tools.function_docs()
-        self.assertIn("from test_tools import extra_tool", docs)
-        self.assertIn("extra_tool(value: int = 1) -> int", docs)
-        self.assertIn("Increment a value", docs)
-        self.assertIn("klineage.harness.evaluate", docs)
-
-    def test_factory_signature(self):
-        docs = tools.function_docs()
-        self.assertIn("from klineage.artifact import Kernel", docs)
-        self.assertIn("Signature: `Kernel.load_kernel(build_root:", docs)
-        self.assertNotIn("Kernel.load_kernel(cls", docs)
-
-    def test_catalog_covers_task_apis(self):
-        docs = tools.function_docs()
-        paths = (
-            "artifact.load_problem",
-            "artifact.Problem.problem_spec",
-            "harness.inspect_problem",
-            "artifact.stage_repository",
-            "harness.evaluate",
-            "artifact.Kernel.load_kernel",
-            "artifact.read_source_tree",
-            "artifact.load_artifact",
-            "artifact.save_artifact",
-            "backend.get_backend",
-            "backend.detect_backend",
-            "artifact.Kernel.kernel_spec",
-            "server.Client.evaluate",
-            "server.Client.info",
-            "server.Client.problem",
-            "server.Client.result",
-        )
-        documented = {
-            line.removeprefix("### klineage.")
-            for line in docs.splitlines()
-            if line.startswith("### klineage.")
-        }
-        self.assertEqual(documented, set(paths))
 
     def test_preserves_user_text(self):
         path = self.docs / "AGENTS.md"
@@ -77,18 +30,17 @@ class FunctionDocsTests(unittest.TestCase):
 
         after = "\nUser notes added later.\n"
         path.write_bytes(first + after.encode())
-        tools.agent_function(extra_tool)
         tools.write_agent_docs(self.work)
         contents = path.read_bytes().decode()
         self.assertTrue(contents.startswith(before))
         self.assertTrue(contents.endswith(after))
-        self.assertEqual(contents.count(FUNCTION_START), 1)
-        self.assertNotIn("extra_tool", contents)
+        self.assertEqual(contents.count(AGENT_DOCS_START), 1)
 
     def test_writes_template_guidance(self):
-        with patch.object(tools, "function_docs", side_effect=AssertionError("catalog dumped")):
-            tools.write_agent_docs(self.work)
+        tools.write_agent_docs(self.work)
         contents = (self.docs / "AGENTS.md").read_text()
+        guidance = "\n\n".join((AGENT_DOCS_START, render_prompt("agents"), AGENT_DOCS_END))
+        self.assertEqual(contents, guidance + "\n")
         for expected in (
             "klineage.evaluate", "klineage.info", "klineage.problem", "klineage.result",
             "find(name)", "kernel_spec()", "raw_text", "current_kernel/", "versions/", "workspace/",
@@ -114,7 +66,7 @@ class FunctionDocsTests(unittest.TestCase):
 
     def test_rejects_damaged_markers(self):
         path = self.docs / "AGENTS.md"
-        start, end = FUNCTION_START, FUNCTION_END
+        start, end = AGENT_DOCS_START, AGENT_DOCS_END
         for original in (start, end, end + start, start + start + end):
             with self.subTest(original=original):
                 path.write_text(original)

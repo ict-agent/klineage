@@ -294,6 +294,20 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertIsNotNone(error.trace_path)
         self.assertIn("timed out", str(error))
 
+    def test_prompt_reserves_response(self):
+        for budget, reserve in ((600, 60), (20, 10)):
+            with self.subTest(budget=budget):
+                runner = self.runner(timeout=budget)
+                result = runner("Build a kernel")
+                prompt = (result.trace_path.parent / "prompt.txt").read_text()
+                labels = ("Deadline (UTC): ", "Finish tool calls by (UTC): ")
+                deadlines = []
+                for label in labels:
+                    line = next(line for line in prompt.splitlines() if line.startswith(label))
+                    deadlines.append(datetime.fromisoformat(line.removeprefix(label)))
+                self.assertEqual(deadlines[0] - deadlines[1], timedelta(seconds=reserve))
+                self.assertEqual(runner.timeout, budget)
+
     def test_rejects_invalid_input(self):
         runner = self.runner()
 

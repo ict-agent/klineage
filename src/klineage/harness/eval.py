@@ -54,7 +54,6 @@ from klineage.harness.timing import (
     verify_performance,
 )
 from klineage.serialization import raw_text, restore, to_json
-from klineage.tools import agent_function
 from klineage.utils import (
     existing_dir,
     make_log_dir,
@@ -548,7 +547,6 @@ def now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-@agent_function
 def inspect_problem(problem: Path, work: Path) -> Problem:
     """Inspect a problem directory or Python reference on the available backend.
 
@@ -576,7 +574,6 @@ def inspect_problem(problem: Path, work: Path) -> Problem:
         )
 
 
-@agent_function
 @observed("evaluate")
 def evaluate(
     kernel: Kernel,

@@ -18,8 +18,8 @@ that result and finish within the time budget if later trials fail.
 Read the action layout when needed: `from klineage.prompts import action_spec`;
 inspect `action_spec("apply")` with `klineage.serialization.raw_text`.
 
-{% set target_language = artifact_language(current_kernel) %}
 {% include "backend.j4" %}
+
 Read workspace/.agents/skills/bench/SKILL.md for correctness and performance measurements.
 
 # Procedure

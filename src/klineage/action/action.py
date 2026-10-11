@@ -147,7 +147,7 @@ class Action:
                     "Read the prior generation records in this workdir. "
                     "Correct the failure. For kernel actions, fix trial sources "
                     "under current_kernel/ and evaluate again, or select "
-                    "an accepted job with client.result(job_id, work=Path.cwd()). "
+                    "an accepted job with klineage.result(job_id). "
                     "Leave saved versions under versions/ unchanged.\n\n"
                     f"{self.prompt}"
                 )

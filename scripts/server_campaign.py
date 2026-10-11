@@ -14,15 +14,13 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from klineage.artifact import Kernel
-from klineage.action import Apply
-from klineage.artifact import Node, json_node, save_artifact, source_files
-from klineage.artifact.problem import problem_reference
+from klineage.action import Generation
+from klineage.artifact import Kernel, save_artifact, source_files
 from klineage.backend import get_backend
 from klineage.cli.common import add_agent_options, agent_runtime
 from klineage.harness import AgentRuntime
 from klineage.harness.process import STOP_GRACE_SECONDS, stop_process
-from klineage.harness.provider import resolve_provider, runner_class, usage_proxy
+from klineage.harness.provider import resolve_provider, runner_class
 from klineage.harness.sandbox import runtime_environment
 from klineage.serialization import to_json
 from klineage.server import Client
@@ -131,58 +129,33 @@ def run(args):
             problem = client.problem()
             info = client.info()
             write_json(root / "server-info.json", info)
-            backend = get_backend(problem.language, problem.platform)
-            initial = backend.kernel_type(Node.directory(".", (
-                json_node("metadata.json", {
-                    "name": problem.name,
-                    "problem": problem_reference(Path(info["problem_paths"][problem.name]), problem),
-                    "validation": None, "compile_flags": [],
-                }),
-                Node.directory("submission"),
-            )))
             provider = resolve_provider(
                 args.model, args.base_url, key_env=PROVIDER_KEY_ENV,
             )
-            with usage_proxy(provider, root / "usage") as proxied:
-                base = runner_class(proxied, "high")
+            base = runner_class(provider, "high")
 
-                class BudgetRunner(base):
-                    def __call__(self, prompt, *, run_id=None):
-                        self.timeout = remaining(generation_deadline)
-                        return super().__call__(prompt, run_id=run_id)
+            class BudgetRunner(base):
+                def __call__(self, prompt, *, run_id=None):
+                    self.timeout = remaining(generation_deadline)
+                    return super().__call__(prompt, run_id=run_id)
 
-                action = Apply(
-                    initial, workdir=work, timeout=int(remaining(generation_deadline)),
-                    max_retries=1, evaluation=client, agent=agent,
-                )
-                action.runner = BudgetRunner(
-                    work, timeout=remaining(generation_deadline), evaluation=client, agent=agent,
-                )
-                action.prompt += f"""
+            action = Generation(
+                problem, workdir=work, timeout=int(remaining(generation_deadline)),
+                max_retries=1, evaluation=client, agent=agent,
+            )
+            action.runner = BudgetRunner(
+                work, timeout=remaining(generation_deadline), evaluation=client, agent=agent,
+            )
+            action.prompt += f"""
 
-This is a fresh, source-free campaign. Use only this task and workspace.
-Read workspace/AGENTS.md and the relevant workspace/.agents/skills/ guidance.
-Use `{agent.python}` in the configured agent sandbox. Its selected devices and
-available tools, such as ncu, may be used directly for performance diagnosis.
-Use klineage.evaluate for authoritative correctness and timing.
-When local diagnostics share a device with the server, run them sequentially;
-never overlap local device work with server evaluations.
-Implement computation in native {problem.language}; do not delegate the operation
-to torch reference functions, vendor libraries or other existing implementations.
-The fixed Problem, inputs and measurement policy belong to the server.
-Deliver the best accepted artifact and retain its matching service result by
-{state['generation_deadline']}. Check `date -u` before optional trials.
-For this source-free start, first submit a native implementation with a simple
-execution schedule. Evaluation automatically appends complete results under
-versions/0, versions/1, ... including failures. Use the remaining time to improve it.
-Action uses the largest numbered version; do not save Kernels manually. To finish
-with an earlier accepted best job, call klineage.result(best_reply)
-to append it as the latest version. current_kernel/ remains trial source space.
-Keep helpers, diagnostics, source backups, binaries and logs under workspace/.
-Read server diagnostics and retain tool output that explains your changes.
+# Campaign budget
+
+Finish generation by {state['generation_deadline']}.
+The controller reserves {AUDIT_RESERVE} seconds for an independent service audit
+of the returned kernel.
 """
-                status("generation", server_pid=server_pid, endpoint=client.endpoint)
-                result = action.run()
+            status("generation", server_pid=server_pid, endpoint=client.endpoint)
+            result = action.run()
             save_artifact(result, root / "action-result.json")
             kernel = result.part("kernel", Kernel)
             status("audit")

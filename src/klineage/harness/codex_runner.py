@@ -52,6 +52,7 @@ RESUME_SANDBOX_FLAGS = ("--dangerously-bypass-approvals-and-sandbox",)
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 BENCH_SKILL = Path(__file__).parent / "resources" / "bench"
 PROVIDER_KEY_PLACEHOLDER = "sandbox-provider"
+RESPONSE_RESERVE_SECONDS = 60
 
 
 class CodexRunnerError(RuntimeError):
@@ -270,14 +271,16 @@ class CodexRunner:
         )
         if self.timeout is not None:
             deadline = datetime.now(UTC) + timedelta(seconds=self.timeout)
+            reserve = min(RESPONSE_RESERVE_SECONDS, self.timeout / 2)
+            tools_deadline = deadline - timedelta(seconds=reserve)
             prompt += (
                 "\n\n# Execution time budget\n"
                 f"Deadline (UTC): {deadline.isoformat()}\n"
+                f"Finish tool calls by (UTC): {tools_deadline.isoformat()}\n"
                 f"This attempt has at most {self.timeout:g} seconds. "
-                "Check `date -u` before long tool calls. Finish required checks and "
-                "return your final response before the deadline. Stop optional "
-                "exploration early enough to complete the handoff; tool calls "
-                "must fit within the remaining time."
+                "Complete evaluations and select the final artifact before the tool deadline. "
+                f"Reserve the remaining {reserve:g} seconds for your final response. "
+                "Check `date -u` before long tool calls."
             )
 
         write_agent_docs(self.work_dir)

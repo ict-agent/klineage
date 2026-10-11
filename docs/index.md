@@ -1,7 +1,7 @@
 # KLineage
 
 Klineage is an agentic harness tailored for device kernel programming across heterogeneous accelerators.
-KLineage generates accelerator kernels from high-level program discriptions and extracts
+KLineage generates accelerator kernels from high-level program descriptions and extracts
 reusable optimization techniques from expert implementations.
 
 ## Execution model
@@ -37,5 +37,5 @@ performance feedback to the action, guiding the next refinement of the kernel.
 | Action primitive | [Action Primitive](concepts/actions.md) |
 | Accelerator Backend | [Accelerator Backend](concepts/backends.md) |
 | Deploy evaluation service | [Evaluation guide](guides/evaluation.md) |
-| Add an new artifact format or backend | [Extension guide](guides/extending.md) |
+| Add a new artifact format or backend | [Extension guide](guides/extending.md) |
 | API Documentation | [API reference](reference/artifacts.md) |

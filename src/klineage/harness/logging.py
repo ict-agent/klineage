@@ -5,7 +5,7 @@ one per model round trip. Both carry an ISO timestamp, so a kernel's latency and
 the tokens spent producing it line up on the same axis.
 
 An explicit directory or KLINEAGE_LOG_DIR enables collection. Event writes are
-best effort; proxy startup errors remain visible.
+best effort.
 """
 
 from __future__ import annotations
@@ -15,15 +15,10 @@ import functools
 import json
 import os
 import re
-import threading
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError
-from urllib.request import Request, urlopen
 
 from klineage.serialization import raw_text, to_json
 from klineage.utils import safe_file
@@ -34,7 +29,6 @@ LOG_ENV = "KLINEAGE_LOG_DIR"
 LOG_FILE = "stats.jsonl"
 #: Responses-API event carrying one round trip's usage.
 COMPLETED = "response.completed"
-STREAM_CHUNK_SIZE = 8192
 USAGE_BUFFER_BYTES = 1024 * 1024
 SSE_BOUNDARY = re.compile(br"\r?\n\r?\n")
 
@@ -160,15 +154,6 @@ def usage_from_event(payload: bytes) -> dict[str, Any] | None:
     }
 
 
-#: Headers a forwarded request must not inherit from the client.
-HOP_BY_HOP = frozenset(
-    {
-        "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
-        "te", "trailers", "transfer-encoding", "upgrade", "host", "content-length",
-    }
-)
-
-
 def data_lines(chunk: bytes) -> Iterator[bytes]:
     """Yield each SSE payload, ignoring every other line."""
 
@@ -176,16 +161,6 @@ def data_lines(chunk: bytes) -> Iterator[bytes]:
         line = line.strip()
         if line.startswith(b"data:"):
             yield line[len(b"data:") :].strip()
-
-
-def chunk(payload: bytes) -> bytes:
-    """Frame one HTTP/1.1 chunked-transfer segment."""
-
-    return b"%x\r\n%s\r\n" % (len(payload), payload)
-
-
-#: Terminator for a chunked HTTP/1.1 body.
-LAST_CHUNK = b"0\r\n\r\n"
 
 
 def complete_events(buffer: bytes) -> tuple[list[bytes], bytes]:
@@ -244,135 +219,14 @@ class ResponseUsage:
         return self.usage
 
 
-def relay(
-    source,
-    sink,
-    *,
-    directory: Path | None = None,
-    content_type: str = "text/event-stream",
-) -> None:
-    """Forward a chunked response and record its usage without buffering the body."""
-
-    collector = ResponseUsage(content_type)
-    for data in iter(lambda: source.read(STREAM_CHUNK_SIZE), b""):
-        sink.write(chunk(data))
-        sink.flush()
-        collector.feed(data)
-    if usage := collector.finish():
-        record("api_response", directory=directory, **usage)
-    sink.write(LAST_CHUNK)
-    sink.flush()
-
-
-def handler_for(upstream: str, directory: Path | None = None):
-    """Build a request handler forwarding to `upstream`, e.g. https://host/api/v1."""
-
-    class Proxy(BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
-
-        def log_message(self, *args):  # keep the default access log quiet
-            pass
-
-        def forward(self) -> None:
-            length = int(self.headers.get("Content-Length") or 0)
-            body = self.rfile.read(length) if length else None
-            headers = {
-                name: value
-                for name, value in self.headers.items()
-                if name.lower() not in HOP_BY_HOP
-            }
-            path = self.path if self.path.startswith("/") else "/" + self.path
-            request = Request(
-                upstream.rstrip("/") + path,
-                data=body,
-                headers=headers,
-                method=self.command,
-            )
-            try:
-                with urlopen(request, timeout=None) as response:
-                    # Upstream framing headers are dropped above, so the body is
-                    # re-framed here; every response to the client is chunked.
-                    self.send_response(response.status)
-                    for name, value in response.headers.items():
-                        if name.lower() not in HOP_BY_HOP:
-                            self.send_header(name, value)
-                    self.send_header("Transfer-Encoding", "chunked")
-                    self.end_headers()
-                    relay(response, self.wfile, directory=directory,
-                          content_type=response.headers.get("Content-Type", ""))
-            except HTTPError as error:
-                payload = error.read()
-                self.send_response(error.code)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-            except Exception as error:  # noqa: BLE001 - report upstream failures
-                record("api_proxy_error", directory=directory, error=repr(error))
-                payload = to_json({"error": {"message": str(error)}}, indent=None).encode()
-                try:
-                    self.send_response(HTTPStatus.BAD_GATEWAY)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(payload)))
-                    self.end_headers()
-                    self.wfile.write(payload)
-                except Exception:  # noqa: BLE001
-                    pass
-
-        do_GET = forward
-        do_POST = forward
-        do_DELETE = forward
-
-    return Proxy
-
-
-class UsageProxy:
-    """Serve `upstream` on a local port, recording each round trip's usage.
-
-    `directory` pins the target explicitly. Without it the proxy would fall back
-    to the configured directory, which only works when the caller and the process
-    serving requests share one environment; a proxy started to serve another
-    process's runs should name its directory instead.
-    """
-
-    def __init__(
-        self,
-        upstream: str,
-        host: str = "127.0.0.1",
-        port: int = 0,
-        *,
-        directory: Path | None = None,
-    ):
-        handler = handler_for(upstream, directory)
-        self.server = ThreadingHTTPServer((host, port), handler)
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-
-    @property
-    def url(self) -> str:
-        host, port = self.server.server_address[:2]
-        return f"http://{host}:{port}"
-
-    def __enter__(self) -> UsageProxy:
-        self.thread.start()
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=5)
-
-
 __all__ = [
     "LOG_ENV",
     "LOG_FILE",
-    "UsageProxy",
-    "handler_for",
     "kernel_fields",
     "log_dir",
     "measurement_fields",
     "now",
     "observed",
     "record",
-    "relay",
     "usage_from_event",
 ]

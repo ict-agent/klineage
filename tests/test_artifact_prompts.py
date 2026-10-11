@@ -44,10 +44,11 @@ class ArtifactPromptTests(unittest.TestCase):
                 self.assertNotIn("verifier", prompt.lower())
                 self.assertNotIn("verify_", prompt)
                 self.assertNotIn("harnessuate", prompt)
+                self.assertNotIn("workloads.Read", prompt)
 
     def test_generation_problem_input(self):
         prompt = render_prompt("generation", problem=load_problem(kernel()))
-        self.assertIn("reference=None", prompt)
+        self.assertIn("klineage.evaluate(", prompt)
         for unrelated in (
             "Current kernel:", "Memory:", "reference=current_kernel",
             "For edits, preserve", "For an unchanged result",
@@ -58,9 +59,8 @@ class ArtifactPromptTests(unittest.TestCase):
     def test_generation_python_entry(self):
         problem = load_problem(kernel()).replace(language="python")
         prompt = render_prompt("generation", problem=problem)
-        self.assertIn('language="python"', prompt)
-        self.assertIn("Define a Python host callable", prompt)
-        self.assertIn("kernel_layouts", prompt)
+        self.assertIn("Python host entries", prompt)
+        self.assertIn("kernel_layouts(backend.kernel_type)", prompt)
         self.assertNotIn("Retain the configured callable", prompt)
         self.assertNotIn("native language", prompt)
 
@@ -110,7 +110,7 @@ entry_point = "main.py::run"
                             if stage == "apply" else {"input_kernel": value}
                         )
                         prompt = render_prompt(stage, **context)
-                        self.assertIn("Retain the configured callable", prompt)
+                        self.assertIn("kernel_layouts(backend.kernel_type)", prompt)
 
     def test_missing_kernel_path_renders(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -118,11 +118,27 @@ entry_point = "main.py::run"
                 "apply", current_kernel=str(Path(temporary) / "missing"),
                 memory=None, exclude_skills=(),
             )
-        self.assertIn("native skill matching", prompt)
+        self.assertIn("get_backend(problem.language, problem.platform)", prompt)
 
-    def test_kernel_example_runs(self):
-        prompt = render_prompt("backend", target_language="cuda")
-        self.run_service_examples(prompt)
+    def test_backend_example_runs(self):
+        prompt = render_prompt("backend")
+        examples = re.findall(r"```python\n(.*?)\n```", prompt, re.DOTALL)
+        self.assertEqual(len(examples), 1)
+        problem = load_problem(kernel())
+        scope = {}
+        with (
+            patch("klineage.problem", return_value=problem),
+            patch("klineage.info", return_value={"device": "evaluation target"}) as info,
+            patch("klineage.backend.detect_backend", side_effect=AssertionError("local device probe")),
+            patch("builtins.print") as display,
+        ):
+            exec(examples[0], scope)
+        backend = get_backend(problem.language, problem.platform)
+        self.assertIs(scope["backend"], backend)
+        info.assert_called_once_with()
+        display.assert_any_call(info.return_value)
+        display.assert_any_call(raw_text(backend.kernel_type.kernel_spec()))
+        display.assert_any_call(backend.skill_root / "SKILL.md")
 
     def test_cuda_skill_example(self):
         document = (get_backend("cuda").skill_root / "cuda.md").read_text()

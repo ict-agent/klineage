@@ -9,10 +9,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from klineage.errors import ActionError
-from klineage.tools import agent_function
 
 
-@agent_function
 def stage_repository(
     repo: str | os.PathLike[str],
     destination: Path,

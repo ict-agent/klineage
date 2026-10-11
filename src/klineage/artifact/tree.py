@@ -13,7 +13,6 @@ from typing import Any, ClassVar
 
 from klineage.errors import StructuredOutputError
 from klineage.serialization import from_json, raw_bytes, to_json
-from klineage.tools import agent_function
 
 ROOT_NAME = "."
 ACTION_PREFIX = "action."
@@ -427,7 +426,6 @@ def capture(path: Path, mode: FileMode = FileMode.TEXT) -> Node:
 
 
 
-@agent_function
 def save_artifact(artifact: Artifact, path: Path) -> Path:
     """Atomically write an artifact's JSON representation to an explicit file.
 
@@ -456,7 +454,6 @@ def save_artifact(artifact: Artifact, path: Path) -> Path:
     return path
 
 
-@agent_function
 def load_artifact(path: Path, artifact_type: type[Artifact] = Artifact) -> Artifact:
     """Load JSON or directory files as an explicitly selected Artifact class.
 
@@ -493,7 +490,6 @@ SOURCE_BYTE_LIMIT = 16 * 1024 * 1024
 SOURCE_FILE_LIMIT = 1024
 
 
-@agent_function
 def read_source_tree(directory: Path, label: str) -> dict[str, str]:
     """Read exact bundle text; reject links, binary files and oversized bundles."""
     directory = Path(directory).expanduser().absolute()

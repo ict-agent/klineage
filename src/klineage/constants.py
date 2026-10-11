@@ -58,18 +58,9 @@ CODEX_SKILL_HASH_LENGTH = 12
 BUILD_DIRECTORY = Path("build")
 #: Workspace instruction files; a nonempty override takes precedence.
 AGENT_FILES = ("workspace/AGENTS.md", "workspace/AGENTS.override.md")
-#: Modules defining functions for the generated API catalog.
-AGENT_MODULES = (
-    "klineage.backend",
-    "klineage.artifact",
-    "klineage.harness",
-    "klineage.tools",
-    "klineage.server",
-)
-#: Start marker for generated agent function documentation.
-FUNCTION_START = "<!-- klineage:agent-functions:start -->"
-#: End marker for generated agent function documentation.
-FUNCTION_END = "<!-- klineage:agent-functions:end -->"
+#: Stable delimiters used to refresh instructions in existing workspaces.
+AGENT_DOCS_START = "<!-- klineage:agent-functions:start -->"
+AGENT_DOCS_END = "<!-- klineage:agent-functions:end -->"
 #: Default retry limit after an action's first attempt.
 MAX_RETRIES = 3
 #: Default timeout for each agent attempt, in seconds.

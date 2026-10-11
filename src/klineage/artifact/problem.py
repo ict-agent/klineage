@@ -24,7 +24,6 @@ from klineage.artifact.tree import (
 )
 from klineage.constants import KERNEL_METADATA, MODULE_HASH_LENGTH
 from klineage.serialization import from_json, raw_text, restore
-from klineage.tools import agent_function
 from klineage.utils import json_mapping, mapping, nonempty
 
 if TYPE_CHECKING:
@@ -289,7 +288,6 @@ def trace_workload(inputs: Mapping[str, Any], path: Path) -> dict[str, Any]:
     }
 
 
-@agent_function
 def load_problem(
     value: str | Path | FileRef | Artifact | Mapping,
     *,
@@ -429,7 +427,6 @@ class Problem(Artifact):
     artifact_kind = ArtifactKind.PROBLEM
 
     @classmethod
-    @agent_function
     def problem_spec(cls) -> Node:
         """Return the base problem layout; workloads determine fixed-input files.
 

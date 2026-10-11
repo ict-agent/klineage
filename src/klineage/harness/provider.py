@@ -5,11 +5,9 @@ from __future__ import annotations
 import json
 import os
 import tomllib
-from contextlib import contextmanager
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from klineage.harness.logging import UsageProxy
 from klineage.utils import safe_file
 
 from .codex_runner import CodexRunner, ReasoningEffort
@@ -235,13 +233,3 @@ def runner_class(provider: Provider, effort: ReasoningEffort):
             )
 
     return ProviderRunner
-
-
-@contextmanager
-def usage_proxy(provider: Provider, directory: Path | None = None):
-    """Optionally record model usage without modifying process credentials."""
-    if directory is None:
-        yield provider
-        return
-    with UsageProxy(provider.base_url, directory=directory) as proxy:
-        yield replace(provider, base_url=proxy.url)

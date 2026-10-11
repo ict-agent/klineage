@@ -1,24 +1,20 @@
-"""Tests for the measurement timeline and its usage-recording proxy."""
+"""Tests for the measurement timeline and streamed model usage."""
 
 from __future__ import annotations
 
 import json
 import os
 import tempfile
-import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
-from urllib.request import Request, urlopen
 
 from klineage.serialization import raw_text
 from klineage.harness.logging import (
     LOG_ENV,
     USAGE_BUFFER_BYTES,
     ResponseUsage,
-    UsageProxy,
     complete_events,
     observed,
     record,
@@ -44,23 +40,6 @@ def completed_frame(identifier: str = "r1") -> bytes:
         },
     }
     return f"event: response.completed\ndata: {json.dumps(payload)}\n\n".encode()
-
-
-class FakeUpstream(BaseHTTPRequestHandler):
-    """Answer every request with one completed response frame."""
-
-    protocol_version = "HTTP/1.1"
-    body = b""
-
-    def log_message(self, *args):
-        pass
-
-    def do_POST(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Content-Length", str(len(self.body)))
-        self.end_headers()
-        self.wfile.write(self.body)
 
 
 def events(directory: Path) -> list[dict]:
@@ -291,51 +270,6 @@ class LoggingTests(unittest.TestCase):
         collector.feed(b"x" * (USAGE_BUFFER_BYTES + 1))
         self.assertEqual(collector.finish(), {})
         self.assertLessEqual(len(collector.pending), USAGE_BUFFER_BYTES)
-
-
-class UsageProxyTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
-        FakeUpstream.body = completed_frame()
-        self.upstream = ThreadingHTTPServer(("127.0.0.1", 0), FakeUpstream)
-        threading.Thread(target=self.upstream.serve_forever, daemon=True).start()
-        self.url = f"http://127.0.0.1:{self.upstream.server_address[1]}"
-
-    def tearDown(self):
-        self.upstream.shutdown()
-        self.upstream.server_close()
-        self.temp.cleanup()
-
-    def test_proxy_forwards_and_records_usage(self):
-        target = self.root / "stats"
-        with UsageProxy(self.url, directory=target) as proxy:
-            body = urlopen(
-                Request(proxy.url + "/v1/responses", data=b"{}"), timeout=10
-            ).read()
-        # The client sees the upstream frame, re-framed as chunked.
-        self.assertIn(b"response.completed", body)
-        [entry] = events(target)
-        self.assertEqual(entry["event"], "api_response")
-        self.assertEqual(entry["total_tokens"], 12)
-
-    def test_proxy_records_into_the_named_directory_only(self):
-        named, untouched = self.root / "named", self.root / "untouched"
-        with UsageProxy(self.url, directory=named) as proxy:
-            urlopen(Request(proxy.url + "/v1/responses", data=b"{}"), timeout=10).read()
-        self.assertTrue((named / "stats.jsonl").is_file())
-        self.assertFalse(untouched.exists())
-
-    def test_proxy_log_link_no_write(self):
-        target = self.root / "stats"
-        target.mkdir()
-        outside = self.root / "host-file"
-        outside.write_text("keep host content")
-        with UsageProxy(self.url, directory=target) as proxy:
-            (target / "stats.jsonl").symlink_to(outside)
-            body = urlopen(Request(proxy.url + "/v1/responses", data=b"{}"), timeout=10).read()
-        self.assertIn(b"response.completed", body)
-        self.assertEqual(outside.read_text(), "keep host content")
 
 
 if __name__ == "__main__":

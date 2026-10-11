@@ -174,6 +174,8 @@ class ActionArtifactTests(unittest.TestCase):
         result = Apply(self.current, workdir=self.work, max_retries=1).run()
         self.assert_kernel_result(result.part("kernel", Kernel), self.current)
         self.assertIn("Previous attempt failed", calls[1])
+        self.assertIn("klineage.result(job_id)", calls[1])
+        self.assertNotIn("client.result", calls[1])
 
     def test_output_retry_resumes(self):
         trace = self.work / "trace.jsonl"

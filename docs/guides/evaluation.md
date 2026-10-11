@@ -203,7 +203,7 @@ that budget. A client disconnect does not cancel an active job.
 
 Agent attempts and evaluation jobs have separate time limits. Controllers with
 a total budget must track the remaining time across retries and requests.
-`Client.info()` reports the configured worker's device information; restart the
+`klineage.info()` reports the configured worker's device information; restart the
 service after changing its runtime configuration.
 
 ### Model access

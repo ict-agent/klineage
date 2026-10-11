@@ -3,8 +3,6 @@
 import os
 from inspect import isabstract
 
-from klineage.tools import agent_function
-
 from .ascend import AscendBackend
 from .cuda import CudaBackend
 from .hip import HipBackend
@@ -73,7 +71,6 @@ def get_timing_backend(name: str) -> Backend:
     raise ValueError(f"unsupported timing backend: {name}")
 
 
-@agent_function
 def get_backend(language: str, platform: str = "") -> Backend:
     """Select a registered backend without probing device availability.
 
@@ -105,7 +102,6 @@ def get_backend(language: str, platform: str = "") -> Backend:
     raise ValueError(f"unsupported kernel language {language!r}")
 
 
-@agent_function
 def detect_backend() -> Backend:
     """Probe available backends, honoring KLINEAGE_BACKEND when set.
 

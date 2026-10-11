@@ -20,7 +20,6 @@ from klineage.artifact import (
 )
 from klineage.artifact.kernel import snapshot_kernel
 from klineage.serialization import raw_text, restore, to_json
-from klineage.tools import agent_function
 from klineage.utils import DirectoryMode, safe_directory
 
 from .protocol import (
@@ -145,7 +144,6 @@ class Client:
         finally:
             connection.close()
 
-    @agent_function
     def info(self):
         """Read the backend, cached worker device metadata and registered tasks."""
         return self.request("GET", "/info")
@@ -162,7 +160,6 @@ class Client:
             raise ValueError("problem_id is required when the service does not expose exactly one problem")
         return identifier(problems[0])
 
-    @agent_function
     def problem(self, problem_id=None) -> Problem:
         """Read a registered problem without downloading fixed input binaries.
 
@@ -190,7 +187,6 @@ class Client:
             raise ValueError("result belongs to another problem")
         return save_result(result, work)
 
-    @agent_function
     def evaluate(
         self, kernel: Artifact | Path, work: Path, *, reference=None, timeout=None,
         problem_id: str | None = None,
@@ -241,7 +237,6 @@ class Client:
         )
         return self.local_result(payload, work, problem_id=selected)
 
-    @agent_function
     def result(self, job_id: str, *, work: Path | None = None) -> Evaluation:
         """Fetch a recorded result and restore its local handoff files.
 

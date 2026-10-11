@@ -115,7 +115,7 @@ other runtimes and [Command-line tools](guides/cli.md) for options.
   repository and source path. See [Command-line tools](guides/cli.md).
 - **Optimize an existing Kernel:** use `klineage-optimize`, optionally supplying
   an extracted memory directory.
-- **Compose actions in Python:** call `Init`, `Decompose` and `Apply` directly;
+- **Compose actions in Python:** call `Generation`, `Init`, `Decompose` and `Apply`;
   see [Action Primitive](concepts/actions.md).
 - **Author and evaluate a Kernel:** follow the
   [CUDA file layout](concepts/artifacts.md) and submit the completed directory

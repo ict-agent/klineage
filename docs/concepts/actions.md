@@ -29,7 +29,7 @@ agent read-only access to the expert repository. Decompose turns
 implementation knowledge into a recipe. Apply can use those recipes, optimize
 without memory, or start from an empty submission.
 
-Every kernel keeps the complete problem and workload set. The evaluation service
+Every kernel references the complete problem and workload set. The evaluation service
 checks every workload. Apply asks for an improvement on at least one workload
 while preserving the others' performance gates; if it finds none, it returns the
 unchanged implementation. Decompose can return a slower kernel after removing

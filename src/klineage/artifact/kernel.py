@@ -37,7 +37,6 @@ from klineage.constants import (
     VERSIONS_DIRECTORY,
 )
 from klineage.serialization import raw_bytes, raw_text, restore
-from klineage.tools import agent_function
 from klineage.utils import DirectoryMode, operation_id, safe_directory, safe_file
 
 VALIDATION_GATES = ("compile_passed", "correctness_passed", "profile_passed")
@@ -228,7 +227,6 @@ class Kernel(Artifact, ABC):
 
     @classmethod
     @abstractmethod
-    @agent_function
     def kernel_spec(cls) -> Node:
         """Return this backend's kernel file structure, constraints and examples.
 
@@ -238,7 +236,6 @@ class Kernel(Artifact, ABC):
         raise NotImplementedError
 
     @classmethod
-    @agent_function
     def load_kernel(
         cls, build_root: Path = CURRENT_KERNEL_DIRECTORY, *, include_paths: Sequence[Path] = ()
     ) -> Kernel:

@@ -100,37 +100,34 @@ class ServerCampaignTests(unittest.TestCase):
             device_node=[],
         )
 
+        provider = object()
         with (
             patch.object(
                 server_campaign,
                 "server_process",
                 return_value=nullcontext((client, 123)),
             ),
-            patch.object(server_campaign, "resolve_provider", return_value=object()),
-            patch.object(
-                server_campaign, "usage_proxy", return_value=nullcontext(object())
-            ),
-            patch.object(server_campaign, "runner_class", return_value=Runner),
-            patch.object(server_campaign, "Apply", return_value=action) as apply,
+            patch.object(server_campaign, "resolve_provider", return_value=provider),
+            patch.object(server_campaign, "runner_class", return_value=Runner) as runner,
+            patch.object(server_campaign, "Generation", return_value=action) as generation,
             patch.object(server_campaign.signal, "signal"),
             redirect_stdout(io.StringIO()),
             self.assertRaisesRegex(RuntimeError, "stop-before-generation"),
         ):
             server_campaign.run(args)
-        self.assertIs(apply.call_args.kwargs["agent"], agent)
+        generation.assert_called_once()
+        self.assertIs(generation.call_args.args[0], problem)
+        self.assertIs(generation.call_args.kwargs["agent"], agent)
+        runner.assert_called_once_with(provider, "high")
         self.assertIs(action.runner.options["agent"], agent)
         state = json.loads(
             next(self.root.glob("sandbox-campaign-*/status.json")).read_text()
         )
         self.assertEqual(state["agent_python"], str(agent.python))
         self.assertEqual(state["agent_device_nodes"], ["/dev/null"])
-        self.assertIn(str(agent.python), action.prompt)
-        self.assertIn("ncu", action.prompt)
-        self.assertIn("klineage.evaluate", action.prompt)
-        self.assertIn("never overlap", action.prompt)
-        self.assertIn("workspace/AGENTS.md", action.prompt)
-        self.assertIn("workspace/.agents/skills/", action.prompt)
-        self.assertIn("source backups, binaries and logs under workspace/", action.prompt)
+        self.assertIn(state["generation_deadline"], action.prompt)
+        self.assertIn(f"reserves {server_campaign.AUDIT_RESERVE} seconds", action.prompt)
+        self.assertIn("independent service audit", action.prompt)
 
 
 if __name__ == "__main__":

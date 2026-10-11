@@ -20,7 +20,7 @@ path and hash.
 ## Problems
 
 A Problem holds one definition and its workloads. Load a directory with
-`load_problem`, or obtain the registered Problem through `Client.problem()`.
+`load_problem`, or obtain the registered Problem through `klineage.problem()`.
 
 ::: klineage.artifact.Problem
 

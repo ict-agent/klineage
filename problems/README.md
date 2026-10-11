@@ -62,8 +62,8 @@ print(problem.name, len(problem.workloads))
 For the [evaluation service](../docs/guides/evaluation.md), set
 `KLINEAGE_PROBLEM=problems` to register the collection, or pass
 `--problem problems/gemm` to override it with one problem. IDs come from each
-Problem's name, not its directory name. Agents discover them with
-`Client().info()["problems"]` and select `Client().problem(problem_id)`.
+Problem's name, not its directory name. With `KLINEAGE_SERVER` configured, agents
+discover them with `klineage.info()["problems"]` and select `klineage.problem(problem_id)`.
 Pass the same problem directory to `Init` or `init_memory`, using the matching registered
 problem ID.
 Evaluation runs every registered workload in a separate worker under one shared

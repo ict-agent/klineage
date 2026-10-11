@@ -1,12 +1,12 @@
 # KLineage
 
-KLineage supplies the problem, evaluates kernels, and records each candidate.
-Write the task's implementation and use its measurements to choose the result.
+KLineage is an agentic harness for writing device kernels across different accelerators.
+It provides basic components for artifact organization, kernel evaluation and backend hints.
 
 ## Artifacts and backends
 
 Artifacts are file trees: a Problem holds a definition and workloads; a Kernel
-holds metadata, configuration and sources. `find(name)` searches a tree by exact
+holds metadata, build configuration and sources. `find(name)` searches a tree by exact
 name, returning one Node, a list of matches, or `[]`. Use `raw_text` to read a
 file or display an annotated layout.
 
@@ -25,12 +25,10 @@ print(raw_text(Problem.problem_spec()))
 print(raw_text(backend.kernel_type.kernel_spec()))
 ```
 
-For alternate entry layouts, use `kernel_layouts(backend.kernel_type)` from
-`klineage.artifact`. Skill and action layouts are `SkillCard.schema` from
-`klineage.memory` and `action_spec(stage)` from `klineage.prompts`.
-Read relevant guidance under `workspace/.agents/skills/` when needed.
+Use `help(klineage.evaluate)` or `help(backend.kernel_type.load_kernel)` for
+signatures and docstrings. Read relevant guidance under `workspace/.agents/skills/`.
 
-## Evaluate
+## Evaluate kernel artifact
 
 From the run directory, call `klineage.evaluate(Path("current_kernel"))`, importing
 `Path` from `pathlib`. Supply `reference=...` when the task requests paired timing.
@@ -39,8 +37,7 @@ The returned Evaluation contains `accepted`, per-workload results in
 Use `klineage.result(best_reply)` to append an earlier accepted job as the final
 version. Keep saved versions unchanged; the action returns the last version.
 
-Use available tools such as `ncu` for local diagnostics. Run diagnostics and
-evaluation separately when they share a device.
+Use available profiling tools such as `ncu` for detailed diagnostics.
 
 ## Files
 

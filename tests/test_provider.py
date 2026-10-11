@@ -11,7 +11,6 @@ from klineage.harness.provider import (
     Provider,
     resolve_provider,
     runner_class,
-    usage_proxy,
 )
 
 
@@ -32,23 +31,9 @@ class ProviderTests(unittest.TestCase):
             provider = resolve_provider("model", "https://example.test/v1", key_env="TEST_KEY")
             self.assertEqual(provider.key, "environment")
 
-    def test_proxy_is_optional(self):
-        provider = Provider("model", "https://example.test/v1", "TEST_KEY", "private")
-        with patch("klineage.harness.provider.UsageProxy") as proxy:
-            with usage_proxy(provider) as selected:
-                self.assertIs(selected, provider)
-            proxy.assert_not_called()
-
     def test_key_not_in_repr(self):
         provider = Provider("model", "https://example.test/v1", "TEST_KEY", "private-value")
         self.assertNotIn("private-value", repr(provider))
-
-    def test_proxy_keeps_environment(self):
-        provider = Provider("model", "https://example.test/v1", "TEST_KEY", "private-value")
-        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {"TEST_KEY": "existing"}):
-            with usage_proxy(provider, Path(temporary)):
-                self.assertEqual(os.environ["TEST_KEY"], "existing")
-            self.assertEqual(os.environ["TEST_KEY"], "existing")
 
     def test_catalog_symlink_rejected(self):
         provider = Provider("DeepSeek-V4.1-Flash", "https://example.test/v1", "TEST_KEY", "secret")
