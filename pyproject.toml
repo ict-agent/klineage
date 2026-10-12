@@ -58,7 +58,7 @@ docs = [
 ]
 
 [project.scripts]
-klineage-generation = "klineage.generation:main"
+klineage-generation = "klineage.cli.generation:main"
 klineage-init-memory = "klineage.cli.init_memory:main"
 klineage-optimize = "klineage.cli.optimize:main"
 klineage-server = "klineage.server.__main__:main"

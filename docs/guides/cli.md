@@ -48,7 +48,7 @@ A successful run prints Kernel JSON. Complete versions, measurements and agent
 traces stay in the work directory; see the
 [result layout](../getting-started.md#generate-a-kernel-using-klineage).
 Python diagnostics go to stderr. The equivalent module command is
-`python -m klineage.generation PROBLEM_DIR`.
+`python -m klineage.cli.generation PROBLEM_DIR`.
 
 ## Extract skill memory
 

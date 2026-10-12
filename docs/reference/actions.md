@@ -10,7 +10,7 @@ Use `generate` to create a kernel from a problem directory. Use `Generation`,
 service. It invokes `Generation` with the loaded Problem. The
 [generation CLI](../guides/cli.md#generate-a-kernel) exposes the same workflow.
 
-::: klineage.generation.generate
+::: klineage.cli.generation.generate
 
 ## Compose actions
 
