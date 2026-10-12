@@ -15,7 +15,7 @@ service. It invokes `Generation` with the loaded Problem. The
 ## Compose actions
 
 Each successful `run()` returns an Artifact containing the kernel and any skill
-card or records. The convenience functions construct and run one action.
+card or records. Construct an action and call `.run()`.
 `KLINEAGE_RUNNER` selects Codex or Claude Code for every action; see
 [model configuration](../getting-started.md#configure-model-access).
 
@@ -30,11 +30,5 @@ card or records. The convenience functions construct and run one action.
 ::: klineage.action.Decompose
 
 ::: klineage.action.Apply
-
-::: klineage.action.init
-
-::: klineage.action.decompose
-
-::: klineage.action.apply
 
 ::: klineage.action.same_implementation

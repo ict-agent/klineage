@@ -13,29 +13,6 @@ from klineage.prompts import render_prompt
 from klineage.utils import new_workdir, optional_directory, string_tuple
 
 
-def apply(
-    current_kernel: Artifact | str | os.PathLike[str],
-    *,
-    memory: str | os.PathLike[str] | None = None,
-    exclude_skills: Sequence[str] = (),
-    agent=None,
-) -> Artifact:
-    """Run Apply with default workspace, retry, and evaluation settings.
-
-    Args:
-        current_kernel: Kernel or action artifact, serialized artifact path,
-            kernel directory, or previous action directory.
-        memory: Optional directory of skill cards.
-        exclude_skills: Skill identifiers omitted from mounted memory.
-        agent (klineage.harness.AgentRuntime | None): Optional sandbox runtime.
-
-    Returns:
-        An ``action.apply`` artifact containing the evaluated kernel and records.
-    """
-    action = Apply(current_kernel, memory=memory, exclude_skills=exclude_skills, agent=agent)
-    return action.run()
-
-
 class Apply(Action):
     """Optimize a kernel, optionally guided by read-only skill memory.
 
@@ -106,4 +83,4 @@ class Apply(Action):
         return super().run()
 
 
-__all__ = ["Apply", "apply"]
+__all__ = ["Apply"]

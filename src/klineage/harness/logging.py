@@ -93,13 +93,9 @@ def measurement_fields(result: Any) -> dict[str, Any]:
     return fields
 
 
-def usage_from_event(payload: bytes) -> dict[str, Any] | None:
-    """Read usage from a completed SSE event or a non-streamed response."""
+def response_usage(event: dict[str, Any]) -> dict[str, Any] | None:
+    """Read usage from a parsed Responses event or JSON response."""
 
-    try:
-        event = json.loads(payload)
-    except (ValueError, TypeError, RecursionError):
-        return None
     if not isinstance(event, dict) or event.get("type") not in (None, COMPLETED):
         return None
     response = event.get("response") if event.get("type") == COMPLETED else event
@@ -191,7 +187,7 @@ class ResponseUsage:
             return
         kind = event.get("type")
         if kind not in ("message", "message_start", "message_delta"):
-            self.usage = usage_from_event(payload) or self.usage
+            self.usage = response_usage(event) or self.usage
             return
         message = event.get("message", {}) if kind == "message_start" else event
         if not isinstance(message, dict) or not isinstance(message.get("usage"), dict):
@@ -231,5 +227,4 @@ __all__ = [
     "measurement_fields",
     "now",
     "record",
-    "usage_from_event",
 ]

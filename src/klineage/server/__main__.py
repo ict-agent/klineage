@@ -31,7 +31,7 @@ def main():
         help="Problem directory or collection; defaults to KLINEAGE_PROBLEM",
     )
     parser.add_argument(
-        "--server", "--listen", dest="listen", metavar="ENDPOINT",
+        "--server", metavar="ENDPOINT",
         default="http://127.0.0.1:0", help="Evaluation service listener",
     )
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
@@ -93,7 +93,7 @@ def main():
     stopped = threading.Event()
     for event in (signal.SIGTERM, signal.SIGINT):
         signal.signal(event, lambda *_: stopped.set())
-    with service.start(args.listen) as server:
+    with service.start(args.server) as server:
         ready = {
             "endpoint": server.endpoint,
             "pid": os.getpid(),

@@ -184,8 +184,8 @@ def anthropic_settings(
     if not isinstance(endpoint, str) or not endpoint.strip():
         raise ValueError("api_base_url must be nonempty text")
     endpoint = endpoint.strip()
-    key_env = api_key_env if api_key_env is not None else os.environ.get("KLINEAGE_API_KEY_ENV")
-    if not key_env:
+    key_env = api_key_env if api_key_env is not None else os.environ.get("KLINEAGE_API_KEY_ENV") or None
+    if key_env is None:
         if endpoint.rstrip("/") != configured.rstrip("/") and api_key is None:
             raise ValueError("a different endpoint requires an explicit api_key or api_key_env")
         key_env = ANTHROPIC_TOKEN_ENV if os.environ.get(ANTHROPIC_TOKEN_ENV) else ANTHROPIC_KEY_ENV
@@ -194,8 +194,8 @@ def anthropic_settings(
     key = api_key if api_key is not None else os.environ.get(key_env)
     if not key:
         raise ValueError(f"No API key: set {key_env} on the host")
-    selected = auth_mode or os.environ.get("KLINEAGE_AUTH_MODE")
-    auth = AnthropicAuth(selected) if selected else (
+    selected = auth_mode if auth_mode is not None else os.environ.get("KLINEAGE_AUTH_MODE") or None
+    auth = AnthropicAuth(selected) if selected is not None else (
         AnthropicAuth.BEARER if key_env == ANTHROPIC_TOKEN_ENV else AnthropicAuth.API_KEY
     )
     model = model if model is not None else os.environ.get("KLINEAGE_MODEL") or os.environ.get("ANTHROPIC_MODEL")

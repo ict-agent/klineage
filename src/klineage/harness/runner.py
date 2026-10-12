@@ -24,11 +24,10 @@ from klineage.constants import (
     STATE_DIRECTORY,
     WORK_DIRECTORY,
 )
-from klineage.harness.codex_skills import render_memory
+from klineage.harness.guidance import render_memory, write_agent_docs
 from klineage.harness.logging import LOG_ENV, LOG_FILE
 from klineage.harness.process import PROCESS_SCOPE_ENV, stop_process
 from klineage.harness.sandbox import AgentRuntime, Sandbox, runtime_paths
-from klineage.tools import write_agent_docs
 from klineage.utils import DirectoryMode, operation_id, safe_directory, safe_file
 
 RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")

@@ -48,12 +48,12 @@ MEMORY_DIR = "memory"
 SKILL_DIRECTORY = WORK_DIRECTORY / ".agents" / "skills"
 #: Generated native memory skills relative to the agent workspace.
 MEMORY_DIRECTORY = SKILL_DIRECTORY / MEMORY_DIR
-#: Maximum name length in Codex SKILL.md frontmatter.
-CODEX_SKILL_NAME_LIMIT = 64
+#: Maximum name length in agent skill frontmatter.
+SKILL_NAME_LIMIT = 64
 #: Maximum description length in native skill frontmatter.
-CODEX_SKILL_DESCRIPTION_LIMIT = 1024
+SKILL_DESCRIPTION_LIMIT = 1024
 #: Digest suffix distinguishing normalized or shortened skill IDs.
-CODEX_SKILL_HASH_LENGTH = 12
+SKILL_HASH_LENGTH = 12
 #: Build artifacts relative to the working directory.
 BUILD_DIRECTORY = Path("build")
 #: Workspace instruction files; a nonempty override takes precedence.

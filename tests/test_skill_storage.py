@@ -137,3 +137,22 @@ class RetrievalTests(unittest.TestCase):
         ):
             with self.subTest(problem=problem):
                 self.assertEqual(retrieve((self.card,), problem), ())
+
+
+class MemoryPathTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.kernel = kernel()
+
+    def test_retrieve_preserves_order(self):
+        first, last = skill("first"), skill("last")
+        path = save_skill(last, self.root / "saved.md")
+        actual = retrieve((first, path), self.kernel)
+        self.assertEqual(actual, (first, last))
+
+    def test_retrieve_directory(self):
+        first, last = skill("first"), skill("last")
+        save_skill(last, self.root / "z/SKILL.md")
+        save_skill(first, self.root / "a/nested/SKILL.md")
+        save_skill(skill("unlisted"), self.root / "notes.md")
+        self.assertEqual(retrieve(self.root, self.kernel), (first, last))

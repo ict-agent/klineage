@@ -171,9 +171,11 @@ A `SkillCard` stores a Markdown recipe in `SKILL.md`, with four YAML fields:
 `skill_id`, `intent`, `preconditions` and `scope`. Keep cards in a memory directory
 and use `save_skill` and `load_skill` to write or read them.
 
-Apply receives matching cards read-only. Retrieval filters by operator, language
-and platform, preserving memory order; `*` matches any value. The agent checks
-each recipe's prerequisites against the current kernel before applying it.
+Apply mounts supplied cards read-only, omitting explicitly excluded IDs. It
+does not prefilter by scope; the agent checks scope and prerequisites before
+using a recipe. Controllers can use `klineage.memory.retrieve(memory, target)`
+to filter stored cards by operator, language and platform. Retrieval preserves
+order, and `*` matches any value.
 
 See the [Action API](../reference/actions.md) for action options and the
 [Skill memory API](../reference/memory.md) for card formats and retrieval.

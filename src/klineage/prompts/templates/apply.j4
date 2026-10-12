@@ -31,7 +31,8 @@ Read workspace/.agents/skills/bench/SKILL.md for correctness and performance mea
    For an action directory, load its last numbered versions/<N> directory.
    Inspect the Kernel's complete
    problem, all workloads, ordered ABI, source bundle, compile_flags and current implementation.
-   Keep this input fixed throughout the round. Upstream artifacts are read-only.
+   For an input with sources, retain it as `reference_kernel` throughout the round.
+   Upstream artifacts are read-only.
 
 {% if use_memory %}
 2. Discover recipes under workspace/.agents/skills/memory. Read relevant SKILL.md bodies,
@@ -44,10 +45,11 @@ Read workspace/.agents/skills/bench/SKILL.md for correctness and performance mea
 
 3. Write trial implementations under current_kernel/submission/ using the target backend's
    bundle format. Preserve metadata.json compile_flags. Submit the current directory
-   with klineage.evaluate(Path("current_kernel"), reference=reference) after edits;
-   compilation, correctness, and timing run on the service. Read reply.diagnostics.
+   with klineage.evaluate(Path("current_kernel"), reference=reference_kernel) after edits
+   when the input has sources; otherwise omit reference.
+   Compilation, correctness, and timing run on the service. Read reply.diagnostics.
 
-4. For an input with sources, evaluate every candidate with reference=current_kernel.
+4. For an input with sources, evaluate every candidate with reference=reference_kernel.
    Require an accepted result across all workloads and a ratio
    reference_latency_ms / latency_ms > 1 for at least one workload for a changed
    output. Read per-UUID results from reply.validation.workloads; every workload

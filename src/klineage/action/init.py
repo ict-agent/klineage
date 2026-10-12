@@ -5,11 +5,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from klineage.artifact import Kernel
 from klineage.action.action import Action
 from klineage.artifact import (
     Artifact,
     ArtifactKind,
+    Kernel,
     Problem,
     load_problem,
     stage_repository,
@@ -19,29 +19,6 @@ from klineage.constants import MAX_RETRIES, TIMEOUT, WORK_DIRECTORY, RunKind
 from klineage.errors import StructuredOutputError
 from klineage.prompts import render_prompt
 from klineage.utils import new_workdir
-
-
-def init(
-    problem: Artifact | str | os.PathLike[str],
-    repo: str | os.PathLike[str],
-    expert_kernel: str | os.PathLike[str],
-    *,
-    agent=None,
-) -> Artifact:
-    """Run Init with default workspace, retry, and evaluation settings.
-
-    Args:
-        problem: Problem artifact, directory, or serialized artifact JSON path.
-        repo: Local repository directory or Git URL.
-        expert_kernel: Expert source path, relative to the staged repository
-            or absolute on the controller.
-        agent (klineage.harness.AgentRuntime | None): Optional sandbox runtime.
-
-    Returns:
-        An ``action.init`` artifact containing the evaluated kernel and records.
-    """
-    action = Init(problem, repo, expert_kernel, agent=agent)
-    return action.run()
 
 
 class Init(Action):
@@ -144,4 +121,4 @@ class Init(Action):
         return result
 
 
-__all__ = ["Init", "init"]
+__all__ = ["Init"]

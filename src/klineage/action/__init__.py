@@ -1,10 +1,10 @@
 """Actions that return typed artifact trees."""
 
 from klineage.action.action import Action, same_implementation
-from klineage.action.apply import Apply, apply
-from klineage.action.decompose import Decompose, decompose
+from klineage.action.apply import Apply
+from klineage.action.decompose import Decompose
 from klineage.action.generation import Generation
-from klineage.action.init import Init, init
+from klineage.action.init import Init
 
 __all__ = [
     "same_implementation",
@@ -13,7 +13,4 @@ __all__ = [
     "Decompose",
     "Generation",
     "Init",
-    "apply",
-    "decompose",
-    "init",
 ]

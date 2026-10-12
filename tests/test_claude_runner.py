@@ -69,7 +69,7 @@ class ClaudeSettingsTests(unittest.TestCase):
             anthropic_settings(api_base_url="https://new.test", api_key_env="MISSING")
 
     def test_invalid_settings(self):
-        for options in ({"api_key_env":"BAD-NAME"}, {"api_base_url":5}, {"api_base_url":""}, {"auth_mode":"unknown"}, {"model":""}):
+        for options in ({"api_key_env":""}, {"auth_mode":""}, {"api_key_env":"BAD-NAME"}, {"api_base_url":5}, {"api_base_url":""}, {"auth_mode":"unknown"}, {"model":""}):
             with self.subTest(options=options), self.assertRaises(ValueError):
                 anthropic_settings(api_key="key", **options)
 

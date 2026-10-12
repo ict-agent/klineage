@@ -45,7 +45,7 @@ Use these options to adjust the service:
 | Option | Purpose |
 | --- | --- |
 | `--problem PATH` | Override `KLINEAGE_PROBLEM`; repeat for several problems or collections |
-| `--server ENDPOINT` | Choose an HTTP or Unix-socket listener; `--listen` is an alias |
+| `--server ENDPOINT` | Choose an HTTP or Unix-socket listener |
 | `--timeout SECONDS` | Limit each evaluation job, including queue time |
 | `--device-node PATH` | Expose a device to workers; repeat for each node |
 | `--read-only PATH` | Mount additional runtime dependencies |

@@ -11,22 +11,6 @@ from klineage.prompts import render_prompt
 from klineage.utils import new_workdir
 
 
-def decompose(input_kernel: Artifact | Path, *, agent=None) -> Artifact:
-    """Run Decompose with default workspace, retry, and evaluation settings.
-
-    Args:
-        input_kernel: Kernel or action artifact, serialized artifact path,
-            kernel directory, or previous action directory.
-        agent (klineage.harness.AgentRuntime | None): Optional sandbox runtime.
-
-    Returns:
-        An ``action.decompose`` artifact with a kernel, available records, and
-        a skill card when the implementation changed.
-    """
-    action = Decompose(input_kernel, agent=agent)
-    return action.run()
-
-
 class Decompose(Action):
     """Request one deoptimization and a recipe for restoring it.
 
@@ -76,4 +60,4 @@ class Decompose(Action):
         )
 
 
-__all__ = ["Decompose", "decompose"]
+__all__ = ["Decompose"]
