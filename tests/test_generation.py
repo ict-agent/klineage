@@ -270,11 +270,6 @@ class GenerationActionTests(unittest.TestCase):
             workdir=self.work, evaluation=self.client, max_retries=0,
         )
 
-    def test_explicit_runner(self):
-        runner = Mock()
-        with patch("klineage.action.action.create_runner", side_effect=AssertionError("unused runner")):
-            action = Generation(self.problem, workdir=self.work, runner=runner)
-        self.assertIs(action.runner, runner)
 
     def test_problem_change_rejected(self):
         changed = make_kernel("other", self.problem.replace(name="other"))

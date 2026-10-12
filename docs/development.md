@@ -18,7 +18,7 @@ Keep implementation beside the component that owns it:
 | `src/klineage/memory/` | Skill cards, storage and retrieval |
 | `src/klineage/cli/` | Command implementations and shared options |
 
-Tests and repository scripts live in `tests/` and `scripts/`. Local experiments
+Tests live in `tests/`. Local experiments
 and generated outputs under `experiment/` are ignored by Git.
 
 ## Build the documentation
@@ -92,35 +92,3 @@ For Ascend, use `KLINEAGE_ASCEND_TESTS=1` and `ASCEND_ARCH`, with
 `KLINEAGE_ASCEND_DEVICE` selecting the sandbox's physical device. New backends
 also need the
 [hardware checks](guides/extending.md#check-the-implementation).
-
-## Run a bounded campaign
-
-`scripts/server_campaign.py` runs generation and an independent service audit
-under one total deadline. It requires GNU `timeout` and a worker environment
-containing KLineage and the chosen backend.
-
-The default model is `DeepSeek-V4.1-Flash` at the configured AIPing endpoint.
-Set `AIPING_API_KEY` on the host, then run from the repository:
-
-```bash
-uv run --no-project --with-editable . python scripts/server_campaign.py \
-  --server-python /opt/device-env/bin/python \
-  --backend cuda --problem problems/fmha \
-  --device-node /dev/nvidia0 --device-node /dev/nvidiactl \
-  --device-node /dev/nvidia-uvm --budget 600
-```
-
-The ten-minute budget includes setup and audit; generation stops two minutes
-before the deadline. Results, traces and source hashes are saved in a fresh
-directory under `agent-workspace/`.
-
-Use `--model`, `--base-url` and `--output` to override defaults, and `--agent-*`
-options to configure local diagnostics. The campaign passes its model explicitly,
-overriding `KLINEAGE_MODEL`. Run the script with `--help` for all options.
-
-For Anthropic campaigns, set `KLINEAGE_RUNNER=claude-code` and
-`AIPING_API_KEY`, then pass `--base-url` and `--model`
-for the Messages gateway. Set `KLINEAGE_AUTH_MODE=bearer` for bearer authentication.
-
-Campaigns use the selected runner directly. Codex context limits come from
-its configuration; the framework does not synthesize a provider model catalog.

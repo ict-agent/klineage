@@ -12,7 +12,6 @@ from .eval import (
     ValidationResult,
 )
 from .runner import (
-    AgentRunner,
     RunnerError,
     RunnerKind,
     RunResult,
@@ -27,7 +26,6 @@ from .timing import (
 
 __all__ = [
     "AgentRuntime",
-    "AgentRunner",
     "CallInputs",
     "CallableKernelEvaluator",
     "ClaudeCodeRunner",

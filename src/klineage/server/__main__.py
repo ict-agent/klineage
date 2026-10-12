@@ -48,7 +48,6 @@ def main():
     parser.add_argument(
         "--env", action="append", default=[], help="Worker environment NAME=VALUE"
     )
-    parser.add_argument("--ready-file", type=Path)
     args = parser.parse_args()
     for name in args.plugin:
         importlib.import_module(name)
@@ -100,10 +99,6 @@ def main():
             "pid": os.getpid(),
             "problems": list(problems),
         }
-        if args.ready_file:
-            from klineage.utils import write_json
-
-            write_json(args.ready_file, ready)
         print(json.dumps(ready), flush=True)
         stopped.wait()
     return 0

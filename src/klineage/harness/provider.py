@@ -1,4 +1,4 @@
-"""Model configuration and provider credentials for kernel campaigns."""
+"""Model configuration and provider credentials for agent sessions."""
 
 from __future__ import annotations
 

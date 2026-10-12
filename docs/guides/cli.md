@@ -124,11 +124,6 @@ can increase total elapsed time. See [Runtime settings](evaluation.md#deadlines-
 for service time limits and [Optional device diagnostics](evaluation.md#optional-device-diagnostics)
 for agent device access.
 
-## Run a bounded campaign
-
-For a generation run and independent audit under one total deadline, use the
-repository's [campaign script](../development.md#run-a-bounded-campaign).
-
 ## Command help
 
 Each command lists its full options:

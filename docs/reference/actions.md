@@ -12,9 +12,6 @@ service. It invokes `Generation` with the loaded Problem. The
 
 ::: klineage.generation.generate
 
-`Generation(..., runner=runner)` accepts a preconfigured runner, avoiding a
-second CLI initialization. Its timeout and model settings come from that runner.
-
 ## Compose actions
 
 Each successful `run()` returns an Artifact containing the kernel and any skill

@@ -8,13 +8,12 @@ import os
 import sys
 import tempfile
 import unittest
-from contextlib import nullcontext, redirect_stdout
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from kernel_fixtures import kernel, measured, skill
-from problem_fixtures import problem_spec
 from prompt_fixtures import prompt_inputs
 
 from klineage.action import same_implementation
@@ -30,11 +29,9 @@ from klineage.backend import get_backend
 from klineage.cli.common import action_arguments, add_run_options
 from klineage.cli.init_memory import decompose_steps, init_memory
 from klineage.cli.optimize import optimize
-from klineage.harness import AgentRuntime
 from klineage.memory import SkillCard, save_skill
 from klineage.serialization import from_json, restore
 from klineage.server import Client, Service
-from scripts import server_campaign
 
 
 class CliServerTests(unittest.TestCase):
@@ -295,72 +292,3 @@ class ArtifactFlowTests(unittest.TestCase):
             ):
                 module.main(arguments)
             self.assertEqual(from_json(output.getvalue(), type(current)), current)
-
-
-class Runner:
-    def __init__(self, workdir, **options):
-        self.workdir = workdir
-        self.options = options
-
-
-class ServerCampaignTests(unittest.TestCase):
-    def setUp(self):
-        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-
-    def test_runtime_state_and_prompt(self):
-        # Stop at generation; exercising wiring needs no provider or device process.
-        python = self.root / "python"
-        python.symlink_to(sys.executable)
-        agent = AgentRuntime(python=python, device_nodes=(Path("/dev/null"),))
-        problem = problem_spec()
-        client = Mock()
-        client.endpoint = "http://evaluation.example"
-        client.problem.return_value = problem
-        problem_dir = self.root / "problem"
-        problem_dir.mkdir()
-        client.info.return_value = {
-            "backend": "cuda", "problem_paths": {problem.name: str(problem_dir)},
-        }
-        action = Mock(prompt="task\n")
-        action.run.side_effect = RuntimeError("stop-before-generation")
-        args = argparse.Namespace(
-            agent=agent,
-            budget=1800,
-            output=self.root,
-            model="test-model",
-            backend="cuda",
-            server_python=Path(sys.executable),
-            problem=self.root / "problem",
-            base_url="http://provider.example",
-            device_node=[],
-        )
-
-        with (
-            patch.object(
-                server_campaign,
-                "server_process",
-                return_value=nullcontext((client, 123)),
-            ),
-            patch.object(server_campaign, "runner_type", return_value=Runner) as runner,
-            patch.object(server_campaign, "Generation", return_value=action) as generation,
-            patch.object(server_campaign.signal, "signal"),
-            redirect_stdout(io.StringIO()),
-            self.assertRaisesRegex(RuntimeError, "stop-before-generation"),
-        ):
-            server_campaign.run(args)
-        generation.assert_called_once()
-        self.assertIs(generation.call_args.args[0], problem)
-        self.assertIs(generation.call_args.kwargs["agent"], agent)
-        runner.assert_called_once_with()
-        selected = generation.call_args.kwargs["runner"]
-        self.assertIs(selected.options["agent"], agent)
-        self.assertEqual(selected.options["model"], args.model)
-        self.assertEqual(selected.options["api_base_url"], args.base_url)
-        state = json.loads(
-            next(self.root.glob("sandbox-campaign-*/status.json")).read_text()
-        )
-        self.assertEqual(state["agent_python"], str(agent.python))
-        self.assertEqual(state["agent_device_nodes"], ["/dev/null"])
-        self.assertIn(state["generation_deadline"], action.prompt)
-        self.assertIn(f"reserves {server_campaign.AUDIT_RESERVE} seconds", action.prompt)
-        self.assertIn("independent service audit", action.prompt)

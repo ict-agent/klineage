@@ -390,18 +390,14 @@ class AgentRunner:
         raise NotImplementedError
 
 
-def runner_type(name=None):
-    """Select a CLI; defaults to KLINEAGE_RUNNER, then Codex."""
+def create_runner(work_dir, *, runner=None, **options):
+    """Construct a runner; defaults to KLINEAGE_RUNNER, then Codex."""
     from .claude_code_runner import ClaudeCodeRunner
     from .codex_runner import CodexRunner
 
-    selected = RunnerKind(name or os.environ.get("KLINEAGE_RUNNER") or RunnerKind.CODEX)
-    return {RunnerKind.CODEX: CodexRunner, RunnerKind.CLAUDE_CODE: ClaudeCodeRunner}[selected]
-
-
-def create_runner(work_dir, *, runner=None, **options):
-    """Construct the selected CLI runner with its provider settings."""
-    return runner_type(runner)(work_dir, **options)
+    selected = RunnerKind(runner or os.environ.get("KLINEAGE_RUNNER") or RunnerKind.CODEX)
+    runner_class = {RunnerKind.CODEX: CodexRunner, RunnerKind.CLAUDE_CODE: ClaudeCodeRunner}[selected]
+    return runner_class(work_dir, **options)
 
 
 def session_id(trace_path: Path) -> str | None:
