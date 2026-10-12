@@ -239,7 +239,9 @@ comes from the host bridge. Missing provider usage remains absent.
 ## Optional device diagnostics
 
 Local generation supplies device and toolchain access automatically and adds the
-selected compiler directory to `PATH`. With an
+selected compiler directory to `PATH`. An explicit `agent` or `--agent-*`
+configuration replaces the agent runtime only; the local evaluator retains its
+backend runtime. With an
 existing evaluator or manually composed actions, configure the agent separately
 when it needs local builds or tools such as `ncu`. Direct `AgentRuntime` instances
 have no device nodes by default.

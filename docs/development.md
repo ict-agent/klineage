@@ -81,11 +81,16 @@ In a development environment with KLineage, PyTorch and NumPy installed:
 uv run --no-sync python -m unittest discover -s tests
 ```
 
-CPU tests cover artifact formats, both agent runners, provider streaming,
-transport, dispatch and isolation. Runner tests use fake CLIs and local HTTP
+Tests are grouped by core component: artifacts, problems, kernels, runners,
+evaluation, service, sandbox, and skill memory. Keep functional success and
+failure cases at their owning layer; avoid repeated validation, source-string
+assertions and mock call-count tests for private implementation details.
+Runner tests use fake CLIs and local HTTP
 providers, so they require Linux/bubblewrap but no paid model access. Set
-`KLINEAGE_CUDA_TESTS=1` in a configured CUDA environment to enable optional CUDA
-tests. New backends also need the
+`KLINEAGE_CUDA_TESTS=1` in a configured CUDA environment for native CUDA tests.
+For Ascend, use `KLINEAGE_ASCEND_TESTS=1` and `ASCEND_ARCH`, with
+`KLINEAGE_ASCEND_DEVICE` selecting the sandbox's physical device. New backends
+also need the
 [hardware checks](guides/extending.md#check-the-implementation).
 
 ## Run a bounded campaign
@@ -114,5 +119,8 @@ options to configure local diagnostics. The campaign passes its model explicitly
 overriding `KLINEAGE_MODEL`. Run the script with `--help` for all options.
 
 For Anthropic campaigns, set `KLINEAGE_RUNNER=claude-code` and
-`KLINEAGE_API_KEY_ENV=AIPING_API_KEY`, then pass `--base-url` and `--model`
+`AIPING_API_KEY`, then pass `--base-url` and `--model`
 for the Messages gateway. Set `KLINEAGE_AUTH_MODE=bearer` for bearer authentication.
+
+Campaigns use the selected runner directly. Codex context limits come from
+its configuration; the framework does not synthesize a provider model catalog.

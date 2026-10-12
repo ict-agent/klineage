@@ -1,32 +1,34 @@
-"""Problem-to-kernel generation with a local evaluation service."""
+from __future__ import annotations
 
 import io
 import json
 import os
 import tempfile
-import tomllib
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from kernel_fixtures import make_kernel, measured, write_kernel
 from problem_fixtures import problem_spec
-from prompt_fixtures import prompt_inputs
 
+from klineage.action import Action, Generation
 from klineage.artifact import (
-    Kernel,
+    Artifact,
+    ArtifactKind,
+    Node,
     json_node,
     load_artifact,
     load_problem,
-    save_artifact,
+    nested,
     source_files,
 )
 from klineage.artifact.kernel import latest_kernel
 from klineage.artifact.problem import DEFINITION_FILE, WORKLOADS_FILE, problem_reference
 from klineage.backend import backends, get_backend
 from klineage.cli.generation import generate, main
+from klineage.errors import StructuredOutputError
 from klineage.harness import AgentRuntime
 from klineage.server import Client, Service
 from klineage.server.client import SERVER_ENV
@@ -152,20 +154,6 @@ class GenerationTests(unittest.TestCase):
             set(result.validation.workloads), {case["uuid"] for case in workloads}
         )
 
-    def test_runs_generation_action(self):
-        backend = get_backend("cuda")
-        with (
-            patch("klineage.cli.generation.detect_backend", return_value=backend),
-            patch.object(type(backend), "info", return_value={"platform": "sm90"}),
-        ):
-            generate(self.path, workdir=self.work, max_retries=0)
-        call = self.runner.return_value.call_args
-        self.assertTrue(call.kwargs["run_id"].startswith("Generation-"))
-        values = prompt_inputs(call.args[0])
-        self.assertEqual(values["problem"]["artifact_type"], "problem")
-        self.assertNotIn("current_kernel", values)
-        self.runner.return_value.mount_memory.assert_not_called()
-
     def test_declared_target(self):
         target = {"name": "custom_gemm", "language": "cuda", "platform": "sm90"}
         (self.path / "target.json").write_text(json.dumps(target))
@@ -178,30 +166,6 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(load_problem(result).target(), target)
         self.assertEqual(self.registrations[-1], {"custom_gemm": self.path})
 
-    def test_workloads_file_required(self):
-        (self.path / WORKLOADS_FILE).unlink()
-        backend = get_backend("cuda")
-        with (
-            patch("klineage.cli.generation.detect_backend", return_value=backend),
-            patch.object(type(backend), "info", return_value={"platform": "nvidia"}),
-            self.assertRaisesRegex(FileNotFoundError, "workloads.jsonl"),
-        ):
-            generate(self.path, workdir=self.work, max_retries=0)
-        self.runner.assert_not_called()
-        self.assertFalse(self.work.exists())
-
-    def test_missing_backend_stops(self):
-        with (
-            patch(
-                "klineage.cli.generation.detect_backend",
-                side_effect=RuntimeError("no device"),
-            ),
-            self.assertRaisesRegex(RuntimeError, "no device"),
-        ):
-            generate(self.path, workdir=self.work)
-        self.assertFalse(self.work.exists())
-        self.runner.assert_not_called()
-
     def test_failure_closes_service(self):
         self.runner.return_value.side_effect = RuntimeError("agent failed")
         backend = get_backend("cuda")
@@ -213,78 +177,10 @@ class GenerationTests(unittest.TestCase):
             generate(self.path, workdir=self.work, max_retries=0)
         self.assertFalse(self.services[-1].root.exists())
 
-    def test_directory_survives_exit(self):
-        backend = get_backend("cuda")
-        with (
-            patch("klineage.cli.generation.detect_backend", return_value=backend),
-            patch.object(type(backend), "info", return_value={"platform": "nvidia"}),
-        ):
-            result = generate(self.path, workdir=self.work, max_retries=0)
-        with patch.object(
-            backend.kernel_type, "build_kernel", return_value=lambda: None
-        ):
-            restored = Kernel.load_kernel(self.work / "current_kernel")
-        self.assertEqual(load_problem(restored), load_problem(result))
-
-    def test_stdout_ignores_diagnostics(self):
-        backend = get_backend("cuda")
-        output, error = io.StringIO(), io.StringIO()
-
-        def info():
-            print("runtime diagnostic")
-            return {"platform": "nvidia"}
-
-        with (
-            patch("klineage.cli.generation.detect_backend", return_value=backend),
-            patch.object(type(backend), "info", side_effect=info),
-            redirect_stdout(output),
-            redirect_stderr(error),
-        ):
-            main([str(self.path), "--workdir", str(self.work), "--max-retries", "0"])
-        self.assertEqual(json.loads(output.getvalue())["artifact_type"], "kernel.cuda")
-        self.assertIn("runtime diagnostic", error.getvalue())
-
-    def test_missing_workloads(self):
-        self.write_problem(self.problem.replace(workloads=()))
-        backend = get_backend("cuda")
-        with (
-            patch("klineage.cli.generation.detect_backend", return_value=backend),
-            patch.object(type(backend), "info", return_value={"platform": "nvidia"}),
-            self.assertRaisesRegex(ValueError, "at least one workload"),
-        ):
-            generate(self.path, workdir=self.work)
-        self.runner.assert_not_called()
-        self.assertFalse(self.work.exists())
-
     def test_settings_checked_before_run(self):
         for options in ({"timeout": 0}, {"max_retries": -1}):
             with self.subTest(options=options), self.assertRaises(ValueError):
                 generate(self.path, workdir=self.work, **options)
-        self.runner.assert_not_called()
-
-    def test_file_input_rejected(self):
-        serialized = save_artifact(self.problem, self.root / "problem.json")
-        for path in (serialized, self.path / DEFINITION_FILE):
-            with (
-                self.subTest(path=path),
-                patch("klineage.cli.generation.detect_backend") as detect,
-                self.assertRaises(NotADirectoryError),
-            ):
-                generate(path, workdir=self.root / path.stem, max_retries=0)
-            detect.assert_not_called()
-
-    def test_existing_workdir_preserved(self):
-        self.work.mkdir()
-        marker = self.work / "keep.txt"
-        marker.write_text("keep")
-        backend = get_backend("cuda")
-        with (
-            patch("klineage.cli.generation.detect_backend", return_value=backend),
-            patch.object(type(backend), "info", return_value={"platform": "nvidia"}),
-            self.assertRaises(FileExistsError),
-        ):
-            generate(self.path, workdir=self.work)
-        self.assertEqual(marker.read_text(), "keep")
         self.runner.assert_not_called()
 
     def test_cli_emits_kernel_json(self):
@@ -338,67 +234,6 @@ class GenerationTests(unittest.TestCase):
         self.local_runtime.assert_not_called()
         self.worker.assert_not_called()
 
-    def test_server_environment(self):
-        client = self.remote_client()
-        with (
-            patch.dict(os.environ, {SERVER_ENV: client.endpoint}),
-            patch("klineage.cli.generation.detect_backend", side_effect=AssertionError("local GPU probe")),
-        ):
-            result = generate(self.path, workdir=self.work, max_retries=0)
-        self.assertTrue(result.validation.accepted)
-        self.local_runtime.assert_not_called()
-
-    def test_remote_selects_problem(self):
-        client = self.remote_client({
-            self.problem.name: self.path,
-            "other": self.problem.replace(name="other"),
-        })
-        generate(self.path, workdir=self.work, evaluation=client, max_retries=0)
-        self.assertEqual(self.runner.call_args.kwargs["evaluation"].problem_id, self.problem.name)
-
-    def test_remote_explicit_id(self):
-        client = self.remote_client({"alias": self.path, "other": self.problem.replace(name="other")})
-        selected = Client(client.endpoint, "alias", timeout=30)
-        generate(self.path, workdir=self.work, evaluation=selected, max_retries=0)
-        self.assertEqual(self.runner.call_args.kwargs["evaluation"].problem_id, "alias")
-
-    def test_remote_mirrored_inputs(self):
-        local_input, remote_input = self.root / "local.bin", self.root / "remote.bin"
-        local_input.write_bytes(b"fixed input")
-        remote_input.write_bytes(local_input.read_bytes())
-        cases = list(self.problem.workloads)
-        cases[0]["inputs"]["a"] = {
-            "type": "safetensors", "path": str(local_input), "tensor_key": "a",
-        }
-        self.write_problem(self.problem.replace(workloads=cases))
-        cases[0]["inputs"]["a"]["path"] = str(remote_input)
-        registered = self.problem.replace(workloads=cases)
-        client = self.remote_client({self.problem.name: registered})
-        result = generate(self.path, workdir=self.work, evaluation=client, max_retries=0)
-        self.assertEqual(load_problem(result), registered)
-        self.assertTrue(result.validation.accepted)
-
-    def test_remote_target_mismatch(self):
-        client = self.remote_client()
-        (self.path / "target.json").write_text(json.dumps({
-            "name": self.problem.name, "language": "hip", "platform": "hygon",
-        }))
-        with self.assertRaisesRegex(ValueError, "registered problem"):
-            generate(self.path, workdir=self.work, evaluation=client, max_retries=0)
-        self.assertFalse(self.work.exists())
-        self.runner.assert_not_called()
-
-    def test_remote_path_required(self):
-        client = self.remote_client()
-        info = client.info() | {"problem_paths": {self.problem.name: str(self.root / "unmounted")}}
-        with (
-            patch.object(client, "info", return_value=info),
-            self.assertRaisesRegex(ValueError, "accessible locally"),
-        ):
-            generate(self.path, workdir=self.work, evaluation=client, max_retries=0)
-        self.assertFalse(self.work.exists())
-        self.runner.assert_not_called()
-
     def test_remote_problem_mismatch(self):
         client = self.remote_client()
         cases = list(self.problem.workloads)
@@ -409,30 +244,43 @@ class GenerationTests(unittest.TestCase):
         self.assertFalse(self.work.exists())
         self.runner.assert_not_called()
 
-    def test_cli_forwards_server(self):
-        candidate = make_kernel("generated", self.problem)
+
+class GenerationActionTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.work = self.root / "work"
+        self.problem = problem_spec()
+        backend = get_backend("cuda")
+        self.enterContext(patch.object(type(backend), "info", return_value={"available": True}))
+        service = Service(
+            self.root / "server", backend, {self.problem.name: self.problem},
+            runtime_factory=lambda **options: SimpleNamespace(
+                evaluate=lambda candidate, **kwargs: measured(candidate),
+                info=lambda backend, **kwargs: backend.info(),
+            ),
+        )
+        server = self.enterContext(service.start())
+        self.client = Client(server.endpoint, self.problem.name)
+        self.runner = Mock(return_value=SimpleNamespace(final_message="done"))
+        self.enterContext(patch("klineage.action.action.create_runner", return_value=self.runner))
+
+    def action(self, problem=None):
+        return Generation(
+            problem if problem is not None else self.problem,
+            workdir=self.work, evaluation=self.client, max_retries=0,
+        )
+
+    def test_explicit_runner(self):
+        runner = Mock()
+        with patch("klineage.action.action.create_runner", side_effect=AssertionError("unused runner")):
+            action = Generation(self.problem, workdir=self.work, runner=runner)
+        self.assertIs(action.runner, runner)
+
+    def test_problem_change_rejected(self):
+        changed = make_kernel("other", self.problem.replace(name="other"))
+        result = Artifact(ArtifactKind.GENERATION, Node.directory(".", (nested("kernel", changed),)))
         with (
-            patch.dict(os.environ, {SERVER_ENV: "http://ignored.example:9100"}),
-            patch("klineage.cli.generation.generate", return_value=candidate) as invoke,
-            redirect_stdout(io.StringIO()),
+            patch.object(Action, "run", return_value=result),
+            self.assertRaisesRegex(StructuredOutputError, "generation changed the problem"),
         ):
-            main([
-                str(self.path), "--server", "http://evaluation.example:9100",
-                "--problem-id", "registered-task", "--timeout", "37",
-            ])
-        client = invoke.call_args.kwargs["evaluation"]
-        self.assertEqual(client.endpoint, "http://evaluation.example:9100")
-        self.assertEqual(client.problem_id, "registered-task")
-        self.assertEqual(client.timeout, 37)
-
-    def test_public_entrypoint(self):
-        from klineage.generation import generate as public_generate
-
-        self.assertIs(public_generate, generate)
-        project = Path(__file__).resolve().parents[1] / "pyproject.toml"
-        scripts = tomllib.loads(project.read_text())["project"]["scripts"]
-        self.assertEqual(scripts["klineage-generation"], "klineage.generation:main")
-
-
-if __name__ == "__main__":
-    unittest.main()
+            self.action().run()

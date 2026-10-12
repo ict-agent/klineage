@@ -1,4 +1,4 @@
-"""Claude CLI lifecycle, selection, credentials and persisted results."""
+from __future__ import annotations
 
 import json
 import os
@@ -68,13 +68,6 @@ class ClaudeSettingsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "MISSING"):
             anthropic_settings(api_base_url="https://new.test", api_key_env="MISSING")
 
-    def test_no_codex_settings(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "config.toml").write_text("invalid toml!")
-            os.environ.update(CODEX_HOME=directory, ANTHROPIC_API_KEY="key")
-            self.assertEqual(anthropic_settings()["api_key"], "key")
-
     def test_invalid_settings(self):
         for options in ({"api_key_env":"BAD-NAME"}, {"api_base_url":5}, {"api_base_url":""}, {"auth_mode":"unknown"}, {"model":""}):
             with self.subTest(options=options), self.assertRaises(ValueError):
@@ -129,13 +122,6 @@ class ClaudeRunnerTests(unittest.TestCase):
             self.assertTrue(caught.exception.trace_path.is_file())
             self.assertEqual(session_id(caught.exception.trace_path), SESSION)
 
-    def test_timeout_keeps_session(self):
-        runner = self.runner()
-        runner.timeout = 1
-        with self.assertRaisesRegex(RunnerError, "timed out") as caught:
-            runner("TIMEOUT")
-        self.assertEqual(session_id(caught.exception.trace_path), SESSION)
-
     def test_explicit_runner_selection(self):
         from klineage.harness import CodexRunner
         with patch.dict(os.environ, {"CODEX_HOME":str(self.root / "codex-home")}):
@@ -144,48 +130,8 @@ class ClaudeRunnerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             create_runner(self.work, runner="invalid")
 
-    def test_campaign_runner(self):
-        from klineage.harness.provider import resolve_provider, runner_class
-
-        provider = resolve_provider("campaign-model", "https://provider.test", key_env="TEST_MODEL_KEY")
-        runner = runner_class(provider, "high")(self.work, claude_bin=self.program)
-        self.assertIsInstance(runner, ClaudeCodeRunner)
-        self.assertEqual(runner.model, "campaign-model")
-        self.assertFalse(hasattr(runner, "model_catalog"))
-
     def test_action_selects_claude(self):
         from klineage.action.action import Action
         with patch("klineage.harness.claude_code_runner.ClaudeCodeRunner", return_value=object()) as factory:
             action = Action("task", self.work)
         self.assertIs(action.runner, factory.return_value)
-
-    def test_service_and_handoff(self):
-        from kernel_fixtures import kernel, write_kernel
-        from problem_fixtures import problem_spec
-        from test_agent_server import AGENT_CLI, RecordingRuntime
-
-        from klineage.action.action import collect_output
-        from klineage.artifact import ArtifactKind, Kernel
-        from klineage.backend import get_backend
-        from klineage.server import Client, Service
-
-        source = AGENT_CLI[:AGENT_CLI.index('output = Path(args[args.index("--output-last-message")')]
-        source += '\nprint(json.dumps({"type":"result", "subtype":"success", "is_error":False, "result":json.dumps(result)}))\n'
-        self.program.write_text(f"#!{sys.executable}\n" + source)
-        backend = get_backend("cuda")
-        self.enterContext(patch.object(type(backend), "info", return_value={"available":True, "platform":"sm120"}))
-        service = Service(self.root / "service", backend, {"gemm":problem_spec()}, runtime_factory=RecordingRuntime)
-        running = self.enterContext(service.start())
-        client = Client(running.endpoint, "gemm")
-        write_kernel(kernel(), self.work / "current_kernel")
-        result = self.runner(evaluation=client)(json.dumps({"operation":"service", "port":int(running.endpoint.rsplit(":",1)[1])}))
-        reply = json.loads(result.final_message)
-        self.assertTrue(reply["accepted"])
-        self.assertTrue(reply["recovered"])
-        self.assertTrue(reply["scope_enforced"])
-        self.assertTrue(reply["host_tcp_blocked"])
-        artifact = collect_output(self.work, ArtifactKind.GENERATION, evaluation=client)
-        self.assertTrue(artifact.part("kernel", Kernel).validation.accepted)
-        self.assertTrue(artifact.find("records"))
-        stats = [json.loads(line) for line in (result.trace_path.parent / "stats.jsonl").read_text().splitlines()]
-        self.assertTrue(any(row.get("job_id") == reply["job_id"] for row in stats))

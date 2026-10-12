@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
-import importlib.util
 import json
-import uuid
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from pathlib import Path
@@ -22,7 +19,7 @@ from klineage.artifact.tree import (
     json_node,
     relative_source_path,
 )
-from klineage.constants import KERNEL_METADATA, MODULE_HASH_LENGTH
+from klineage.constants import KERNEL_METADATA
 from klineage.serialization import from_json, raw_text, restore
 from klineage.utils import json_mapping, mapping, nonempty
 
@@ -109,7 +106,7 @@ def load_trace(path: Path) -> ModuleType:
             relative to this directory unless absolute.
 
     Returns:
-        A module exposing ``definition``, ``workloads``, ``run`` and ``torch_ref``.
+        A module exposing ``definition``, ``workloads``, ``run``.
         Fixed input paths are absolute; tensor data is not loaded here.
     """
     definition, workloads = read_problem(path)
@@ -149,11 +146,9 @@ def trace_module(
     if not callable(getattr(module, "run", None)):
         raise TypeError("Trace reference must define callable run()")
     module.__dict__.update(
-        PROBLEM_NAME=definition["name"],
         OPERATOR=definition["op_type"],
         definition=definition,
         workloads=workloads,
-        torch_ref=module.run,
     )
     return module
 
@@ -222,70 +217,6 @@ def trace_inputs(
             raise ValueError(f"Workload input {name!r} does not match its shape/dtype")
         inputs[name] = value
     return inputs
-
-
-def trace_definition(
-    name: str,
-    operator: str,
-    source: str,
-    inputs: Mapping[str, Any],
-    outputs: Mapping[str, Any],
-) -> dict[str, Any]:
-    axes, tensors = {}, {}
-    for role, values in (("inputs", inputs), ("outputs", outputs)):
-        tensors[role] = {}
-        for tensor_name, value in values.items():
-            shape = []
-            for index, size in enumerate(value.shape):
-                axis = f"{role}_{tensor_name}_{index}"
-                axes[axis] = {"type": "const", "value": size}
-                shape.append(axis)
-            tensors[role][tensor_name] = {
-                "shape": shape,
-                "dtype": str(value.dtype).removeprefix("torch."),
-                "description": f"Tensor with element strides {list(value.stride())}.",
-            }
-
-    # Trace references expose run; existing problem modules expose torch_ref.
-    args = ", ".join(inputs)
-    reference = f"{source.rstrip()}\n\ndef run({args}):\n    return torch_ref({args})\n"
-    compile(reference, "<trace reference>", "exec")
-    return {
-        "name": name,
-        "op_type": operator,
-        "axes": axes,
-        **tensors,
-        "reference": reference,
-    }
-
-
-def trace_workload(inputs: Mapping[str, Any], path: Path) -> dict[str, Any]:
-    from safetensors.torch import save_file
-
-    # Preserve actual inputs; make_inputs may encode a nonrandom distribution.
-    path = path.resolve()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    save_file(
-        {
-            name: value.detach().cpu().contiguous().clone()
-            for name, value in inputs.items()
-        },
-        str(path),
-        metadata={
-            STRIDES_METADATA: json.dumps(
-                {name: list(value.stride()) for name, value in inputs.items()}
-            )
-        },
-    )
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    return {
-        "uuid": str(uuid.uuid5(uuid.NAMESPACE_OID, digest)),
-        "axes": {},
-        "inputs": {
-            name: {"type": "safetensors", "path": str(path), "tensor_key": name}
-            for name in inputs
-        },
-    }
 
 
 def load_problem(
@@ -376,29 +307,6 @@ def problem_reference(path: Path, problem: Problem) -> dict[str, str]:
     if not root.is_dir():
         raise NotADirectoryError(f"expected a problem directory: {root}")
     return {"path": str(root), **problem.target()}
-
-
-def load_problem_module(value: str | Path) -> tuple[ModuleType, Path]:
-    """Load a problem directory or Python reference as an executable module."""
-
-    path = Path(value).expanduser().absolute().resolve(strict=True)
-    if path.is_dir():
-        return load_trace(path), path / DEFINITION_FILE
-    if not path.is_file() or path.suffix != ".py":
-        raise ValueError(
-            "problem_path must identify a problem directory or Python file"
-        )
-    name = f"_klineage_problem_{hashlib.sha256(str(path).encode()).hexdigest()[:MODULE_HASH_LENGTH]}"
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"cannot load problem module from {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    for symbol in ("make_inputs", "torch_ref"):
-        if not callable(getattr(module, symbol, None)):
-            raise TypeError(f"problem must define callable {symbol}()")
-    return module, path
-
 
 
 class Problem(Artifact):

@@ -17,8 +17,6 @@ class RunKind(StrEnum):
     APPLY = "apply"
     #: Skill memory generation from an expert kernel.
     INIT_MEMORY = "init-memory"
-    #: Agent process execution.
-    CODEX = "codex"
 
 
 #: Parent directory for automatically allocated workspaces.

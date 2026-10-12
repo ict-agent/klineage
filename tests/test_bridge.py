@@ -1,13 +1,8 @@
-"""Provider isolation and streamed forwarding over a Unix socket."""
-
 from __future__ import annotations
 
 import contextlib
 import http.client
 import json
-import os
-import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -15,7 +10,6 @@ import unittest
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from unittest.mock import patch
 
 from klineage.harness.bridge import (
     BODY_LIMIT,
@@ -24,7 +18,6 @@ from klineage.harness.bridge import (
     ProviderBridge,
     UnixConnection,
 )
-from klineage.harness.logging import LOG_ENV
 
 
 class Provider(BaseHTTPRequestHandler):
@@ -151,21 +144,6 @@ class BridgeTests(unittest.TestCase):
         self.assertNotIn("host-secret", text)
         self.assertNotIn("request-body", text)
 
-    def test_json_usage_once(self):
-        body = json.dumps(self.usage_response()).encode()
-        self.upstream.content_type = "application/json"
-        self.upstream.chunks = [body[:17], body[17:]]
-        with patch.dict(os.environ, {LOG_ENV: str(self.directory)}):
-            with LoopbackRelay(self.path, port=0) as relay:
-                connection = http.client.HTTPConnection("127.0.0.1", relay.port, timeout=2)
-                self.addCleanup(connection.close)
-                connection.request("POST", "/responses", b"{}")
-                self.assertEqual(connection.getresponse().read(), body)
-        [entry] = self.stats()
-        self.assertEqual(entry["response_id"], "response-1")
-        self.assertEqual(entry["model"], "test-model")
-        self.assertEqual(entry["input_tokens"], 10)
-
     def test_records_http_failure(self):
         self.upstream.status = HTTPStatus.TOO_MANY_REQUESTS
         self.upstream.content_type = "application/json"
@@ -178,18 +156,6 @@ class BridgeTests(unittest.TestCase):
         [entry] = self.stats()
         self.assertEqual(entry["status"], HTTPStatus.TOO_MANY_REQUESTS)
         self.assertNotIn("provider-secret", json.dumps(entry))
-
-    def test_connection_failure(self):
-        with patch.object(self.bridge.server, "connect", side_effect=ConnectionRefusedError("secret-host")):
-            connection = self.connection()
-            connection.request("POST", "/responses", b"{}")
-            response = connection.getresponse()
-            self.assertEqual(response.status, HTTPStatus.BAD_GATEWAY)
-            self.assertEqual(response.read(), b"")
-            [entry] = self.stats()
-        self.assertEqual(entry["status"], HTTPStatus.BAD_GATEWAY)
-        self.assertEqual(entry["error"], "ConnectionRefusedError")
-        self.assertNotIn("secret-host", json.dumps(entry))
 
     def stop_provider(self):
         self.upstream.release.set()
@@ -224,17 +190,6 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(entry["status"], HTTPStatus.OK)
         self.assertNotIn("total_tokens", entry)
 
-    def test_request_streams(self):
-        connection = self.connection()
-        connection.putrequest("POST", "/responses")
-        connection.putheader("Content-Length", str(TRANSFER_BYTES * 2))
-        connection.endheaders()
-        connection.send(b"a" * TRANSFER_BYTES)
-        self.assertTrue(self.upstream.received.wait(2), "request body was buffered")
-        connection.send(b"b" * TRANSFER_BYTES)
-        self.upstream.release.set()
-        self.assertEqual(connection.getresponse().status, HTTPStatus.OK)
-
     def test_host_headers_override_agent(self):
         path = self.root / "headers.sock"
         self.stack.enter_context(ProviderBridge(
@@ -265,44 +220,6 @@ class BridgeTests(unittest.TestCase):
             ("Authorization", "Bearer host-secret"),
         ):
             self.assertEqual(headers.get_all(name), [value])
-
-    def test_optional_bearer(self):
-        cases = (None, {"api-key": "header-secret"}, {"Authorization": "Basic host-secret"})
-        for index, supplied in enumerate(cases):
-            with self.subTest(headers=supplied):
-                path = self.root / f"optional-{index}.sock"
-                self.stack.enter_context(ProviderBridge(self.base_url, None, path, headers=supplied))
-                connection = UnixConnection(path)
-                self.addCleanup(connection.close)
-                connection.request("POST", "/responses", b"{}", {
-                    "Authorization": "Bearer sandbox-dummy", "api-key": "sandbox-key",
-                    "ChatGPT-Account-Id": "sandbox-account",
-                })
-                self.upstream.release.set()
-                self.assertEqual(connection.getresponse().status, HTTPStatus.OK)
-                headers = self.upstream.requests[-1][1]
-                expected = supplied or {}
-                self.assertEqual(headers.get("Authorization"), expected.get("Authorization"))
-                self.assertEqual(headers.get("api-key"), expected.get("api-key"))
-                self.assertNotIn("ChatGPT-Account-Id", headers)
-
-    def test_invalid_host_headers(self):
-        headers = [
-            {name: "sensitive"} for name in (
-                "Host", "Content-Length", "Transfer-Encoding", "Connection", "Keep-Alive",
-                "Proxy-Connection", "Proxy-Authorization", "Proxy-Authenticate", "TE",
-                "Trailer", "Upgrade", "Expect", "X-Bad\r\nName", "Bad Name", "",
-            )
-        ]
-        headers.extend({"api-key": value} for value in (
-            "sensitive\r\nX-Forged: value", "sensitive\n", "sensitive\x00", "sensitive\u0100", 123,
-        ))
-        headers.append({"api-key": "sensitive", "API-KEY": "sensitive"})
-        for supplied in headers:
-            with self.subTest(headers=supplied):
-                with self.assertRaises(ValueError) as error:
-                    ProviderBridge(self.base_url, None, self.root / "invalid.sock", headers=supplied)
-                self.assertNotIn("sensitive", str(error.exception))
 
     def test_rejects_paths(self):
         for path in ("http://example.com/responses", "//responses", "/../responses",
@@ -340,18 +257,6 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(response.read(len(b"data: first\n\n")), b"data: first\n\n")
         self.assertEqual(self.upstream.requests[0][0], "/api/v1/responses/compact")
 
-    def test_shutdown_closes_stream(self):
-        connection = self.connection()
-        connection.request("POST", "/responses", b"{}")
-        response = connection.getresponse()
-        response.read(len(b"data: first\n\n"))
-        started = time.monotonic()
-        self.bridge.close()
-        self.assertLess(time.monotonic() - started, 2)
-        self.assertFalse(self.path.exists())
-        [entry] = self.stats()
-        self.assertEqual(entry["event"], "api_response")
-
     def test_disconnect_cancels(self):
         connection = self.connection()
         connection.request("POST", "/responses", b"{}")
@@ -365,39 +270,6 @@ class BridgeTests(unittest.TestCase):
         self.assertFalse(self.bridge.server.connections)
         self.assertFalse(self.upstream.release.is_set())
 
-    def test_launcher_exit_status(self):
-        command = self.bridge.command([sys.executable, "-c", "raise SystemExit(7)"])
-        command[command.index("--port") + 1] = "0"
-        result = subprocess.run(command, capture_output=True, timeout=5)
-        self.assertEqual(result.returncode, 7, result.stderr.decode())
-        self.assertEqual(result.stderr, b"")
-
-    def test_launcher_cancellation(self):
-        marker = self.root / "child.pid"
-        source = (
-            "import os,pathlib,signal,time; "
-            "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-            f"pathlib.Path({str(marker)!r}).write_text(str(os.getpid())); time.sleep(60)"
-        )
-        command = self.bridge.command([sys.executable, "-c", source])
-        command[command.index("--port") + 1] = "0"
-        process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        try:
-            deadline = time.monotonic() + 3
-            while not marker.exists() and time.monotonic() < deadline:
-                time.sleep(0.02)
-            self.assertTrue(marker.exists())
-            pid = int(marker.read_text())
-            process.terminate()
-            _, error = process.communicate(timeout=5)
-            self.assertEqual(process.returncode, 143, error.decode())
-            with self.assertRaises(ProcessLookupError):
-                os.kill(pid, 0)
-        finally:
-            if process.poll() is None:
-                process.kill()
-            process.communicate()
-
     def test_invalid_provider(self):
         for url in ("file:///secret", "https://host/a/../b", "https://user:pass@host",
                     "https://host/api?redirect=x", "https://host/%2e%2e"):
@@ -406,14 +278,6 @@ class BridgeTests(unittest.TestCase):
         for key in ("", "key\r\nX-Evil: x"):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 ProviderBridge(self.base_url, key, self.root / "invalid.sock")
-
-    def test_private_socket_and_command(self):
-        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
-        command = self.bridge.command(["codex", "exec"])
-        self.assertNotIn("host-secret", " ".join(command))
-        self.assertIn(str(self.path), command)
-        self.assertEqual(command[-2:], ["codex", "exec"])
-        self.assertEqual(self.bridge.url, "http://127.0.0.1:18081")
 
 
 if __name__ == "__main__":

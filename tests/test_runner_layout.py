@@ -1,4 +1,4 @@
-"""Both CLIs preserve the same artifact and per-attempt record layout."""
+from __future__ import annotations
 
 import json
 import os
@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from kernel_fixtures import kernel
 from problem_fixtures import problem_spec
-from test_agent_server import RecordingRuntime
+from runtime_fixtures import RecordingRuntime
 
 from klineage.action.action import collect_output
 from klineage.artifact import ArtifactKind, source_files
@@ -137,16 +137,3 @@ class RunnerLayoutTests(unittest.TestCase):
                 })
         self.assertEqual(len(layouts), 2)
         self.assertEqual(*layouts)
-
-    def test_legacy_records(self):
-        root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
-        for name in ("codex-runs", "claude-runs"):
-            with self.subTest(directory=name):
-                work = root / name
-                record = work / "workspace/.klineage" / name / "attempt"
-                record.mkdir(parents=True)
-                (record / "trace.jsonl").write_text('{"old":true}\n')
-                artifact = collect_output(work, ArtifactKind.ACTION)
-                self.assertEqual(source_files(artifact.find("records")), {
-                    "attempt/trace.jsonl":'{"old":true}\n',
-                })

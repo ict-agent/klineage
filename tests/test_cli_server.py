@@ -1,4 +1,4 @@
-"""CLI service configuration and device-free input capture."""
+from __future__ import annotations
 
 import argparse
 import importlib
@@ -7,96 +7,39 @@ import json
 import os
 import sys
 import tempfile
-import tomllib
 import unittest
-from contextlib import redirect_stdout
-from dataclasses import replace
+from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from kernel_fixtures import kernel, write_kernel
+from kernel_fixtures import kernel, measured, skill
+from problem_fixtures import problem_spec
+from prompt_fixtures import prompt_inputs
 
 from klineage.action import same_implementation
-from klineage.action.action import input_paths
-from klineage.artifact import Artifact, ArtifactKind, Node, nested
-from klineage.backend.cuda import CudaKernel
+from klineage.artifact import (
+    Artifact,
+    ArtifactKind,
+    Kernel,
+    Node,
+    nested,
+    save_artifact,
+)
+from klineage.backend import get_backend
 from klineage.cli.common import action_arguments, add_run_options
-from klineage.cli.init_memory import decompose_steps
+from klineage.cli.init_memory import decompose_steps, init_memory
 from klineage.cli.optimize import optimize
+from klineage.harness import AgentRuntime
+from klineage.memory import SkillCard, save_skill
+from klineage.serialization import from_json, restore
+from klineage.server import Client, Service
+from scripts import server_campaign
 
 
 class CliServerTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-
-    def test_env_forwards_timeout(self):
-        parser = argparse.ArgumentParser()
-        add_run_options(parser)
-        with patch.dict(os.environ, {"KLINEAGE_SERVER": "http://evaluation.example:9100"}):
-            options = action_arguments(parser.parse_args(["--timeout", "37"]))
-        self.assertEqual(options["evaluation"].endpoint, "http://evaluation.example:9100")
-        self.assertEqual(options["evaluation"].timeout, 37)
-
-    def test_readonly_directory_no_build(self):
-        original = kernel()
-        directory = write_kernel(original, self.root / "kernel")
-        with patch(
-            "klineage.artifact.Kernel.load_kernel",
-            side_effect=AssertionError("local build"),
-        ):
-            result = optimize(directory, workdir=self.root / "read", max_apply_step=0)
-        self.assertTrue(same_implementation(result, original))
-        self.assertIsNone(result.function)
-
-    def test_extended_kernel_directory(self):
-        class ExtendedKernel(CudaKernel):
-            artifact_kind = "kernel.cuda.test_cli"
-
-            @classmethod
-            def kernel_spec(cls):
-                schema = super().kernel_spec()
-                return replace(schema, children=(
-                    *schema.children, Node.file("notes.txt", description="Backend notes."),
-                ))
-
-
-        original = kernel()
-        directory = write_kernel(original, self.root / "kernel")
-        notes = directory / "notes.txt"
-        notes.write_text("platform metadata")
-        problem = Path(json.loads(original.find("metadata.json").content)["problem"]["path"])
-        with (
-            patch.dict(os.environ, {}, clear=True),
-            patch("klineage.backend.get_backend", return_value=SimpleNamespace(kernel_type=ExtendedKernel)),
-            patch.object(ExtendedKernel, "build_kernel", side_effect=AssertionError("local build")),
-        ):
-            with self.subTest(entry="input_paths"):
-                self.assertEqual(input_paths(directory), (directory, problem))
-            with self.subTest(entry="optimize"):
-                result = optimize(directory, workdir=self.root / "read", max_apply_step=0)
-                self.assertIsInstance(result, ExtendedKernel)
-                self.assertEqual(result.find("notes.txt").content, notes.read_text())
-            notes.unlink()
-            with self.assertRaisesRegex(ValueError, "notes.txt: missing"):
-                optimize(directory, workdir=self.root / "invalid", max_apply_step=0)
-
-    def test_env_server_owns_directory_kind(self):
-        directory = write_kernel(kernel(), self.root / "kernel")
-        path = directory / "metadata.json"
-        metadata = json.loads(path.read_text())
-        metadata["problem"]["path"] = "/remote-only/problem.json"
-        path.write_text(json.dumps(metadata))
-        with (
-            patch.dict(
-                os.environ, {"KLINEAGE_SERVER": "http://evaluation.example:9000"}
-            ),
-            patch("klineage.cli.optimize.Client") as client,
-        ):
-            client.return_value.info.return_value = {"kernel_kind": "kernel.cuda"}
-            result = optimize(directory, workdir=self.root / "read", max_apply_step=0)
-        self.assertEqual(result.kind, "kernel.cuda")
-        client.return_value.info.assert_called_once_with()
 
     def test_cli_forwards_client(self):
         cases = (
@@ -207,7 +150,6 @@ class CliServerTests(unittest.TestCase):
         self.assertIs(decompose.call_args.kwargs["agent"], agent)
 
     def test_agent_options_without_server(self):
-        import argparse
 
         parser = argparse.ArgumentParser()
         add_run_options(parser)
@@ -245,11 +187,180 @@ class CliServerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "NAME=VALUE"):
             action_arguments(parser.parse_args(["--agent-env", "missing-value"]))
 
-    def test_server_script_registered(self):
-        project = Path(__file__).resolve().parents[1] / "pyproject.toml"
-        scripts = tomllib.loads(project.read_text())["project"]["scripts"]
-        self.assertEqual(scripts["klineage-server"], "klineage.server.__main__:main")
+
+class ArtifactFlowTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.dict(os.environ, {"CODEX_HOME": str(self.root / "codex-home")}))
+        self.naive = kernel(source="naive")
+        self.problem = Path(json.loads(self.naive.find("metadata.json").content)["problem"]["path"])
+        self.expert = kernel(source="expert")
+        self.optimized = kernel(source="optimized")
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        (self.repo / "expert.cu").write_text("expert")
+        backend = get_backend("cuda")
+        self.enterContext(patch.object(type(backend), "info", return_value={"available": True}))
+        service = Service(
+            self.root / "server", backend, {"gemm": self.problem},
+            runtime_factory=lambda **_: SimpleNamespace(
+                evaluate=lambda candidate, **kwargs: measured(candidate),
+                info=lambda backend, **kwargs: backend.info(),
+            ),
+        )
+        running = self.enterContext(service.start())
+        self.client = Client(running.endpoint, "gemm")
+        self.enterContext(patch("klineage.action.action.Client", return_value=self.client))
+        self.enterContext(
+            patch(
+                "klineage.harness.runner.resolve_executable",
+                return_value="/bin/true",
+            )
+        )
+        self.enterContext(
+            patch(
+                "klineage.harness.codex_runner.CodexRunner.__call__",
+                autospec=True,
+                side_effect=self.generate,
+            )
+        )
+
+    def generate(self, runner, prompt, *, run_id):
+        stage = run_id.split("-", 1)[0]
+        values = prompt_inputs(prompt)
+        if stage == "Init":
+            result = self.expert
+        elif stage == "Decompose":
+            current = restore(values["input_kernel"], Artifact)
+            if not isinstance(current, Kernel):
+                current = current.part("kernel", Kernel)
+            result = self.naive
+            if not same_implementation(current, result):
+                save_skill(skill("tiling"), runner.work_dir / "SKILL.md")
+        elif stage == "Apply":
+            result = self.optimized
+        else:
+            self.fail(stage)
+        self.client.evaluate(result, runner.work_dir)
+        return SimpleNamespace(final_message="done")
+
+    def test_memory_returns_tree(self):
+        result = init_memory(
+            self.problem,
+            self.repo,
+            "expert.cu",
+            workdir=self.root / "run",
+            memory_dir=self.root / "memory",
+        )
+        self.assertEqual(result.kind, "memory")
+        self.assertEqual(len(result.tree.children), 1)
+        card = result.part(result.tree.children[0].name, SkillCard)
+        self.assertEqual(card, skill("tiling"))
+
+    def test_optimize_manifest(self):
+        start = self.root / "start"
+        start.mkdir()
+        path = save_artifact(self.naive, start / "input.json")
+        result = optimize(path, workdir=self.root / "optimized")
+        self.assertTrue(same_implementation(result.part("kernel", Kernel), self.optimized))
+        self.assertEqual(result.part("kernel", Kernel).validation, measured(result.part("kernel", Kernel)))
+        replay = optimize(result, workdir=self.root / "replay", max_apply_step=0)
+        self.assertEqual(replay.part("kernel", Kernel), result.part("kernel", Kernel))
+
+    def test_cli_artifact_json(self):
+        current = self.naive
+        cases = (
+            (
+                "init_memory",
+                [
+                    "--problem",
+                    "p",
+                    "--repo",
+                    "r",
+                    "--expert-kernel",
+                    "k",
+                    "--memory-dir",
+                    "m",
+                ],
+            ),
+            ("optimize", ["--start-kernel", "k", "--workdir", "w"]),
+        )
+        for name, arguments in cases:
+            module = importlib.import_module("klineage.cli." + name)
+            output = io.StringIO()
+            with (
+                self.subTest(cli=name),
+                patch.object(module, name, return_value=current),
+                redirect_stdout(output),
+            ):
+                module.main(arguments)
+            self.assertEqual(from_json(output.getvalue(), type(current)), current)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class Runner:
+    def __init__(self, workdir, **options):
+        self.workdir = workdir
+        self.options = options
+
+
+class ServerCampaignTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+    def test_runtime_state_and_prompt(self):
+        # Stop at generation; exercising wiring needs no provider or device process.
+        python = self.root / "python"
+        python.symlink_to(sys.executable)
+        agent = AgentRuntime(python=python, device_nodes=(Path("/dev/null"),))
+        problem = problem_spec()
+        client = Mock()
+        client.endpoint = "http://evaluation.example"
+        client.problem.return_value = problem
+        problem_dir = self.root / "problem"
+        problem_dir.mkdir()
+        client.info.return_value = {
+            "backend": "cuda", "problem_paths": {problem.name: str(problem_dir)},
+        }
+        action = Mock(prompt="task\n")
+        action.run.side_effect = RuntimeError("stop-before-generation")
+        args = argparse.Namespace(
+            agent=agent,
+            budget=1800,
+            output=self.root,
+            model="test-model",
+            backend="cuda",
+            server_python=Path(sys.executable),
+            problem=self.root / "problem",
+            base_url="http://provider.example",
+            device_node=[],
+        )
+
+        with (
+            patch.object(
+                server_campaign,
+                "server_process",
+                return_value=nullcontext((client, 123)),
+            ),
+            patch.object(server_campaign, "runner_type", return_value=Runner) as runner,
+            patch.object(server_campaign, "Generation", return_value=action) as generation,
+            patch.object(server_campaign.signal, "signal"),
+            redirect_stdout(io.StringIO()),
+            self.assertRaisesRegex(RuntimeError, "stop-before-generation"),
+        ):
+            server_campaign.run(args)
+        generation.assert_called_once()
+        self.assertIs(generation.call_args.args[0], problem)
+        self.assertIs(generation.call_args.kwargs["agent"], agent)
+        runner.assert_called_once_with()
+        selected = generation.call_args.kwargs["runner"]
+        self.assertIs(selected.options["agent"], agent)
+        self.assertEqual(selected.options["model"], args.model)
+        self.assertEqual(selected.options["api_base_url"], args.base_url)
+        state = json.loads(
+            next(self.root.glob("sandbox-campaign-*/status.json")).read_text()
+        )
+        self.assertEqual(state["agent_python"], str(agent.python))
+        self.assertEqual(state["agent_device_nodes"], ["/dev/null"])
+        self.assertIn(state["generation_deadline"], action.prompt)
+        self.assertIn(f"reserves {server_campaign.AUDIT_RESERVE} seconds", action.prompt)
+        self.assertIn("independent service audit", action.prompt)

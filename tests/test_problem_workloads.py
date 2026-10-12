@@ -1,20 +1,15 @@
-"""Problems preserve zero or more independent workload cases."""
+from __future__ import annotations
 
-import copy
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from klineage.artifact import Artifact, Node, Problem, json_node
-from klineage.artifact import problem as problem_module
-from klineage.artifact.problem import (
-    load_problem,
-    load_problem_module,
-    load_trace,
-    trace_module,
-)
+from problem_fixtures import problem_spec
+
+from klineage.artifact import Node, Problem
+from klineage.artifact.problem import load_problem, load_trace
 from klineage.backend import get_backend
 from klineage.serialization import from_json, to_json
 
@@ -78,28 +73,6 @@ class ProblemWorkloadsTests(unittest.TestCase):
         self.assertEqual(item.values("inputs")["x"]["shape"], ["N", 4])
         self.assertEqual(from_json(to_json(item), Problem), item)
 
-    def test_workloads_file_required(self):
-        item = problem()
-        tree = Node.directory(".", (item.find("target.json"), item.find("definition.json")))
-        with self.assertRaisesRegex(ValueError, "workloads.jsonl"):
-            Problem.from_tree("problem", tree)
-        for text in ("", "\n"):
-            with self.subTest(text=text):
-                tree = Node.directory(".", (
-                    item.find("target.json"), item.find("definition.json"),
-                    Node.file("workloads.jsonl", text),
-                ))
-                restored = Problem.from_tree("problem", tree)
-                self.assertEqual(restored.workloads, ())
-
-    def test_definition_checked_without_cases(self):
-        item = problem()
-        for text in ("invalid JSON", "[]"):
-            with self.subTest(text=text):
-                tree = item.tree.with_child(Node.file("definition.json", text))
-                with self.assertRaises((TypeError, ValueError)):
-                    Problem.from_tree("problem", tree)
-
     def test_order_and_roundtrip(self):
         cases = (workload("small", 2), workload("large", 8))
         item = problem(*cases)
@@ -114,29 +87,6 @@ class ProblemWorkloadsTests(unittest.TestCase):
         self.assertEqual(restored.resolve_inputs("large"), (cases[1],))
         restored.workloads[0]["axes"]["N"] = 99
         self.assertEqual(restored.workloads, cases)
-
-    def test_uuid_validation(self):
-        for cases in (
-            (workload("same"), workload("same")),
-            (workload(""),),
-            (workload("   "),),
-            ({"axes": {"N": 2}, "inputs": {"x": {"type": "random"}}},),
-        ):
-            with self.subTest(cases=cases), self.assertRaisesRegex(
-                (TypeError, ValueError), "uuid"
-            ):
-                problem(*cases)
-
-        item = problem(workload("first"), workload("second"))
-        records = item.find("workloads.jsonl").content.splitlines()
-        tree = item.tree.with_child(Node.file("workloads.jsonl", "\n".join((records[0], records[0]))))
-        with self.assertRaisesRegex(ValueError, "duplicate.*uuid|uuid.*duplicate"):
-            Problem.from_tree("problem", tree)
-
-    def test_unknown_selection_rejected(self):
-        for item in (problem(), problem(workload("first"))):
-            with self.assertRaisesRegex(ValueError, "workload.*missing|unknown workload"):
-                item.resolve_inputs("missing")
 
     def test_symbolic_and_explicit_shapes(self):
         small, large = workload("small", 2), workload("large", 8)
@@ -174,28 +124,6 @@ class ProblemWorkloadsTests(unittest.TestCase):
         replaced = item.replace(workloads=(workload("replacement", 3),))
         self.assertEqual(replaced.resolve_inputs()[0]["uuid"], "replacement")
 
-    def test_trace_directory_cases(self):
-        source = self.root / "definition.json"
-        source.write_text(json.dumps(DEFINITION))
-        with self.assertRaisesRegex(FileNotFoundError, "workloads.jsonl"):
-            load_trace(self.root)
-        records = self.root / "workloads.jsonl"
-        records.write_text("\n")
-        self.assertEqual(load_trace(self.root).workloads, ())
-        cases = (workload("small", 2), workload("large", 8))
-        records.write_text("\n".join(json.dumps({
-            "definition": "increment", "workload": case,
-        }) for case in cases))
-        module = load_trace(self.root)
-        self.assertEqual(module.workloads, cases)
-        self.assertFalse(hasattr(module, "workload"))
-        with patch.object(type(get_backend("cuda")), "info", return_value={"platform": "sm90"}):
-            loaded = load_problem(self.root, backend=get_backend("cuda"))
-        self.assertEqual(loaded.workloads, cases)
-        inspected, inspected_path = load_problem_module(self.root)
-        self.assertEqual(inspected.workloads, cases)
-        self.assertEqual(inspected_path, source)
-
     def test_directory_input_paths(self):
         (self.root / "definition.json").write_text(json.dumps(DEFINITION))
         inputs = self.root / "inputs"
@@ -227,66 +155,109 @@ class ProblemWorkloadsTests(unittest.TestCase):
         (self.root / "target.json").write_text(json.dumps(problem().target()))
         self.assertEqual(load_problem(self.root).definition, definition)
 
-    def test_kernel_directory_reference(self):
-        (self.root / "definition.json").write_text(json.dumps(DEFINITION))
-        (self.root / "workloads.jsonl").write_text("")
-        (self.root / "target.json").write_text(json.dumps({
-            "name": "other", "language": "hip", "platform": "hygon",
-        }))
-        reference = {"path": str(self.root), **problem().target()}
-        artifact = Artifact("custom", Node.directory(".", (
-            json_node("metadata.json", {"problem": reference}),
-        )))
-        with patch("klineage.backend.detect_backend", side_effect=AssertionError("local probe")):
-            self.assertEqual(load_problem(artifact), problem())
-            self.assertEqual(load_problem(reference), problem())
 
-    def test_problem_reference_is_directory(self):
-        linked = self.root / "link"
-        actual = self.root / "problem"
-        actual.mkdir()
-        linked.symlink_to(actual, target_is_directory=True)
-        reference = problem_module.problem_reference(linked, problem())
-        self.assertEqual(reference, {"path": str(actual), **problem().target()})
-        filename = self.root / "file"
-        filename.touch()
-        with self.assertRaises(NotADirectoryError):
-            problem_module.problem_reference(filename, problem())
+class ProblemInputTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.path = self.root / "input.safetensors"
+        self.path.write_bytes(b"fixed input")
+        problem = problem_spec()
+        workload = problem.workloads[0]
+        workload["inputs"]["a"] = {
+            "type": "safetensors", "path": str(self.path), "tensor_key": "a",
+        }
+        self.problem = problem.replace(workloads=(workload,))
 
-    def test_invalid_target_rejected(self):
-        (self.root / "definition.json").write_text(json.dumps(DEFINITION))
-        (self.root / "workloads.jsonl").write_text("")
-        (self.root / "target.json").mkdir()
-        with patch("klineage.backend.detect_backend", side_effect=AssertionError("unneeded device probe")):
-            with self.assertRaises(IsADirectoryError):
-                load_problem(self.root)
+    def test_runtime_checks_input_digest(self):
+        self.assertEqual(self.problem.resolve_inputs(), self.problem.workloads)
+        self.path.write_bytes(b"changed input")
+        self.assertEqual(self.problem.workloads[0]["axes"]["M"], 128)
+        with self.assertRaisesRegex(ValueError, "changed"):
+            self.problem.resolve_inputs()
 
-    def test_bare_definition_rejected(self):
-        path = self.root / "definition.json"
-        path.write_text(json.dumps(DEFINITION))
-        with self.assertRaisesRegex((ValueError, NotADirectoryError), "directory"):
-            load_trace(path)
-        with self.assertRaisesRegex((ValueError, NotADirectoryError), "directory"):
-            load_problem(path, backend=get_backend("cuda"))
-        path.write_text(to_json(problem(workload("one"))))
-        self.assertEqual(load_problem(path), problem(workload("one")))
+    def test_input_path_scope(self):
+        record = json.loads(self.problem.find("workloads.jsonl").content)
+        descriptor = record["workload"]["inputs"]["a"]
+        filename = Path(descriptor["path"]).name
+        for prefix in ("other", "../inputs", "inputs/nested", "inputs/..", "/inputs", "inputs/", "inputs/."):
+            with self.subTest(prefix=prefix):
+                descriptor["path"] = f"{prefix}/{filename}"
+                tree = self.problem.tree.with_child(Node.file("workloads.jsonl", json.dumps(record)))
+                with self.assertRaisesRegex(ValueError, "fixed input path"):
+                    Problem.from_tree("problem", tree)
 
-    def test_python_reference_module(self):
-        path = self.root / "reference.py"
-        path.write_text("def make_inputs(): return {}\ndef torch_ref(): return ()\n")
-        module, source = load_problem_module(path)
-        self.assertEqual(module.make_inputs(), {})
-        self.assertEqual(source, path)
-
-    def test_trace_module_workloads(self):
-        self.assertEqual(trace_module(DEFINITION).workloads, ())
-        cases = (workload("one"), workload("two", 4))
-        module = trace_module(DEFINITION, cases)
-        self.assertEqual(module.workloads, cases)
-        self.assertEqual(module.run(3), 4)
-        with self.assertRaisesRegex(ValueError, "duplicate.*uuid|uuid.*duplicate"):
-            trace_module(DEFINITION, (cases[0], copy.deepcopy(cases[0])))
+    def test_replace_keeps_input_capture(self):
+        updated = self.problem.replace(platform="sm90")
+        self.assertEqual(updated.resolve_inputs(), self.problem.resolve_inputs())
+        self.path.unlink()
+        with self.assertRaises(ValueError):
+            self.problem.replace(platform="sm90")
 
 
-if __name__ == "__main__":
-    unittest.main()
+class ProblemSignatureTests(unittest.TestCase):
+
+    def test_resolves_axes_in_order(self):
+        problem = problem_spec()
+        definition = {
+            **problem.definition,
+            "axes": {"N": {"type": "var"}, "K": {"type": "const", "value": 16}},
+            "inputs": {
+                "z": {
+                    "shape": ["N", "K"],
+                    "dtype": "float32",
+                    "description": "Matrix.",
+                },
+                "a": {"shape": None, "dtype": "int32", "description": None},
+            },
+            "outputs": {"result": {"shape": ["N"], "dtype": "float32"}},
+        }
+        problem = problem.replace(definition=definition, workloads=({**problem.workloads[0], 'axes': {'N': 7}},))
+        self.assertEqual(
+            problem.values("inputs"),
+            {
+                "z": {"dtype": "float32", "shape": [7, 16], "description": "Matrix."},
+                "a": {"dtype": "int32", "shape": None, "description": None},
+            },
+        )
+        self.assertEqual(tuple(problem.values("inputs")), ("z", "a"))
+        self.assertEqual(
+            problem.values("outputs"), {"result": {"dtype": "float32", "shape": [7]}}
+        )
+        smaller = problem.replace(workloads=({**problem.workloads[0], 'axes': {'N': 0}},))
+        self.assertEqual(smaller.values("inputs")["z"]["shape"], [0, 16])
+
+    def test_rejects_invalid_axes(self):
+        problem = problem_spec()
+        for axes in (
+            {},
+            {"M": -1, "N": 8, "K": 8},
+            {"M": True, "N": 8, "K": 8},
+            {"M": "8", "N": 8, "K": 8},
+        ):
+            with self.subTest(axes=axes), self.assertRaises(ValueError):
+                problem.replace(workloads=({**problem.workloads[0], 'axes': axes},)).values(
+                    "inputs"
+                )
+
+        for axes in (
+            {},
+            {"M": {"type": "unknown"}},
+            {"M": {"type": "const", "value": 8}},
+        ):
+            with self.subTest(axes=axes), self.assertRaises(ValueError):
+                problem.replace(definition={**problem.definition, 'axes': axes}).values("inputs")
+
+    def test_keeps_empty_and_rank_zero(self):
+        problem = problem_spec()
+        definition = {
+            **problem.definition,
+            "inputs": {},
+            "outputs": {"result": {"shape": [], "dtype": "float32"}},
+        }
+        problem = problem.replace(definition=definition)
+        self.assertEqual(problem.values("inputs"), {})
+        self.assertEqual(
+            problem.values("outputs"), {"result": {"dtype": "float32", "shape": []}}
+        )

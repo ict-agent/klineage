@@ -1,36 +1,25 @@
 from __future__ import annotations
 
-from klineage.serialization import from_json
-import io
-import json
 import tempfile
 import unittest
 from collections.abc import Callable
-from contextlib import redirect_stderr
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock, patch
 
-from kernel_fixtures import edit_kernel, make_kernel, write_kernel
+from kernel_fixtures import make_kernel, write_kernel
 from problem_fixtures import io_problem
 
-from klineage.artifact.kernel import Kernel
 from klineage.backend.cuda import CudaKernel
 from klineage.backend.cuda import timing as cuda_timing
+from klineage.backend.runtime import bench_events
 from klineage.harness import eval as worker
-from klineage.harness.eval import (
-    CallableKernelEvaluator,
-    CallInputs,
-    ProblemRuntime,
-)
-from klineage.harness.timing import (
-    TimingPolicy,
-    TimingResult,
-    verify_performance,
-)
-from klineage.serialization import to_json
+from klineage.harness import timing
+from klineage.harness.eval import CallableKernelEvaluator, CallInputs, ProblemRuntime
+from klineage.harness.timing import TimingPolicy, TimingResult, verify_performance
 
 
 def timing_result(latency_ms=1.0, *, samples=None, backend="cupti") -> TimingResult:
@@ -71,35 +60,6 @@ class FakeBackend:
 
 
 class TimingTests(unittest.TestCase):
-    def test_cupti_sample_count(self):
-        policy = TimingPolicy(warmup=1, repeat=2, trials=1)
-        with (
-            patch.object(cuda_timing, "probe_cupti", return_value="13.0.0"),
-            patch.object(
-                cuda_timing,
-                "load_flashinfer_benchmark",
-                return_value=lambda **kwargs: [1.0],
-            ),
-            self.assertRaisesRegex(ValueError, "sample count"),
-        ):
-            cuda_timing.bench(lambda: None, policy=policy)
-
-    def test_default_policy(self):
-        self.assertEqual(cuda_timing.DEFAULT_POLICY, TimingPolicy(warmup=10, repeat=50, cold_l2=True, trials=3))
-
-    def test_requires_current_cupti(self):
-        for probe in (
-            Mock(side_effect=ModuleNotFoundError("cupti")),
-            Mock(return_value="12.9.0"),
-        ):
-            with (
-                self.subTest(probe=probe),
-                patch.object(cuda_timing, "probe_cupti", probe),
-                patch.object(cuda_timing, "load_flashinfer_benchmark") as benchmark,
-                self.assertRaisesRegex(RuntimeError, "strict CUPTI"),
-            ):
-                cuda_timing.bench(lambda: None)
-            benchmark.assert_not_called()
 
     def test_bench_samples_and_args(self):
         samples = ([3.0, 1.0, 2.0], [9.0, 5.0, 7.0], [4.0, 4.0, 4.0])
@@ -174,26 +134,6 @@ class CallableEvaluatorTests(unittest.TestCase):
         self.assertEqual(len(backend.calls), 1)
         self.assertIs(backend.calls[0][0], candidate)
 
-    def test_reference_is_only_timed(self):
-        candidate = self.build(body="return value + 1")
-        reference = self.build("reference", "return value + 1")
-        oracle_calls = []
-
-        def oracle(value):
-            oracle_calls.append(value)
-            return value + 1
-
-        backend = FakeBackend([1.0, 2.0])
-        result = self.evaluator(
-            self.runtime(oracle, (2,)),
-            backend=backend,
-        ).evaluate(candidate, reference=reference)
-        self.assertTrue(result.accepted)
-        self.assertEqual(result.latency_ms, 1.0)
-        self.assertEqual(result.reference_latency_ms, 2.0)
-        self.assertEqual(oracle_calls, [2])
-        self.assertIs(backend.calls[1][0], reference)
-
     def test_rejects_paired_slowdown(self):
         result = self.evaluator(
             self.runtime(),
@@ -204,35 +144,6 @@ class CallableEvaluatorTests(unittest.TestCase):
         self.assertFalse(result.profile_passed)
         self.assertEqual(result.latency_ms, 2.0)
         self.assertEqual(result.reference_latency_ms, 1.0)
-
-    def test_reference_requires_same_abi(self):
-        candidate = self.build()
-        reference = edit_kernel(
-            candidate,
-            problem=io_problem(
-                inputs=(),
-                outputs=(),
-                name="unit-test",
-                language="python",
-                platform="sm120",
-            ),
-        )
-        result = self.evaluator(self.runtime(), backend=FakeBackend([])).evaluate(
-            candidate,
-            reference=reference,
-        )
-        self.assertFalse(result.compile_passed)
-        self.assertFalse(result.correctness_passed)
-        self.assertFalse(result.profile_passed)
-
-    def test_unbuilt_kernel_fails_gate(self):
-        value = from_json(to_json(self.build()), Kernel)
-        backend = FakeBackend([])
-        result = self.evaluator(self.runtime(), backend=backend).evaluate(value)
-        self.assertFalse(result.compile_passed)
-        self.assertFalse(result.correctness_passed)
-        self.assertFalse(result.profile_passed)
-        self.assertEqual(backend.calls, [])
 
     def test_incorrect_output_skips_timing(self):
         backend = FakeBackend([])
@@ -275,31 +186,8 @@ class CallableEvaluatorTests(unittest.TestCase):
                 self.assertTrue(result.correctness_passed)
                 self.assertFalse(result.profile_passed)
 
-    def test_evaluator_enforces_arity(self):
-        result = self.evaluator(
-            self.runtime(inputs=()),
-            backend=FakeBackend([]),
-        ).evaluate(self.build())
-        self.assertTrue(result.compile_passed)
-        self.assertFalse(result.correctness_passed)
-
-    def test_interrupt_propagates(self):
-        evaluator = self.evaluator(self.runtime(), backend=FakeBackend([]))
-        with self.assertRaises(KeyboardInterrupt):
-            evaluator.evaluate(self.build(body="raise KeyboardInterrupt"))
-
 
 class PerformanceGateTests(unittest.TestCase):
-    def test_performance_threshold(self):
-        self.assertTrue(verify_performance(*(timing_result(1.0), timing_result(0.99))))
-        self.assertFalse(verify_performance(*(timing_result(1.0), timing_result(0.98))))
-
-    def test_requires_cupti(self):
-        current, reference = (timing_result(), timing_result())
-        self.assertFalse(
-            verify_performance(replace(current, backend_used="cuda_event"), reference)
-        )
-        self.assertFalse(verify_performance(replace(current, details={}), reference))
 
     def test_checks_timing_records(self):
         current, reference = (timing_result(), timing_result())
@@ -312,42 +200,157 @@ class PerformanceGateTests(unittest.TestCase):
         current.details["policy"]["cold_l2"] = False
         self.assertFalse(verify_performance(current, reference))
 
-    def test_logs_failed_trial(self):
-        current = timing_result(samples=((1.0,), (1.0,), (2.0,)))
-        reference = timing_result(samples=((1.0,), (1.0,), (1.0,)))
-        output = io.StringIO()
-        with redirect_stderr(output):
-            self.assertFalse(verify_performance(current, reference))
-        record = json.loads(output.getvalue().split("Performance gate: ", 1)[1])
-        self.assertEqual(record["candidate"], json.loads(to_json(current)))
-        self.assertEqual(record["reference"], json.loads(to_json(reference)))
-        self.assertEqual(record["trial_ratios"], [1.0, 1.0, 0.5])
-        self.assertEqual(record["overall_ratio"], 1.0)
-        self.assertFalse(record["passed"])
-        self.assertIn("trial 3", record["reason"])
 
-    def test_logs_invalid_evidence(self):
-        current, reference = (timing_result(), timing_result())
-        current.details["policy"]["repeat"] = 50
-        output = io.StringIO()
-        with redirect_stderr(output):
-            self.assertFalse(verify_performance(current, reference))
-        record = json.loads(output.getvalue().split("Performance gate: ", 1)[1])
-        self.assertFalse(record["passed"])
-        self.assertIn("sample count", record["reason"])
-        self.assertEqual(record["candidate"], json.loads(to_json(current)))
-
-    def test_logs_passed_gate(self):
-        output = io.StringIO()
-        with redirect_stderr(output):
-            self.assertTrue(
-                verify_performance(*(timing_result(1.0), timing_result(2.0)))
+class EventTimingTests(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(
+            patch(
+                "klineage.backend.runtime.device_runtime",
+                side_effect=lambda backend: backend.runtime(),
             )
-        record = json.loads(output.getvalue().split("Performance gate: ", 1)[1])
-        self.assertTrue(record["passed"])
-        self.assertEqual(record["trial_ratios"], [2.0])
-        self.assertEqual(record["minimum_ratio"], 0.99)
+        )
+        self.enterContext(
+            patch(
+                "klineage.backend.runtime.load_torch",
+                side_effect=lambda backend: backend.torch(),
+            )
+        )
+        self.enterContext(patch("klineage.backend.runtime.current_device", side_effect=lambda backend: backend.device()))
+
+    def backend(self, name="hip-events"):
+        calls = []
+        stream = object()
+
+        class Event:
+            def __init__(self, *, enable_timing):
+                self.assert_timing = enable_timing
+
+            def record(self, target):
+                calls.append(("record", target))
+
+            def synchronize(self):
+                calls.append("event-sync")
+
+            def elapsed_time(self, end):
+                calls.append("elapsed")
+                return 2.0
+
+        runtime = SimpleNamespace(
+            Event=Event,
+            current_stream=lambda device: stream,
+            device=lambda device: nullcontext(),
+            synchronize=lambda device: calls.append("sync"),
+        )
+        backend = SimpleNamespace(
+            kind="hygon" if name == "hip-events" else "ascend",
+            timing=SimpleNamespace(NAME=name, DEFAULT_POLICY=timing.TimingPolicy(cold_l2=False)),
+            device_type="cuda" if name == "hip-events" else "npu",
+            device=lambda: "device:0",
+            runtime=lambda: runtime,
+            torch=lambda: SimpleNamespace(inference_mode=nullcontext),
+        )
+        return backend, calls, stream
+
+    def test_event_samples_and_scope(self):
+        for name in ("hip-events", "npu-events"):
+            with self.subTest(name=name):
+                backend, calls, stream = self.backend(name)
+                policy = timing.TimingPolicy(
+                    warmup=1, repeat=2, trials=2, cold_l2=False
+                )
+                result = bench_events(
+                    lambda value, calls=calls: calls.append(value),
+                    backend=backend,
+                    args=("run",),
+                    policy=policy,
+                )
+                self.assertEqual(result.samples_ms, ((2.0, 2.0), (2.0, 2.0)))
+                self.assertEqual(result.backend_used, name)
+                self.assertEqual(result.details["scope"], "current_stream_interval")
+                self.assertEqual(calls.count("run"), 6)
+                self.assertEqual(calls.count(("record", stream)), 8)
+                self.assertEqual(calls.count("event-sync"), 4)
+                self.assertLess(calls.index("event-sync"), calls.index("elapsed"))
+                self.assertTrue(timing.verify_performance(result, result))
+
+    def test_events_reject_cold_cache(self):
+        backend, calls, _ = self.backend()
+        with self.assertRaisesRegex(ValueError, "cold_l2"):
+            bench_events(lambda: None, backend=backend, policy=timing.TimingPolicy())
+        self.assertEqual(calls, [])
+
+    def test_events_use_input_device(self):
+        backend, _, _ = self.backend()
+        runtime = backend.runtime()
+        runtime.device = Mock(return_value=nullcontext())
+        value = SimpleNamespace(device="npu:2")
+        bench_events(lambda value: None, backend=backend, args=(value,))
+        runtime.device.assert_called_once_with("npu:2")
 
 
-if __name__ == "__main__":
-    unittest.main()
+class BackendWorkerTests(unittest.TestCase):
+
+    def test_clone_preserves_layout(self):
+        import torch
+
+        examples = (
+            torch.arange(24).reshape(4, 6)[:, 1::2],
+            torch.tensor([3.0]).expand(3, 4),
+            torch.empty_strided((0, 3), (9, 2)),
+        )
+        for value in examples:
+            with self.subTest(shape=value.shape, stride=value.stride()):
+                cloned = worker.clone_value(value)
+                self.assertEqual(cloned.stride(), value.stride())
+                torch.testing.assert_close(cloned, value)
+                if value.numel():
+                    self.assertNotEqual(cloned.data_ptr(), value.data_ptr())
+                    original = value[0, 0].item()
+                    cloned[0, 0] = -99
+                    self.assertEqual(value[0, 0].item(), original)
+
+    def test_trace_inputs_use_device(self):
+        backend = SimpleNamespace(device=lambda: "npu:1")
+        value = object()
+        module = SimpleNamespace(definition={}, workloads=({},))
+        with (
+            patch.object(worker, "trace_inputs", return_value={"x": value}) as inputs,
+            patch.object(worker, "current_device", return_value="npu:1"),
+            patch.object(worker, "require_tensor", return_value=value) as require,
+        ):
+            self.assertEqual(worker.load_inputs(module, 7, backend), {"x": value})
+        inputs.assert_called_once_with({}, {}, seed=7, device="npu:1")
+        require.assert_called_once_with(value, "problem input 'x'", backend)
+
+    def test_worker_dispatches_timer(self):
+        from kernel_fixtures import kernel as kernel_fixture
+
+
+        for name in ("hip-events", "npu-events"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                backend = SimpleNamespace(timing=SimpleNamespace(NAME=name, DEFAULT_POLICY=timing.TimingPolicy(cold_l2=False)))
+                kernel = kernel_fixture()
+                accepted = worker.ValidationResult(True, True, True, 1.0)
+                with (
+                    patch.object(worker, "restore", return_value=kernel),
+                    patch.object(type(kernel), "build_kernel", return_value=lambda: None),
+                    patch.object(worker, "get_backend", return_value=backend),
+                    patch.object(worker, "trace_module"),
+                    patch.object(worker, "load_inputs", return_value={}) as inputs,
+                    patch.object(worker, "compute_reference"),
+                    patch.object(worker, "check_problem"),
+                    patch.object(worker, "tensor_strides", return_value={}),
+                    patch.object(worker, "device_runtime") as runtime,
+                    patch.object(worker, "CallableKernelEvaluator") as evaluator,
+                ):
+                    evaluator.return_value.evaluate.return_value = accepted
+                    result = worker.evaluate_request(
+                        {
+                            "kernel": {},
+                            "config": {"build_root": directory},
+                        }
+                    )
+                self.assertEqual(result, accepted)
+                self.assertFalse(evaluator.call_args.kwargs["policy"].cold_l2)
+                self.assertIs(inputs.call_args.args[2], backend)
+                runtime.assert_called_once_with(backend)

@@ -1,4 +1,4 @@
-"""Small FlashInfer Trace contracts for tests."""
+from __future__ import annotations
 
 from klineage.artifact.problem import Problem
 

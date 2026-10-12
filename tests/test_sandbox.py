@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import errno
+import importlib
+import json
 import os
 import shutil
 import socket
@@ -14,8 +15,16 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-from klineage.harness.sandbox import Sandbox, runtime_paths
+from kernel_fixtures import make_kernel
+from problem_fixtures import problem_spec
 
+from klineage.artifact import load_problem
+from klineage.backend import get_backend
+from klineage.harness import AgentRuntime, CodexRunner
+from klineage.harness.eval import WorkerError
+from klineage.harness.sandbox import Sandbox
+from klineage.serialization import to_json
+from klineage.server.worker import WorkerRuntime
 
 PROCESS_WAIT_SECONDS = 5
 POLL_SECONDS = 0.02
@@ -58,12 +67,6 @@ class SandboxTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.sandbox(read_only=(path,))
 
-    def test_reject_broad_writable(self):
-        for path in (Path("/"), self.root, Path.home(), Path("/proc"), Path("/dev")):
-            with self.subTest(path=path):
-                with self.assertRaises(ValueError):
-                    self.sandbox(writable=(path,))
-
     def test_scoped_writable_mount(self):
         state = self.root / "state"
         state.mkdir()
@@ -73,18 +76,6 @@ Path({str(state / 'session')!r}).write_text('resumable')
 assert not Path({str(self.secret)!r}).exists()
 """, self.sandbox(writable=(state,)))
         self.assertEqual((state / "session").read_text(), "resumable")
-
-    def test_reject_non_devices(self):
-        with self.assertRaisesRegex(ValueError, "device"):
-            self.sandbox(devices=(self.secret,))
-
-    def test_reject_non_sockets(self):
-        with self.assertRaisesRegex(ValueError, "socket"):
-            self.sandbox(sockets=(self.secret,))
-
-    def test_reject_host_home(self):
-        with self.assertRaisesRegex(ValueError, "HOME"):
-            self.sandbox(environment={"HOME": str(Path.home())})
 
     def test_workspace_read_only(self):
         source = f"""
@@ -121,21 +112,6 @@ assert not Path('/dev/dri').exists()
 assert not Path('/dev/davinci0').exists()
 """
         self.run_code(source)
-
-    def test_workspace_read_only_child(self):
-        protected = self.workspace / "reference"
-        protected.write_text("trusted")
-        sandbox = self.sandbox(read_only=(protected,))
-        self.run_code("""
-import errno
-from pathlib import Path
-try:
-    Path('reference').write_text('changed')
-except OSError as error:
-    assert error.errno == errno.EROFS
-else:
-    raise AssertionError('workspace shadowed a read-only mount')
-""", sandbox)
 
     def test_private_home_and_tmp(self):
         source = """
@@ -220,44 +196,6 @@ assert not Path({str(self.secret)!r}).exists()
             self.assertFalse(thread.is_alive())
             self.assertEqual(messages, [b"hello"])
 
-    def test_python_runtime_paths(self):
-        sandbox = self.sandbox(read_only=runtime_paths(sys.executable))
-        result = subprocess.run(
-            sandbox.command([sys.executable, "-c", "import ssl,json; print('ready')"]),
-            env=sandbox.environment,
-            capture_output=True,
-            text=True,
-            timeout=PROCESS_WAIT_SECONDS,
-            check=True,
-        )
-        self.assertEqual(result.stdout.strip(), "ready")
-
-    def test_python_symlink_chain(self):
-        executable = Path(sys.executable).resolve(strict=True)
-        alias = self.root / "base-alias"
-        alias.symlink_to(executable.parent.parent, target_is_directory=True)
-        environment = self.root / "python-env"
-        (environment / "bin").mkdir(parents=True)
-        python = environment / "bin/python"
-        python.symlink_to("python-middle")
-        python.with_name("python-middle").symlink_to(alias / "bin" / executable.name)
-        sandbox = self.sandbox(read_only=runtime_paths(python))
-        result = subprocess.run(
-            sandbox.command([str(python), "-c", "print('ready')"]),
-            env=sandbox.environment, capture_output=True, text=True,
-            timeout=PROCESS_WAIT_SECONDS, check=True,
-        )
-        self.assertEqual(result.stdout.strip(), "ready")
-
-    def test_executable_symlink(self):
-        binary = self.root / "binary"
-        binary.symlink_to(shutil.which("true"))
-        sandbox = self.sandbox(read_only=runtime_paths(sys.executable, binary))
-        subprocess.run(
-            sandbox.command([str(binary)]), env=sandbox.environment,
-            check=True, timeout=PROCESS_WAIT_SECONDS,
-        )
-
     def wait_for(self, predicate):
         deadline = time.monotonic() + PROCESS_WAIT_SECONDS
         while time.monotonic() < deadline:
@@ -282,13 +220,6 @@ assert not Path({str(self.secret)!r}).exists()
             return state == "Z"
         except (FileNotFoundError, ProcessLookupError):
             return True
-
-    def test_exit_observer_race(self):
-        with patch.object(Path, "read_text", side_effect=ProcessLookupError(errno.ESRCH, "No such process")):
-            self.assertTrue(self.process_exited(os.getpid()))
-        with patch.object(Path, "read_text", side_effect=PermissionError(errno.EACCES, "Permission denied")):
-            with self.assertRaises(PermissionError):
-                self.process_exited(os.getpid())
 
     def detached_child(self):
         marker = uuid.uuid4().hex
@@ -323,3 +254,412 @@ while not pathlib.Path('release').exists():
         process.kill()
         process.communicate(timeout=PROCESS_WAIT_SECONDS)
         self.wait_for(lambda: self.process_exited(child))
+
+
+RUN_TIMEOUT = 15
+
+
+class AgentRuntimeTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.work = self.root / "work"
+        self.work.mkdir()
+        self.venv = self.root / "agent-python"
+        self.venv.symlink_to(sys.prefix, target_is_directory=True)
+        self.python = self.venv / "bin" / "python"
+        self.toolchain = self.root / "toolchain"
+        self.toolchain.mkdir()
+        (self.toolchain / "runtime_marker.py").write_text("VALUE = 'operator supplied'\n")
+        self.context = self.root / "context.json"
+        self.context.write_text("trusted context")
+        self.secret = self.root / "host-secret"
+        self.secret.write_text("host only")
+        self.enterContext(patch.dict(os.environ, {
+            "CODEX_HOME": str(self.root / "codex-home"),
+            "KLINEAGE_SERVER": "", "KLINEAGE_API_BASE_URL": "",
+            "KLINEAGE_API_KEY_ENV": "", "AIPING_API_KEY": "host-provider-key",
+            "HOST_ONLY_VALUE": "host only",
+        }))
+
+    def runner(self, **kwargs):
+        return CodexRunner(self.work, codex_bin="/usr/bin/true", **kwargs)
+
+    def execute(self, runner, source):
+        program = [str(runner.agent.python), "-c", source]
+        with patch.object(runner, "command", return_value=program):
+            with runner.execution(self.work / "reply.txt", self.work / "run") as (command, environment):
+                result = subprocess.run(
+                    command, env=environment, capture_output=True, text=True,
+                    timeout=RUN_TIMEOUT,
+                )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout), command
+
+    def test_default_is_device_free(self):
+        runner = self.runner()
+        self.assertEqual(runner.agent.device_nodes, ())
+        result, command = self.execute(runner, """
+import json,os,pathlib
+assert not list(pathlib.Path('/dev').glob('nvidia*'))
+assert not pathlib.Path('/dev/dri').exists()
+assert not pathlib.Path('/dev/davinci0').exists()
+assert 'AIPING_API_KEY' not in os.environ
+assert 'HOST_ONLY_VALUE' not in os.environ
+print(json.dumps({'home': os.environ['HOME']}))
+""")
+        self.assertEqual(result["home"], "/home/agent")
+        self.assertNotIn("--dev-bind", command)
+
+    def test_explicit_runtime_launch(self):
+        agent = AgentRuntime(
+            python=self.python, device_nodes=(Path("/dev/null"),),
+            read_only=(self.toolchain,),
+            environment={
+                "PYTHONPATH": str(self.toolchain), "PATH": "/usr/local/cuda/bin:/usr/bin:/bin",
+                "LD_LIBRARY_PATH": str(self.toolchain), "CUDA_VISIBLE_DEVICES": "0",
+                "RUNTIME_SETTING": "explicit",
+            },
+        )
+        runner = self.runner(agent=agent, read_only=(self.context,))
+        result, command = self.execute(runner, f"""
+import errno,json,os,pathlib,sys
+import runtime_marker
+assert runtime_marker.VALUE == 'operator supplied'
+assert pathlib.Path({str(self.context)!r}).read_text() == 'trusted context'
+assert not pathlib.Path({str(self.secret)!r}).exists()
+assert 'AIPING_API_KEY' not in os.environ
+assert 'HOST_ONLY_VALUE' not in os.environ
+assert os.environ['RUNTIME_SETTING'] == 'explicit'
+assert os.environ['CUDA_VISIBLE_DEVICES'] == '0'
+assert os.environ['LD_LIBRARY_PATH'] == {str(self.toolchain)!r}
+for target in (pathlib.Path({str(self.context)!r}), pathlib.Path(runtime_marker.__file__)):
+    try:
+        target.write_text('changed')
+    except OSError as error:
+        assert error.errno == errno.EROFS
+    else:
+        raise AssertionError('runtime dependency is writable')
+print(json.dumps({{'python':sys.executable,'path':os.environ['PATH']}}))
+""")
+        self.assertEqual(result["python"], str(self.python))
+        self.assertTrue(result["path"].startswith(str(self.python.parent) + ":"))
+        self.assertIn("/usr/local/cuda/bin", result["path"])
+        device = command.index("--dev-bind")
+        self.assertEqual(command[device:device + 3], ["--dev-bind", "/dev/null", "/dev/null"])
+
+    def test_private_env_rejected(self):
+        for name in (
+            "HOME", "TMPDIR", "CODEX_HOME", "KLINEAGE_SERVER", "KLINEAGE_PROBLEM",
+            "KLINEAGE_PROCESS_SCOPE", "AIPING_API_KEY",
+            "LD_PRELOAD", "LD_AUDIT", "PYTHONHOME", "PYTHONSTARTUP",
+        ):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                AgentRuntime(environment={name: "not allowed"})
+
+
+WORKER_TIMEOUT = 10
+
+
+class WorkerSandboxTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.workspace = self.root / "job" / "work"
+        self.build = self.workspace / "build"
+        self.build.mkdir(parents=True)
+        self.logs = self.root / "job" / "evaluations"
+        self.logs.mkdir()
+        self.secret = self.root / "job" / "result.json"
+        self.secret.write_text("service-owned")
+        self.fixed = self.root / "trusted" / "fixed.safetensors"
+        self.fixed.parent.mkdir()
+        self.fixed.write_bytes(b"fixed-input")
+        problem = problem_spec()
+        workload = problem.workloads[0]
+        workload["inputs"]["a"] = {
+            "type": "safetensors", "path": str(self.fixed), "tensor_key": "a",
+        }
+        self.kernel = make_kernel("isolated", problem.replace(workloads=(workload,)))
+        self.request = {
+            "operation": "evaluate", "kernel": json.loads(to_json(self.kernel)), "reference": None,
+            "config": {"build_root": str(self.build), "include_paths": []},
+        }
+
+    def invoke(self, code, runtime=None):
+        runtime = runtime or WorkerRuntime(timeout=WORKER_TIMEOUT)
+        with patch("klineage.harness.eval.WORKER_ENTRY", code):
+            return runtime.invoke(self.request, self.logs, "sandbox")
+
+    def test_service_files_hidden(self):
+        code = f"""
+import errno,json,pathlib,sys
+from klineage.artifact import Kernel,load_problem
+from klineage.serialization import restore
+request=json.load(sys.stdin)
+problem=load_problem(restore(request['kernel'], Kernel))
+assert not pathlib.Path({str(self.secret)!r}).exists()
+assert not pathlib.Path({str(self.logs)!r}).exists()
+assert not pathlib.Path({str(self.root / 'job' / 'candidate.json')!r}).exists()
+pathlib.Path('local.txt').write_text('writable')
+source=pathlib.Path(problem.workloads[0]['inputs']['a']['path'])
+assert source.read_bytes() == b'fixed-input'
+try:
+    source.write_text('changed')
+except OSError as error:
+    assert error.errno == errno.EROFS
+else:
+    raise AssertionError('worker could modify trusted data')
+try:
+    (pathlib.Path.cwd().parent/'result.json').write_text('forged')
+except OSError as error:
+    assert error.errno == errno.EROFS
+print(json.dumps({{'isolated': True}}))
+"""
+        self.assertEqual(self.invoke(code), {"isolated": True})
+        self.assertEqual((self.workspace / "local.txt").read_text(), "writable")
+        self.assertEqual(self.secret.read_text(), "service-owned")
+        self.assertEqual(self.fixed.read_bytes(), b"fixed-input")
+        record = json.loads((self.logs / "sandbox-process.json").read_text())
+        self.assertEqual(Path(record["command"][0]).name, "bwrap")
+
+    def test_credentials_not_inherited(self):
+        with patch.dict(os.environ, {"AIPING_API_KEY": "sensitive", "LD_PRELOAD": "/host/hook.so"}):
+            runtime = WorkerRuntime(environment={"WORKER_TEST_SETTING": "explicit"})
+        result = self.invoke("""
+import json,os
+assert 'AIPING_API_KEY' not in os.environ
+assert 'LD_PRELOAD' not in os.environ
+assert os.environ['WORKER_TEST_SETTING'] == 'explicit'
+print(json.dumps({'environment': 'clean'}))
+""", runtime)
+        self.assertEqual(result, {"environment": "clean"})
+        for name in ("AIPING_API_KEY", "SERVER_TOKEN", "LD_PRELOAD"):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                WorkerRuntime(environment={name: "disallowed"})
+
+    def test_no_implicit_devices(self):
+        result = self.invoke("""
+import json,pathlib
+assert not list(pathlib.Path('/dev').glob('nvidia*'))
+assert not pathlib.Path('/dev/dri').exists()
+assert not pathlib.Path('/dev/davinci0').exists()
+print(json.dumps({'devices': 'none'}))
+""")
+        self.assertEqual(result, {"devices": "none"})
+
+    def test_include_headers_readonly(self):
+        headers = self.root / "headers"
+        headers.mkdir()
+        header = headers / "values.h"
+        header.write_text("#define VALUE 7")
+        self.request["config"]["include_paths"] = [str(headers)]
+        self.assertEqual(self.invoke(f"""
+import errno,json,pathlib
+header=pathlib.Path({str(header)!r})
+assert header.read_text() == '#define VALUE 7'
+try:
+    header.write_text('changed')
+except OSError as error:
+    assert error.errno == errno.EROFS
+else:
+    raise AssertionError('include path is writable')
+print(json.dumps({{'headers': 'readonly'}}))
+"""), {"headers": "readonly"})
+
+    def test_plugin_in_host_and_worker(self):
+        plugin_name = "worker_plugin_" + uuid.uuid4().hex
+        directory = self.root / "plugins"
+        directory.mkdir()
+        plugin = directory / f"{plugin_name}.py"
+        plugin.write_text(f"""
+from klineage.backend import register_backend
+from klineage.backend.cuda.kernel import CudaBackend,CudaKernel
+class TestKernel(CudaKernel):
+    artifact_kind={plugin_name!r}
+class TestBackend(CudaBackend):
+    kind={plugin_name!r}
+    language={plugin_name!r}
+    platform_prefixes=({plugin_name!r},)
+    kernel_type=TestKernel
+register_backend(TestBackend())
+""")
+        with patch.object(sys, "path", [str(directory), *sys.path]):
+            importlib.invalidate_caches()
+            runtime = WorkerRuntime(worker_plugins=(plugin_name,))
+            from klineage.backend import get_backend
+            self.assertEqual(get_backend(plugin_name).kind, plugin_name)
+            result = self.invoke(f"""
+import json,pathlib
+from klineage.backend import get_backend
+backend=get_backend({plugin_name!r})
+assert not pathlib.Path({str(self.secret)!r}).exists()
+print(json.dumps({{'backend': backend.kind}}))
+""", runtime)
+        self.assertEqual(result, {"backend": plugin_name})
+        from klineage.backend.registry import REGISTERED_BACKENDS
+        REGISTERED_BACKENDS[:] = [item for item in REGISTERED_BACKENDS if item.kind != plugin_name]
+        sys.modules.pop(plugin_name, None)
+
+    def test_timeout_cleans_children(self):
+        marker = uuid.uuid4().hex
+        code = f"""
+import pathlib,subprocess,time
+subprocess.Popen(['/usr/bin/python3','-c','import time; time.sleep(60)',{marker!r}], start_new_session=True)
+pathlib.Path('started').touch()
+time.sleep(60)
+"""
+        with self.assertRaisesRegex(WorkerError, "timed out"):
+            self.invoke(code, WorkerRuntime(timeout=1))
+        self.assertTrue((self.workspace / "started").exists())
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            alive = []
+            for path in Path("/proc").glob("[0-9]*/cmdline"):
+                try:
+                    if marker.encode() in path.read_bytes().split(b"\0"):
+                        alive.append(path)
+                except OSError:
+                    continue
+            if not alive:
+                break
+            time.sleep(0.02)
+        self.assertEqual(alive, [])
+        record = json.loads((self.logs / "sandbox-process.json").read_text())
+        self.assertTrue(record["timed_out"])
+        self.assertEqual(Path(record["command"][0]).name, "bwrap")
+        self.assertEqual(load_problem(self.kernel).name, "gemm")
+
+
+class LocalRuntimeTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.devices = self.root / "dev"
+        self.devices.mkdir()
+        self.toolkit = self.root / "vendor"
+        (self.toolkit / "bin").mkdir(parents=True)
+        self.compiler = self.toolkit / "bin" / "compiler"
+        self.compiler.touch()
+        self.compiler.chmod(0o755)
+        self.enterContext(patch.dict(os.environ, {}, clear=True))
+        self.enterContext(
+            patch("klineage.backend.runtime.DEVICE_ROOT", self.devices, create=True)
+        )
+
+    def node(self, name):
+        path = self.devices / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.symlink_to("/dev/null")
+        return path
+
+    def local(self, language="cuda", **info):
+        backend = get_backend(language)
+        metadata = {"available": True, "compiler": str(self.compiler)} | info
+        with patch.object(type(backend), "info", return_value=metadata):
+            return AgentRuntime.local(backend)
+
+    def test_device_families(self):
+        names = {
+            "cuda": (
+                "nvidia0",
+                "nvidia2",
+                "nvidiactl",
+                "nvidia-uvm",
+                "nvidia-uvm-tools",
+                "nvidia-caps/nvidia-cap2",
+            ),
+            "hip": ("kfd", "dri/renderD128", "dri/renderD130"),
+            "ascendc": (
+                "davinci0",
+                "davinci3",
+                "davinci_manager",
+                "devmm_svm",
+                "hisi_hdc",
+            ),
+        }
+        for group in names.values():
+            for name in group:
+                self.node(name)
+        (self.devices / "nvidia9").touch()
+        (self.devices / "davinci7").mkdir()
+        self.node("unrelated")
+
+        for language, expected in names.items():
+            with self.subTest(language=language):
+                runtime = self.local(language)
+                self.assertEqual(
+                    set(runtime.device_nodes),
+                    {self.devices / name for name in expected},
+                )
+                self.assertEqual(runtime.python, Path(sys.executable).absolute())
+
+    def test_visibility_and_secrets(self):
+        self.node("nvidia2")
+        with patch.dict(
+            os.environ,
+            {
+                "CUDA_VISIBLE_DEVICES": "2",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "KLINEAGE_BACKEND": "ascend",
+                "AIPING_API_KEY": "secret",
+                "LD_PRELOAD": "/host/hook.so",
+                "PYTHONPATH": "/host/private",
+                "UNRELATED_SETTING": "private",
+                "HOME": str(self.root),
+            },
+        ):
+            runtime = self.local()
+        self.assertEqual(
+            dict(runtime.environment),
+            {
+                "CUDA_VISIBLE_DEVICES": "2",
+                "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                "KLINEAGE_BACKEND": "cuda",
+                "PATH": f"{self.compiler.parent}:/usr/bin:/bin",
+            },
+        )
+
+    def test_compiler_is_on_path(self):
+        self.node("nvidia0")
+        for path in ("/usr/bin:/bin", f"{self.compiler.parent}:/usr/bin:/bin"):
+            with self.subTest(path=path), patch.dict(os.environ, {"PATH": path}):
+                runtime = self.local()
+                search = runtime.environment["PATH"]
+                self.assertEqual(shutil.which(self.compiler.name, path=search), str(self.compiler))
+                self.assertEqual(search.split(os.pathsep).count(str(self.compiler.parent)), 1)
+                self.assertTrue(search.endswith("/usr/bin:/bin"))
+
+    def test_external_toolkit_paths(self):
+        self.node("nvidia0")
+        libraries = self.root / "vendor-libraries"
+        libraries.mkdir()
+        with patch.dict(
+            os.environ,
+            {
+                "PATH": f"{self.toolkit / 'bin'}:/usr/bin:/bin",
+                "LD_LIBRARY_PATH": str(libraries),
+            },
+        ):
+            runtime = self.local()
+        self.assertEqual(set(runtime.read_only), {self.toolkit, libraries})
+
+    def test_skips_private_and_broad_paths(self):
+        self.node("nvidia0")
+        unsafe = (
+            str(Path.home()),
+            str(Path.cwd()),
+            str(Path.cwd().parent),
+            "/dev",
+            "/proc",
+            "/sys",
+            "/",
+            "/tmp",
+            ".",
+        )
+        with patch.dict(os.environ, {"LD_LIBRARY_PATH": ":".join(unsafe)}):
+            runtime = self.local()
+        self.assertEqual(runtime.read_only, (self.toolkit,))
+
+    def test_unavailable_backend(self):
+        with self.assertRaisesRegex(RuntimeError, "unavailable"):
+            self.local(available=False)

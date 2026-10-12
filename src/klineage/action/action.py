@@ -34,7 +34,7 @@ from klineage.constants import (
     RunKind,
 )
 from klineage.errors import StructuredOutputError
-from klineage.harness import AgentRuntime, create_runner, session_id
+from klineage.harness import AgentRunner, AgentRuntime, create_runner, session_id
 from klineage.memory.storage import load_skill
 from klineage.prompts import action_spec
 from klineage.serialization import raw_text
@@ -58,6 +58,7 @@ class Action:
             queries its Node schema; construction checks the returned tree.
         evaluation: Evaluation service client. Built-in kernel actions create
             a client from the environment when omitted.
+        runner: Optional configured runner; its model and timeout settings apply.
         agent: Optional sandbox runtime, mounts, and diagnostic devices.
             The default runtime exposes no device nodes.
     """
@@ -74,6 +75,7 @@ class Action:
         output_type: type[Artifact] | None = None,
         evaluation: Client | None = None,
         agent: AgentRuntime | None = None,
+        runner: AgentRunner | None = None,
     ):
         if type(max_retries) is not int:
             raise TypeError("max_retries must be an integer")
@@ -99,9 +101,9 @@ class Action:
         self.workdir = Path(workdir).expanduser().resolve()
         self.max_retries = max_retries
         self.evaluation = evaluation
-        self.agent = agent or AgentRuntime()
+        self.agent = agent or (runner.agent if runner is not None else AgentRuntime())
         self.read_only = ()
-        self.runner = create_runner(
+        self.runner = runner if runner is not None else create_runner(
             self.workdir, timeout=timeout, evaluation=evaluation, agent=self.agent,
         )
 
@@ -291,14 +293,9 @@ def collect_output(
         if card is not None:
             children.append(nested("skillcard", card))
 
-    records = [
-        work / STATE_DIRECTORY / name for name in (RUN_RECORDS_DIRECTORY, "codex-runs", "claude-runs")
-        if (work / STATE_DIRECTORY / name).is_dir()
-    ]
-    if len(records) == 1:
-        children.append(replace(capture(records[0]), name="records"))
-    elif records:
-        children.append(Node.directory("records", [capture(path) for path in records]))
+    records = work / STATE_DIRECTORY / RUN_RECORDS_DIRECTORY
+    if records.is_dir():
+        children.append(replace(capture(records), name="records"))
     schema = action_spec(kind.removeprefix(ACTION_PREFIX))
     tree = Node.directory(".", children, description=schema.description)
     return Artifact.from_tree(kind, tree)

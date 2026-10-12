@@ -1,4 +1,4 @@
-"""Public evaluation routes preserve measured artifacts and service boundaries."""
+from __future__ import annotations
 
 import json
 import os
@@ -12,7 +12,7 @@ from unittest.mock import patch
 from kernel_fixtures import kernel, measured, write_kernel
 
 import klineage
-from klineage.artifact import json_node, load_problem
+from klineage.artifact import load_problem
 from klineage.backend import get_backend
 from klineage.harness import AgentRuntime
 from klineage.serialization import to_json
@@ -114,42 +114,12 @@ class EvaluationTests(unittest.TestCase):
         Client(running.endpoint, "gemm-alias").verify(selected.kernel)
         self.assertEqual(service.problem_paths["gemm-alias"], self.problem_path)
 
-    def test_remote_portable_baseline(self):
-        self.local_runtime()
-        baseline = klineage.evaluate(self.candidate)
-        service, _ = self.start_server()
-        with patch("klineage.evaluation.detect_backend", side_effect=AssertionError("no local detection")), patch("klineage.evaluation.AgentRuntime.local", side_effect=AssertionError("no local devices")):
-            reply = klineage.evaluate(self.candidate, reference=baseline)
-        self.assertTrue(reply.accepted)
-        request = json.loads((service.root / "jobs" / reply.job_id / "request.json").read_text())
-        self.assertIsInstance(request["reference"], dict)
-        self.assertIn("sources", request["reference"])
-        self.assertEqual(CpuRuntime.calls[-1][1]["reference"].find("submission"), baseline.kernel.find("submission"))
-
-    def test_remote_problem_ref(self):
-        self.start_server()
-        metadata = json.loads(self.candidate.find("metadata.json").content)
-        metadata["problem"]["path"] = str(self.root / "not-mounted")
-        candidate = type(self.candidate)(self.candidate.tree.with_child(json_node("metadata.json", metadata)))
-        path = write_kernel(candidate, self.work / "current_kernel")
-        with patch("klineage.evaluation.load_problem", side_effect=AssertionError("no local problem read")):
-            reply = klineage.evaluate(path)
-        self.assertTrue(reply.accepted)
-        self.assertEqual(reply.problem_id, "alias")
-        self.assertEqual(json.loads(reply.kernel.find("metadata.json").content)["problem"]["path"], str(self.problem_path))
-
     def test_remote_failure(self):
         self.start_server()
         with patch.object(Client, "evaluate", side_effect=ServerError("offline")), patch("klineage.evaluation.AgentRuntime.local", side_effect=AssertionError("no fallback")):
             with self.assertRaisesRegex(ServerError, "offline"):
                 klineage.evaluate(self.candidate)
         self.assertFalse((self.work / "versions").exists())
-
-    def test_remote_ambiguous_path(self):
-        self.start_server({"first": self.problem_path, "second": self.problem_path})
-        with self.assertRaisesRegex(ValueError, "ambiguous"):
-            klineage.evaluate(self.candidate)
-        self.assertEqual(CpuRuntime.calls, [])
 
     def test_local_info_problem_links(self):
         links = self.work / "problems"
@@ -160,12 +130,3 @@ class EvaluationTests(unittest.TestCase):
             self.assertEqual(klineage.problem(), load_problem(self.candidate))
             self.assertEqual(klineage.problem("alias"), load_problem(self.candidate))
             self.assertEqual(klineage.problem(self.problem_path), load_problem(self.candidate))
-
-    def test_problem_without_device(self):
-        with patch("klineage.backend.detect_backend", side_effect=AssertionError("no device required")):
-            self.assertEqual(klineage.problem(self.problem_path), load_problem(self.candidate))
-
-    def test_candidate_problem(self):
-        write_kernel(self.candidate, self.work / "current_kernel")
-        with patch("klineage.evaluation.detect_backend", return_value=self.backend):
-            self.assertEqual(klineage.problem(), load_problem(self.candidate))

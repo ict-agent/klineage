@@ -12,7 +12,7 @@ from klineage.constants import STATE_DIRECTORY
 from klineage.utils import safe_file
 
 from .protocol import WireAPI
-from .runner import PROVIDER_KEY_PLACEHOLDER, AgentRunner, RunnerError, RunResult
+from .runner import PROVIDER_KEY_PLACEHOLDER, AgentRunner, RunnerError
 from .sandbox import AgentRuntime
 
 if TYPE_CHECKING:
@@ -141,7 +141,3 @@ class ClaudeCodeRunner(AgentRunner):
         final_file.write(reply)
         final_file.flush()
         return reply
-
-
-ClaudeCodeRunResult = RunResult
-ClaudeCodeRunnerError = RunnerError

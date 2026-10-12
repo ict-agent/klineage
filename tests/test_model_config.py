@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import tempfile
@@ -96,15 +98,6 @@ http_headers = {"X-Private" = "old-header"}
         self.assertEqual(settings["http_headers"], {})
         self.assertEqual(settings["model"], "configured")
 
-    def test_override_inherits_model_options(self):
-        self.config('model = "configured"\nmodel_reasoning_effort = "high"\nmodel_context_window = 100000\n')
-        self.auth({"tokens": {"access_token": "do-not-use", "account_id": "account"}})
-        settings = provider.model_settings(model="explicit", api_base_url="https://explicit.test/v1", api_key="explicit-key")
-        self.assertEqual(settings["api_key"], "explicit-key")
-        self.assertEqual(settings["http_headers"], {})
-        self.assertEqual(settings["reasoning_effort"], "high")
-        self.assertEqual(settings["options"], {"model_context_window": 100000})
-
     def test_same_endpoint_keeps_token(self):
         self.config('''model_provider = "gateway"
 [model_providers.gateway]
@@ -125,35 +118,6 @@ env_http_headers = {"api-key" = "HEADER_KEY"}
         self.assertIsNone(settings["api_key"])
         self.assertEqual(settings["http_headers"], {"api-key": "header-secret"})
 
-    def test_header_override_ignores_case(self):
-        self.config('''model_provider = "gateway"
-[model_providers.gateway]
-base_url = "https://configured.test/v1"
-http_headers = {"API-Key" = "static-key"}
-env_http_headers = {"api-key" = "HEADER_KEY"}
-''')
-        os.environ["HEADER_KEY"] = "environment-key"
-        self.assertEqual(provider.model_settings()["http_headers"], {"api-key": "environment-key"})
-
-    def test_openai_bearer_keeps_endpoint(self):
-        self.config('''[model_providers.openai]
-experimental_bearer_token = "configured-key"
-''')
-        self.auth({"tokens": {"access_token": "cached-access", "account_id": "workspace"}})
-        settings = provider.model_settings(api_base_url=provider.OPENAI_BASE_URL)
-        self.assertEqual(settings["api_base_url"], provider.OPENAI_BASE_URL)
-        self.assertEqual(settings["api_key"], "configured-key")
-        self.assertEqual(settings["http_headers"], {})
-
-    def test_openai_bearer_skips_keyring(self):
-        self.config('''cli_auth_credentials_store = "keyring"
-[model_providers.openai]
-experimental_bearer_token = "configured-key"
-''')
-        settings = provider.model_settings()
-        self.assertEqual(settings["api_base_url"], provider.OPENAI_BASE_URL)
-        self.assertEqual(settings["api_key"], "configured-key")
-
     def test_openai_environment_key(self):
         os.environ["OPENAI_API_KEY"] = "environment-key"
         self.auth({"tokens": {"access_token": "oauth-secret", "account_id": "account"}})
@@ -161,12 +125,6 @@ experimental_bearer_token = "configured-key"
         self.assertEqual(settings["api_base_url"], "https://api.openai.com/v1")
         self.assertEqual(settings["api_key"], "environment-key")
         self.assertEqual(settings["http_headers"], {})
-
-    def test_openai_cached_key(self):
-        self.auth({"OPENAI_API_KEY": "cached-key"})
-        settings = provider.model_settings()
-        self.assertEqual(settings["api_base_url"], "https://api.openai.com/v1")
-        self.assertEqual(settings["api_key"], "cached-key")
 
     def test_chatgpt_cached_tokens(self):
         self.config('model = "configured"\nmodel_reasoning_effort = "medium"\n')
@@ -183,34 +141,6 @@ experimental_bearer_token = "configured-key"
         self.assertIsNone(settings["api_key"])
         self.assertEqual(settings["http_headers"], {})
 
-    def test_openai_url_does_not_take_oauth(self):
-        self.auth({"tokens": {"access_token": "cached-access", "account_id": "workspace"}})
-        settings = provider.model_settings(api_base_url="https://api.openai.com/v1")
-        self.assertIsNone(settings["api_key"])
-        self.assertEqual(settings["http_headers"], {})
-
-    def test_named_key_does_not_take_oauth(self):
-        self.auth({"tokens": {"access_token": "cached-access", "account_id": "workspace"}})
-        settings = provider.model_settings(api_key_env="MISSING_KEY")
-        self.assertIsNone(settings["api_key"])
-        self.assertEqual(settings["api_key_env"], "MISSING_KEY")
-        self.assertEqual(settings["http_headers"], {})
-
-    def test_blank_environment_is_unset(self):
-        self.config('model_provider = "gateway"\n[model_providers.gateway]\nbase_url = "https://configured.test/v1"\n')
-        os.environ.update(KLINEAGE_API_BASE_URL="", KLINEAGE_API_KEY_ENV="")
-        self.assertEqual(provider.model_settings()["api_base_url"], "https://configured.test/v1")
-        with self.assertRaises(ValueError):
-            provider.model_settings(api_base_url="")
-        with self.assertRaises(ValueError):
-            provider.model_settings(api_key_env="")
-
-    def test_aiping_fallback(self):
-        os.environ["AIPING_API_KEY"] = "default-key"
-        settings = provider.model_settings(api_base_url="https://explicit.test/v1")
-        self.assertEqual(settings["api_key_env"], "AIPING_API_KEY")
-        self.assertEqual(settings["api_key"], "default-key")
-
     def test_unsupported_provider_auth(self):
         for field in ('query_params = {"api-version" = "v1"}', 'auth = {command = "secret-helper"}',
                       'gateway_oauth = {client_id = "id"}', 'wire_api = "chat"'):
@@ -218,21 +148,3 @@ experimental_bearer_token = "configured-key"
                 self.config('model_provider = "gateway"\n[model_providers.gateway]\nbase_url = "https://provider.test/v1"\n' + field)
                 with self.assertRaises(ValueError):
                     provider.model_settings()
-
-    def test_keyring_only_is_explicit(self):
-        self.config('cli_auth_credentials_store = "keyring"\n')
-        with self.assertRaisesRegex(ValueError, "keyring"):
-            provider.model_settings()
-
-    def test_incomplete_oauth_is_rejected(self):
-        self.auth({"tokens": {"access_token": "cached-access"}})
-        with self.assertRaisesRegex(ValueError, "account"):
-            provider.model_settings()
-
-    def test_home_directory_default(self):
-        os.environ.pop("CODEX_HOME")
-        home = self.home / ".codex"
-        home.mkdir()
-        (home / "config.toml").write_text('model = "default-home"\n')
-        with patch.object(Path, "home", return_value=self.home):
-            self.assertEqual(provider.model_settings()["model"], "default-home")

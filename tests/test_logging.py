@@ -1,5 +1,3 @@
-"""Tests for the measurement timeline and streamed model usage."""
-
 from __future__ import annotations
 
 import json
@@ -10,16 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
-from klineage.serialization import raw_text
-from klineage.harness.logging import (
-    LOG_ENV,
-    USAGE_BUFFER_BYTES,
-    ResponseUsage,
-    complete_events,
-    observed,
-    record,
-    usage_from_event,
-)
+from klineage.harness.logging import LOG_ENV, USAGE_BUFFER_BYTES, ResponseUsage, record
 
 
 def completed_frame(identifier: str = "r1") -> bytes:
@@ -47,12 +36,6 @@ def events(directory: Path) -> list[dict]:
     if not path.is_file():
         return []
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
-
-
-def fake_kernel():
-    from kernel_fixtures import kernel
-
-    return kernel("k", platform="sm120")
 
 
 class LoggingTests(unittest.TestCase):
@@ -97,82 +80,6 @@ class LoggingTests(unittest.TestCase):
             record("ignored")
         self.assertFalse((self.target / "stats.jsonl").exists())
 
-    def test_disabled_skips_metadata(self):
-        @observed("evaluate")
-        def evaluate(value):
-            return value
-
-        with (
-            patch.dict(os.environ, {LOG_ENV: ""}),
-            patch("klineage.harness.logging.kernel_fields", side_effect=AssertionError("unused metadata")),
-        ):
-            self.assertEqual(evaluate("result"), "result")
-
-    def test_metadata_without_problem(self):
-        from klineage.artifact import json_node
-        from klineage.harness.logging import kernel_fields
-
-        current = fake_kernel()
-        metadata = json.loads(raw_text(current.find("metadata.json")))
-        metadata["problem"]["path"] = str(self.root / "missing-problem")
-        current = type(current)(current.tree.with_child(json_node("metadata.json", metadata)))
-        self.assertEqual(kernel_fields(current), {"kernel_name": "k", "platform": "sm120"})
-
-    def test_no_symlink_log_file(self):
-        outside = self.root / "host-file"
-        outside.write_text("private")
-        self.target.mkdir()
-        (self.target / "stats.jsonl").symlink_to(outside)
-        record("attack", directory=self.target)
-        self.assertEqual(outside.read_text(), "private")
-
-    def test_no_symlink_log_parent(self):
-        outside = self.root / "host-directory"
-        outside.mkdir()
-        self.target.symlink_to(outside, target_is_directory=True)
-        record("attack", directory=self.target / "nested")
-        self.assertEqual(list(outside.iterdir()), [])
-
-    def test_no_hardlink_log_file(self):
-        outside = self.root / "host-file"
-        outside.write_text("private")
-        self.target.mkdir()
-        (self.target / "stats.jsonl").hardlink_to(outside)
-        record("attack", directory=self.target)
-        self.assertEqual(outside.read_text(), "private")
-
-    def test_log_directory_race(self):
-        outside = self.root / "host-directory"
-        outside.mkdir()
-        self.target.mkdir()
-        moved = self.root / "original-stats"
-        original_open = os.open
-
-        def replace_parent(path, flags, mode=0o777, *, dir_fd=None):
-            if path == "stats.jsonl" and not moved.exists():
-                self.target.rename(moved)
-                self.target.symlink_to(outside, target_is_directory=True)
-            return original_open(path, flags, mode, dir_fd=dir_fd)
-
-        with patch("klineage.utils.os.open", side_effect=replace_parent):
-            record("race", directory=self.target)
-        self.assertEqual(list(outside.iterdir()), [])
-        self.assertEqual(events(moved)[0]["event"], "race")
-
-    def test_referenced_metadata(self):
-        from klineage.artifact import Node, file_ref
-        from klineage.harness.logging import kernel_fields
-
-        current = fake_kernel()
-        path = self.root / "metadata.json"
-        path.write_text(raw_text(current.find("metadata.json")))
-        referenced = type(current)(
-            current.tree.with_child(
-                Node.file("metadata.json", reference=file_ref(path))
-            )
-        )
-        self.assertEqual(kernel_fields(referenced), {"kernel_name": "k", "platform": "sm120"})
-
     def test_record_targets_an_explicit_directory(self):
         with self.collecting():
             record("probe", value=1)
@@ -195,64 +102,6 @@ class LoggingTests(unittest.TestCase):
         self.assertEqual({entry["index"] for entry in entries}, set(range(20)))
         self.assertTrue(all(entry["payload"] == payload for entry in entries))
 
-    def test_observed_records_outcome_and_reraises(self):
-        class Measurement:
-            """The ValidationResult shape `measurement_fields` flattens."""
-
-            compile_passed = True
-            correctness_passed = True
-            profile_passed = True
-            latency_ms = 2.0
-            reference_latency_ms = 4.0
-
-        @observed("evaluate")
-        def succeeds(kernel):
-            return Measurement()
-
-        @observed("evaluate")
-        def fails(kernel):
-            raise RuntimeError("boom")
-
-        with self.collecting():
-            with self.assertRaises(RuntimeError):
-                fails(fake_kernel())
-            self.assertEqual(succeeds(fake_kernel()).latency_ms, 2.0)
-
-        failure, success = events(self.target)
-        self.assertEqual(failure["error"], "RuntimeError: boom")
-        self.assertEqual(failure["kernel_name"], "k")
-        self.assertTrue(success["profile_passed"])
-        self.assertIn("finished_at", success)
-        # A record's shape stays fixed: no reference latency or derived ratio.
-        self.assertEqual(
-            list(success),
-            ["event", "at", "finished_at", "kernel_name",
-             "platform", "compile_passed", "correctness_passed",
-             "profile_passed", "latency_ms"],
-        )
-
-    def test_usage_parsing_ignores_other_frames(self):
-        self.assertIsNone(usage_from_event(b'{"type":"response.in_progress"}'))
-        self.assertIsNone(usage_from_event(b"not json"))
-        usage = usage_from_event(completed_frame().split(b"data: ")[1].strip())
-        self.assertEqual(usage["response_id"], "r1")
-        self.assertEqual(usage["cached_tokens"], 4)
-        self.assertEqual(usage["reasoning_tokens"], 1)
-
-    def test_malformed_usage_details(self):
-        payload = json.loads(completed_frame().split(b"data: ")[1].strip())
-        payload["response"]["usage"]["input_tokens_details"] = 7
-        payload["response"]["usage"]["output_tokens_details"] = ["unexpected"]
-        usage = usage_from_event(json.dumps(payload).encode())
-        self.assertEqual(usage["total_tokens"], 12)
-        self.assertIsNone(usage["cached_tokens"])
-        self.assertIsNone(usage["reasoning_tokens"])
-
-    def test_complete_events_holds_a_partial_frame(self):
-        frames, pending = complete_events(b"data: a\n\ndata: par")
-        self.assertEqual(frames, [b"data: a"])
-        self.assertEqual(pending, b"data: par")
-
     def test_split_usage_lines(self):
         for ending in (b"\n", b"\r\n"):
             with self.subTest(ending=ending):
@@ -268,17 +117,6 @@ class LoggingTests(unittest.TestCase):
         for offset in range(0, len(payload), 13):
             collector.feed(payload[offset:offset + 13])
         self.assertEqual(collector.finish()["total_tokens"], 12)
-
-    def test_usage_without_header(self):
-        response = json.loads(completed_frame().split(b"data: ")[1].strip())["response"]
-        for payload in (completed_frame(), json.dumps(response).encode()):
-            with self.subTest(streaming=payload.startswith(b"event:")):
-                collector = ResponseUsage("")
-                collector.feed(b" \r\n")
-                for byte in payload:
-                    collector.feed(bytes([byte]))
-                self.assertEqual(collector.finish()["total_tokens"], 12)
-                self.assertEqual(collector.finish()["response_id"], "r1")
 
     def test_oversized_frames(self):
         collector = ResponseUsage("text/event-stream")

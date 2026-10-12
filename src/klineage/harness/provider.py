@@ -5,17 +5,9 @@ from __future__ import annotations
 import json
 import os
 import tomllib
-from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-from klineage.utils import safe_file
-
-from .codex_runner import CodexRunner, ReasoningEffort
-
-CONTEXT_WINDOW = 1_000_000
-AUTO_COMPACT_TOKENS = 900_000
-TOOL_OUTPUT_TOKENS = 10_000
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 CHATGPT_BASE_URL = "https://chatgpt.com/backend-api/codex"
 DEFAULT_KEY_ENV = "AIPING_API_KEY"
@@ -216,72 +208,3 @@ def anthropic_settings(
         "api_base_url": endpoint.strip(), "api_key_env": key_env, "api_key": key,
         "http_headers": headers, "options": {},
     }
-
-
-@dataclass(frozen=True, slots=True)
-class Provider:
-    """A model endpoint routed through a host-side bridge."""
-
-    model: str
-    base_url: str
-    key_env: str
-    key: str = field(repr=False)
-
-
-def resolve_provider(
-    model: str, base_url: str, *, key_env: str, api_key: str | None = None,
-) -> Provider:
-    """Use an explicit key or its named host environment variable."""
-    key = api_key if api_key is not None else os.environ.get(key_env)
-    if not key:
-        raise ValueError(f"No API key: set {key_env} or supply api_key")
-    return Provider(model, base_url, key_env, key)
-
-
-def runner_class(provider: Provider, effort: ReasoningEffort):
-    """Bind a model, endpoint and context limits to a sandboxed runner."""
-
-    from .runner import runner_type
-
-    base = runner_type()
-
-    class ProviderRunner(base):
-        def __init__(self, *args, **kwargs):
-            if kwargs.get("model") is None:
-                kwargs["model"] = provider.model
-            kwargs.setdefault("reasoning_effort", effort)
-            kwargs.setdefault("api_base_url", provider.base_url)
-            kwargs.setdefault("api_key_env", provider.key_env)
-            kwargs.setdefault("api_key", provider.key)
-            super().__init__(*args, **kwargs)
-            if not isinstance(self, CodexRunner):
-                return
-            self.model_catalog = self.state_dir / "model.json"
-            model = {
-                "slug": self.model,
-                "display_name": self.model,
-                "description": "Kernel generation provider",
-                "default_reasoning_level": effort,
-                "supported_reasoning_levels": [{"effort": effort, "description": effort}],
-                "shell_type": "unified_exec",
-                "visibility": "list",
-                "supported_in_api": True,
-                "priority": 0,
-                "base_instructions": "You are a coding agent. Follow the task and workspace instructions.",
-                "support_verbosity": False,
-                "truncation_policy": {"mode": "tokens", "limit": TOOL_OUTPUT_TOKENS},
-                "input_modalities": ["text"],
-                "experimental_supported_tools": [],
-                "context_window": CONTEXT_WINDOW,
-                "max_context_window": CONTEXT_WINDOW,
-            }
-            with safe_file(self.model_catalog, "w") as stream:
-                stream.write(json.dumps({"models": [model]}))
-            # Unknown models otherwise inherit a smaller fallback context limit.
-            self.model_options.update(
-                model_catalog_json=str(self.model_catalog),
-                model_context_window=CONTEXT_WINDOW,
-                model_auto_compact_token_limit=AUTO_COMPACT_TOKENS,
-            )
-
-    return ProviderRunner

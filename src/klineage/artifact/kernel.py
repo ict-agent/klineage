@@ -138,7 +138,7 @@ KERNEL = Node.directory(
     description="\n".join(
         (
             "A kernel source tree with a checked reference to its problem.",
-            "Kernel files live under build_root. The framework saves measured versions under versions/<N>/.",
+            "Kernel files live under current_kernel/. The framework saves measured versions under versions/<N>/.",
             "Evaluate this directory with klineage.evaluate; it checks kernel_spec and builds the kernel.",
             "After source edits reconstruct the Kernel before evaluating it.",
             "Evaluation automatically saves returned Kernels under versions/<N>, including measurements and diagnostics.",
@@ -312,7 +312,7 @@ class Kernel(Artifact, ABC):
     @property
     def validation(self):
         """Return stored measurements, or ``None`` when no validation is attached."""
-        value = json.loads(raw_text(self.find(KERNEL_METADATA)))["validation"]
+        value = json.loads(raw_text(self.find(KERNEL_METADATA))).get("validation")
         return restore(value, ValidationResult) if value is not None else None
 
     def __call__(self, *inputs: Any) -> Any:

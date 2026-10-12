@@ -34,8 +34,7 @@ workspace/.klineage/agent-runs/<attempt>/
 `trace.jsonl` preserves the CLI's native events: Codex JSONL or Claude Code
 `stream-json`. `stats.jsonl` uses KLineage's common model/evaluation event schema.
 Failed attempts retain these files too. CLI session storage is separate from
-artifact and record layouts. Existing `codex-runs/` and `claude-runs/` directories
-remain readable when collecting older actions.
+artifact and record layouts. Action records are collected only from `agent-runs/`.
 
 The runner writes `workspace/AGENTS.md` from `prompts/templates/agents.j4`.
 It introduces the Python APIs; agents use `help()` to read signatures and docstrings.
@@ -82,14 +81,6 @@ and invoke the runner again. Actions do this automatically on retry.
 
 ::: klineage.harness.RunnerError
 
-`CodexRunResult` / `CodexRunnerError` and
-`ClaudeCodeRunResult` / `ClaudeCodeRunnerError` are compatibility aliases of
-`RunResult` / `RunnerError`.
-
-::: klineage.harness.CodexRunResult
-
-::: klineage.harness.CodexRunnerError
-
 ::: klineage.harness.session_id
 
 ## Evaluation runtime hooks
@@ -111,9 +102,8 @@ See [Per-workload results](../guides/evaluation.md#per-workload-results) for the
     options:
       members: [evaluate, info]
 
-::: klineage.harness.evaluate
-
-::: klineage.harness.inspect_problem
+Use `klineage.evaluate()` for local and remote evaluation. Problems use
+`definition.json` plus `workloads.jsonl`; Python-file inspection is unsupported.
 
 Event logging and model usage collection are available through
 `klineage.harness.logging`.

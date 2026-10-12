@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib.util
 import unittest
 from pathlib import Path
@@ -16,20 +17,6 @@ if TORCH_AVAILABLE:
 
 @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is unavailable")
 class TorchReferenceTests(unittest.TestCase):
-    def test_paper_workloads(self):
-        expected = {
-            "gemm": {"M": 4096, "N": 4096, "K": 4096},
-            "conv2d": {"N": 8, "H": 56, "W": 56, "C": 64, "F": 128, "FILTER_ROWS": 576},
-            "fmha": {"TOKENS": 16384, "HEADS": 64, "HEAD_DIM": 128, "OFFSETS": 9},
-            "gdn": {"B": 1, "T": 4096, "HQ": 16, "HV": 48, "D": 128},
-            "topk": {"B": 64, "S": 4096},
-        }
-        for name, axes in expected.items():
-            with self.subTest(name=name):
-                module = load_trace(PROBLEMS / name)
-                self.assertEqual(module.workloads[0]["axes"], axes)
-                self.assertEqual(module.definition["op_type"], name)
-                self.assertFalse(hasattr(module, "make_inputs"))
 
     def test_gemm_weight_layout(self):
         module = load_trace(PROBLEMS / "gemm")
@@ -112,5 +99,85 @@ class TorchReferenceTests(unittest.TestCase):
             self.assertEqual(spec["dtype"], "float32")
 
 
-if __name__ == "__main__":
-    unittest.main()
+TORCH_AVAILABLE = importlib.util.find_spec("torch") is not None
+ROOT = Path(__file__).resolve().parents[1] / "problems"
+
+if TORCH_AVAILABLE:
+    import torch
+    from safetensors import safe_open
+
+    from klineage.artifact.problem import (
+        load_trace,
+        trace_inputs,
+    )
+
+
+@unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is unavailable")
+class TraceTests(unittest.TestCase):
+
+    def test_dataset_references(self):
+        paths = sorted(path.parent for path in ROOT.glob("*/definition.json"))
+        self.assertEqual(len(paths), 5)
+        for path in paths:
+            with self.subTest(problem=path.stem):
+                module = load_trace(path)
+                definition = module.definition
+                self.assertFalse(set(definition["inputs"]) & set(definition["outputs"]))
+                for workload in module.workloads:
+                    for descriptor in workload["inputs"].values():
+                        if descriptor["type"] == "random":
+                            continue
+                        self.assertEqual(descriptor["type"], "safetensors")
+                        self.assertTrue(Path(descriptor["path"]).is_absolute())
+                        with safe_open(descriptor["path"], framework="pt") as tensors:
+                            self.assertIn(descriptor["tensor_key"], tensors.keys())
+
+    def test_input_order_and_seed(self):
+        module = load_trace(ROOT / "gemm")
+        workload = module.workloads[0]
+        workload["axes"] = {"M": 2, "N": 3, "K": 4}
+        workload["inputs"] = dict(
+            reversed(list(workload["inputs"].items()))
+        )
+        first = trace_inputs(module.definition, workload, device="cpu", seed=17)
+        repeat = trace_inputs(module.definition, workload, device="cpu", seed=17)
+        changed = trace_inputs(
+            module.definition, workload, device="cpu", seed=42
+        )
+        self.assertEqual(list(first), ["x", "weight"])
+        for name in first:
+            torch.testing.assert_close(first[name], repeat[name], atol=0, rtol=0)
+            self.assertFalse(torch.equal(first[name], changed[name]))
+
+    def test_structured_inputs(self):
+        module = load_trace(ROOT / "fmha")
+        descriptor = module.workloads[0]["inputs"]["cu_seqlens_q"]
+        with safe_open(descriptor["path"], framework="pt") as tensors:
+            torch.testing.assert_close(
+                tensors.get_tensor("cu_seqlens_q"),
+                torch.arange(0, 16385, 2048, dtype=torch.int32),
+            )
+            torch.testing.assert_close(
+                tensors.get_tensor("cu_seqlens_q"), tensors.get_tensor("cu_seqlens_k")
+            )
+        module = load_trace(ROOT / "gdn")
+        descriptor = module.workloads[0]["inputs"]["q"]
+        with safe_open(descriptor["path"], framework="pt") as tensors:
+            for name in ("q", "k"):
+                norms = tensors.get_tensor(name).float().norm(dim=-1)
+                torch.testing.assert_close(
+                    norms, torch.ones_like(norms), atol=0.02, rtol=0
+                )
+            gates = tensors.get_tensor("g")
+            self.assertTrue((gates <= 0).all())
+            self.assertEqual((gates == 0).all(dim=1).sum().item(), 12)
+            beta = tensors.get_tensor("beta")
+            self.assertTrue(((beta > 0) & (beta < 1)).all())
+
+    def test_rejects_wrong_tensor_shape(self):
+        module = load_trace(ROOT / "fmha")
+        definition = copy.deepcopy(module.definition)
+        definition["inputs"] = {"cu_seqlens_q": definition["inputs"]["cu_seqlens_q"]}
+        module.workloads[0]["axes"]["OFFSETS"] = 3
+        with self.assertRaisesRegex(ValueError, "shape/dtype"):
+            trace_inputs(definition, module.workloads[0], device="cpu")

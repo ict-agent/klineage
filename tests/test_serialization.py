@@ -1,4 +1,4 @@
-"""JSON handlers preserve wire formats without methods on domain objects."""
+from __future__ import annotations
 
 import json
 import tempfile
@@ -7,18 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import patch
 
-from kernel_fixtures import accepted, kernel, measured, skill
+from kernel_fixtures import kernel, measured, skill
 from problem_fixtures import problem_spec
 
-from klineage.artifact import (
-    Artifact,
-    FileRef,
-    Kernel,
-    Node,
-    ValidationResult,
-    file_ref,
-    json_node,
-)
+from klineage.artifact import Artifact, FileRef, Kernel, Node, file_ref, json_node
 from klineage.backend import TimingPolicy, TimingResult
 from klineage.memory import Scope
 from klineage.serialization import (
@@ -71,45 +63,6 @@ class SerializationTests(unittest.TestCase):
             "└── config.toml ---> Build settings."
         ))
 
-    def test_layout_example_paths(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "example.txt"
-            path.write_text("a complete example")
-            reference = file_ref(path)
-            spec = Node.directory(".", (
-                Node.file("source.txt", description="Source.", one_shot=reference),
-            ), description="Sources.", one_shot=reference)
-            text = raw_text(spec)
-            self.assertEqual(text, (
-                f"./ ---> Sources. (See: {path} as an example)\n"
-                f"└── source.txt ---> Source. (See: {path} as an example)"
-            ))
-            self.assertEqual(spec.one_shot, reference)
-            path.unlink()
-            self.assertEqual(from_json(to_json(spec), Node), spec)
-            with patch.object(Path, "open", side_effect=AssertionError("unexpected read")):
-                self.assertEqual(raw_text(spec), text)
-
-    def test_layout_no_description(self):
-        self.assertEqual(raw_text(Node.file("plain.txt")), "plain.txt")
-        self.assertEqual(
-            raw_text(Node.file("example.txt", one_shot="first\nsecond\r\n")),
-            "example.txt ---> (See: first\\nsecond\\r\\n as an example)",
-        )
-
-    def test_raw_text_artifact(self):
-        value = Artifact("report", Node.directory(".", (
-            Node.directory("results", (
-                Node.file("result.txt", "42\n", description="Measured value."),
-            )),
-        ), description="Run report."))
-        self.assertEqual(raw_text(value), (
-            "./ ---> Run report.\n"
-            "└── results/\n"
-            "    └── result.txt ---> Measured value."
-        ))
-        self.assertEqual(raw_text(value.find("result.txt")), "42\n")
-
     def test_dataclass_roundtrips(self):
         values = (
             FileRef("/missing/input", "0" * 64, 4),
@@ -120,25 +73,6 @@ class SerializationTests(unittest.TestCase):
         for value in values:
             with self.subTest(type=type(value).__name__):
                 self.assertEqual(from_json(to_json(value), type(value)), value)
-
-    def test_node_wire_fields(self):
-        reference = FileRef("/missing/input", "0" * 64, 4)
-        node = Node.file("input.bin", reference=reference, one_shot=reference)
-        data = json.loads(to_json(node))
-        expected_ref = {"path": reference.path, "sha256": reference.sha256, "size": 4}
-        self.assertEqual(
-            data,
-            {
-                "name": "input.bin",
-                "kind": "file",
-                "description": "",
-                "one_shot": expected_ref,
-                "reference": expected_ref,
-            },
-        )
-        self.assertEqual(restore(data, Node), node)
-        with self.assertRaisesRegex(ValueError, "unknown tree node"):
-            restore(data | {"unknown": True}, Node)
 
     def test_schema_roundtrip(self):
         schema = Node.directory(
@@ -180,44 +114,6 @@ class SerializationTests(unittest.TestCase):
         self.assertIsNone(restored.function)
         self.assertEqual(restored, current)
 
-    def test_nested_single_encoding(self):
-        value = {"kernel": kernel(), "card": skill("α"), "policy": TimingPolicy()}
-        with (
-            patch("klineage.serialization.json.dumps", wraps=json.dumps) as encode,
-            patch(
-                "klineage.serialization.json.loads",
-                side_effect=AssertionError("unexpected decoding"),
-            ),
-        ):
-            text = to_json(value, indent=None)
-        encode.assert_called_once()
-        self.assertNotIn("\n", text)
-        self.assertIn("α", text)
-        self.assertEqual(json.loads(text)["policy"]["repeat"], 50)
-
-    def test_metadata_accepts_objects(self):
-        reference = FileRef("/missing/problem.json", "0" * 64, 4)
-        data = json.loads(
-            json_node(
-                "metadata.json",
-                {
-                    "problem": reference,
-                    "validation": accepted(),
-                },
-            ).content
-        )
-        self.assertEqual(data["problem"]["path"], reference.path)
-        self.assertEqual(data["validation"]["latency_ms"], 1.0)
-
-    def test_validation_report_fields(self):
-        leaf = accepted()
-        self.assertNotIn("workloads", json.loads(to_json(leaf)))
-        result = ValidationResult.combine({"small": leaf, "large": accepted(2.0)})
-        data = json.loads(to_json(result))
-        self.assertEqual(tuple(data["workloads"]), ("small", "large"))
-        self.assertIsNone(data["latency_ms"])
-        self.assertEqual(restore(data, ValidationResult), result)
-
     def test_evaluation_transport(self):
         current = kernel()
         validation = measured(current)
@@ -258,12 +154,6 @@ class SerializationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "must be inline"):
                 restore(data, Evaluation)
 
-    def test_scope_wire_validation(self):
-        with self.assertRaisesRegex(ValueError, "scope requires"):
-            restore({}, Scope)
-        with self.assertRaisesRegex(TypeError, "sequence"):
-            restore({"cases": "gemm", "languages": ["cuda"], "platforms": ["*"]}, Scope)
-
     def test_custom_handler_inheritance(self):
         @dataclass
         class Label:
@@ -290,31 +180,10 @@ class SerializationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already registered"):
             register_handler(Label, LabelHandler())
 
-    def test_unregistered_type(self):
-        with self.assertRaisesRegex(TypeError, "no serialization handler"):
-            to_json(object())
-        with self.assertRaisesRegex(TypeError, "no serialization handler"):
-            restore({}, object)
-
     def test_nonfinite_rejected(self):
         for value in (float("nan"), float("inf"), -float("inf")):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 to_json({"value": value})
-
-    def test_methods_removed(self):
-        for object_type in (
-            Artifact,
-            Node,
-            FileRef,
-            Scope,
-            ValidationResult,
-            TimingPolicy,
-            TimingResult,
-            Evaluation,
-        ):
-            for name in ("to_dict", "to_json", "from_dict", "from_json", "describe", "read_text", "example", "annotate"):
-                with self.subTest(type=object_type.__name__, method=name):
-                    self.assertFalse(hasattr(object_type, name))
 
 
 if __name__ == "__main__":

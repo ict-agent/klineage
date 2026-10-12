@@ -20,7 +20,7 @@ from klineage.backend import get_backend
 from klineage.cli.common import add_agent_options, agent_runtime
 from klineage.harness import AgentRuntime
 from klineage.harness.process import STOP_GRACE_SECONDS, stop_process
-from klineage.harness.provider import resolve_provider, runner_class
+from klineage.harness.runner import runner_type
 from klineage.harness.sandbox import runtime_environment
 from klineage.serialization import to_json
 from klineage.server import Client
@@ -129,22 +129,21 @@ def run(args):
             problem = client.problem()
             info = client.info()
             write_json(root / "server-info.json", info)
-            provider = resolve_provider(
-                args.model, args.base_url, key_env=PROVIDER_KEY_ENV,
-            )
-            base = runner_class(provider, "high")
+            base = runner_type()
 
             class BudgetRunner(base):
                 def __call__(self, prompt, *, run_id=None):
                     self.timeout = remaining(generation_deadline)
                     return super().__call__(prompt, run_id=run_id)
 
+            runner = BudgetRunner(
+                work, timeout=remaining(generation_deadline), evaluation=client, agent=agent,
+                model=args.model, api_base_url=args.base_url,
+                api_key_env=PROVIDER_KEY_ENV, reasoning_effort="high",
+            )
             action = Generation(
                 problem, workdir=work, timeout=int(remaining(generation_deadline)),
-                max_retries=1, evaluation=client, agent=agent,
-            )
-            action.runner = BudgetRunner(
-                work, timeout=remaining(generation_deadline), evaluation=client, agent=agent,
+                max_retries=1, evaluation=client, agent=agent, runner=runner,
             )
             action.prompt += f"""
 

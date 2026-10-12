@@ -1,7 +1,8 @@
-"""Read rendered task inputs in fake Codex runs."""
+from __future__ import annotations
 
 import json
 import re
+
 
 def prompt_inputs(prompt):
     return {

@@ -11,21 +11,7 @@ from klineage.constants import STATE_DIRECTORY
 from klineage.serialization import to_json
 
 from .protocol import WireAPI
-from .runner import (
-    BENCH_SKILL,
-    MEMORY_DIRECTORY,
-    PACKAGE_ROOT,
-    PROVIDER_KEY_PLACEHOLDER,
-    AgentRunner,
-    resolve_executable,
-    session_id,
-)
-from .runner import (
-    RunnerError as CodexRunnerError,
-)
-from .runner import (
-    RunResult as CodexRunResult,
-)
+from .runner import PROVIDER_KEY_PLACEHOLDER, AgentRunner
 from .sandbox import AgentRuntime
 
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
@@ -109,7 +95,6 @@ class CodexRunner(AgentRunner):
             resume_id=resume_id, state_dir=state_dir, read_only=read_only,
             evaluation=evaluation, agent=agent,
         )
-        self.codex_program = self.program
         if self.model is not None:
             self.model = self.model.strip()
         catalog = self.model_options.get("model_catalog_json")
@@ -123,7 +108,7 @@ class CodexRunner(AgentRunner):
         return {self.api_key_env or self.DEFAULT_KEY_ENV: PROVIDER_KEY_PLACEHOLDER}
 
     def command(self, final_message_path: Path) -> list[str]:
-        command = [str(self.codex_program), "-a", "never"]
+        command = [str(self.program), "-a", "never"]
         for name, value in self.model_options.items():
             command.extend(("-c", f"{name}={to_json(value, indent=None)}"))
         if self.reasoning_effort is not None:
@@ -179,8 +164,4 @@ def _provider_flags(name: str, base_url: str, key_env: str) -> list[str]:
     ]
 
 
-
-__all__ = [
-    "CodexRunner", "CodexRunnerError", "CodexRunResult", "ReasoningEffort",
-    "session_id", "resolve_executable", "PACKAGE_ROOT", "BENCH_SKILL", "MEMORY_DIRECTORY",
-]
+__all__ = ["CodexRunner", "ReasoningEffort"]

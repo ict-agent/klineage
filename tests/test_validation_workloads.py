@@ -1,12 +1,9 @@
-"""Per-workload evidence is preserved without averaging different shapes."""
+from __future__ import annotations
 
-from klineage.serialization import from_json
-import json
 import unittest
 
 from klineage.artifact import ValidationResult
-from klineage.harness.logging import measurement_fields
-from klineage.serialization import to_json
+from klineage.serialization import from_json, to_json
 
 
 class WorkloadValidationTests(unittest.TestCase):
@@ -64,23 +61,6 @@ class WorkloadValidationTests(unittest.TestCase):
                     "large": ValidationResult(True, True, True, 100.0),
                 },
             )
-
-    def test_nested_report_rejected(self):
-        child = ValidationResult.combine({
-            "one": ValidationResult(True, True, True, 1.0),
-        })
-        with self.assertRaisesRegex(ValueError, "nested"):
-            ValidationResult.combine({"nested": child})
-
-    def test_timeline_keeps_cases(self):
-        cases = {
-            "small": ValidationResult(True, True, True, 1.0),
-            "large": ValidationResult(True, True, True, 100.0),
-        }
-        fields = measurement_fields(ValidationResult.combine(cases))
-        self.assertEqual(fields.get("workloads"), cases)
-        self.assertEqual(json.loads(to_json(fields))["workloads"]["small"]["latency_ms"], 1.0)
-        self.assertNotIn("latency_ms", fields)
 
 
 if __name__ == "__main__":

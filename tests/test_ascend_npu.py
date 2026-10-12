@@ -1,4 +1,4 @@
-"""Opt-in Ascend checks; KLINEAGE_ASCEND_DEVICE selects a physical sandbox device."""
+from __future__ import annotations
 
 import os
 import tempfile
@@ -8,7 +8,6 @@ from pathlib import Path
 from klineage.backend.ascend.kernel import AscendBackend, compile_native
 from klineage.harness.sandbox import AgentRuntime
 from klineage.server.worker import WorkerRuntime
-
 
 RUN_ASCEND = os.environ.get("KLINEAGE_ASCEND_TESTS") == "1"
 TEST_DEVICE = os.environ.get("KLINEAGE_ASCEND_DEVICE")

@@ -26,6 +26,7 @@ class Generation(Action):
         evaluation (klineage.server.Client | None): Evaluation client; defaults
             to environment configuration.
         agent (klineage.harness.AgentRuntime | None): Optional sandbox runtime.
+        runner (klineage.harness.AgentRunner | None): Optional configured runner.
     """
 
     artifact_type = ArtifactKind.GENERATION
@@ -39,6 +40,7 @@ class Generation(Action):
         timeout: int = TIMEOUT,
         evaluation=None,
         agent=None,
+        runner=None,
     ):
         if not isinstance(problem, Problem):
             raise TypeError("Generation requires a Problem artifact")
@@ -49,7 +51,7 @@ class Generation(Action):
         prompt = render_prompt(RunKind.GENERATION, problem=problem)
         super().__init__(
             prompt, workdir, timeout, max_retries=max_retries,
-            evaluation=evaluation, agent=agent,
+            evaluation=evaluation, agent=agent, runner=runner,
         )
 
     def run(self) -> Artifact:

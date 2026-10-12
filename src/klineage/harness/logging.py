@@ -11,11 +11,10 @@ best effort.
 from __future__ import annotations
 
 import fcntl
-import functools
 import json
 import os
 import re
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -92,36 +91,6 @@ def measurement_fields(result: Any) -> dict[str, Any]:
     if workloads:
         fields["workloads"] = dict(workloads)
     return fields
-
-
-def observed(event: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-    """Decorate a measurement so every call appends one event with its outcome.
-
-    The kernel is the first positional argument, matching `evaluate`.
-    Failures are recorded and re-raised unchanged, so observing a call never
-    changes what the caller sees.
-    """
-
-    def decorate(function: Callable[..., Any]) -> Callable[..., Any]:
-        @functools.wraps(function)
-        def wrapper(kernel, *args, **kwargs):
-            if log_dir() is None:
-                return function(kernel, *args, **kwargs)
-            started = now()
-            fields = kernel_fields(kernel)
-            try:
-                result = function(kernel, *args, **kwargs)
-            except Exception as error:
-                record(event, at=started, finished_at=now(), **fields,
-                       error=f"{type(error).__name__}: {error}")
-                raise
-            record(event, at=started, finished_at=now(), **fields,
-                   **measurement_fields(result))
-            return result
-
-        return wrapper
-
-    return decorate
 
 
 def usage_from_event(payload: bytes) -> dict[str, Any] | None:
@@ -261,7 +230,6 @@ __all__ = [
     "log_dir",
     "measurement_fields",
     "now",
-    "observed",
     "record",
     "usage_from_event",
 ]

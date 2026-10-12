@@ -1,18 +1,13 @@
+from __future__ import annotations
+
 import tempfile
 import unittest
-from contextlib import chdir
 from pathlib import Path
 
-from klineage.artifact.repository import repository_ignore, stage_repository
+from klineage.artifact.repository import stage_repository
 
 
 class RepositoryTests(unittest.TestCase):
-    def test_relative_destination(self):
-        with tempfile.TemporaryDirectory() as temporary, chdir(temporary):
-            root = Path(temporary)
-            (root / "nested").mkdir()
-            ignore = repository_ignore(Path("nested/repository"))
-            self.assertIn("nested", ignore(str(root), ["nested"]))
 
     def test_local_copy(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -1,11 +1,11 @@
-"""Opt-in CUDA execution checks: KLINEAGE_CUDA_TESTS=1."""
+from __future__ import annotations
 
 import os
 import unittest
 
 from kernel_fixtures import load_entry, make_kernel, write_kernel
 from problem_fixtures import io_problem
-from test_cuda_bundle import BundleCase
+from runtime_fixtures import BundleCase
 
 from klineage.artifact import source_files
 from klineage.artifact.tree import read_source_tree

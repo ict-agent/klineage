@@ -1,4 +1,4 @@
-"""Kernel and skill fixtures for domain tests."""
+from __future__ import annotations
 
 import atexit
 import hashlib
@@ -11,14 +11,14 @@ from problem_fixtures import problem_spec
 from klineage.artifact import (
     Kernel,
     Node,
+    ValidationResult,
     json_node,
     source_files,
     source_tree,
 )
-from klineage.artifact.problem import load_problem, problem_reference
 from klineage.artifact.kernel import kernel_layouts
+from klineage.artifact.problem import load_problem, problem_reference
 from klineage.backend import get_backend
-from klineage.harness.eval import ValidationResult
 from klineage.memory import Scope, SkillCard
 from klineage.serialization import raw_text, to_json
 
