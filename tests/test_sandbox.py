@@ -151,6 +151,10 @@ for path in (Path.home() / 'private', Path('/tmp/private')):
         self.run_code(source, sandbox)
         self.run_code(source, sandbox)
 
+    def test_private_username(self):
+        # TorchInductor names its cache with getpass without a mounted passwd file.
+        self.run_code("import getpass; assert getpass.getuser() == 'agent'")
+
     def test_private_pid_namespace(self):
         source = f"""
 import os

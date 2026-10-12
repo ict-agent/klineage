@@ -334,7 +334,7 @@ class BackendBuildTests(unittest.TestCase):
             patch(
                 "klineage.backend.ascend.kernel.importlib.util.spec_from_file_location"
             ) as load_spec,
-            self.assertRaisesRegex(RuntimeError, "build.log"),
+            self.assertRaisesRegex(RuntimeError, "invalid AscendC source"),
         ):
             compile_ascend("example", ["invalid.asc"], self.root, [], options)
         self.assertIn("invalid AscendC source", (self.root / "build.log").read_text())

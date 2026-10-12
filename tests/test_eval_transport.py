@@ -35,6 +35,38 @@ class EvalTransportTests(unittest.TestCase):
         self.logs.mkdir()
         self.runtime = EvaluationRuntime()
 
+    def test_buffered_native_output(self):
+        # C stdio must flush before stdout returns to the JSON transport.
+        source = '''
+import ctypes, sys
+from klineage.harness.eval import _descriptor_stdout, _emit
+with _descriptor_stdout(sys.stderr):
+    ctypes.CDLL(None).printf(b"native diagnostic\\n")
+_emit({"done": True})
+'''
+        reply = subprocess.run(
+            [sys.executable, "-c", source], capture_output=True, text=True,
+            check=True, timeout=5,
+        )
+        self.assertEqual(json.loads(reply.stdout), {"done": True})
+        self.assertIn("native diagnostic", reply.stderr)
+
+    def test_shutdown_native_output(self):
+        # CANN may write diagnostics after the worker emits its reply.
+        source = '''
+import atexit, ctypes
+from klineage.harness.eval import _emit
+libc = ctypes.CDLL(None)
+atexit.register(lambda: libc.printf(b"runtime shutdown\\n"))
+_emit({"done": True})
+'''
+        reply = subprocess.run(
+            [sys.executable, "-c", source], capture_output=True, text=True,
+            check=True, timeout=5,
+        )
+        self.assertEqual(json.loads(reply.stdout), {"done": True})
+        self.assertIn("runtime shutdown", reply.stderr)
+
     def test_problem_loaded_once(self):
         problem = problem_spec()
         kernel = make_kernel("kernel", problem, {"kernel.cu": "// source"})

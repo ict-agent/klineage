@@ -20,6 +20,7 @@ from klineage.utils import safe_name
 from . import timing
 
 CFLAGS = ("-O3", "-std=c++17")
+BUILD_ERROR_BYTES = 16 * 1024
 
 ASCEND_ARCH_ENV = "ASCEND_ARCH"
 ASCEND_HOME = Path("/usr/local/Ascend/ascend-toolkit/latest")
@@ -227,7 +228,11 @@ def compile_ascend(
                 command, stdout=stream, stderr=subprocess.STDOUT, check=False
             )
         if result.returncode:
-            raise RuntimeError(f"AscendC compilation failed; see {log}")
+            # Evaluators return the exception; their build directory is private.
+            with log.open("rb") as stream:
+                stream.seek(max(0, log.stat().st_size - BUILD_ERROR_BYTES))
+                detail = stream.read().decode(errors="replace")
+            raise RuntimeError(f"AscendC compilation failed; see {log}\n{detail}")
         # Publishing a new inode preserves modules already mapped by other workers.
         pending.replace(output)
     spec = importlib.util.spec_from_file_location(name, output)

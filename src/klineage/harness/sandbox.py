@@ -20,11 +20,14 @@ SYSTEM_RUNTIME = tuple(Path(value) for value in (
     "/usr", "/bin", "/sbin", "/lib", "/lib64",
     "/etc/alternatives", "/etc/ld.so.cache",
 ))
-PRIVATE_HOME = "/home/agent"
+PRIVATE_USER = "agent"
+PRIVATE_HOME = f"/home/{PRIVATE_USER}"
 PRIVATE_TEMP = "/tmp"
 PRIVATE_MOUNTS = (Path("/proc"), Path("/dev"))
 BASE_ENVIRONMENT = {
     "HOME": PRIVATE_HOME,
+    # Runtime caches need a username without exposing the host passwd database.
+    "USER": PRIVATE_USER,
     "TMPDIR": PRIVATE_TEMP,
     "PATH": "/usr/bin:/bin",
     "LANG": "C.UTF-8",

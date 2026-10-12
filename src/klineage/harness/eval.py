@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import ctypes
 import importlib
 import inspect
 import json
@@ -1040,6 +1041,8 @@ def _descriptor_stdout(stream):
         os.dup2(stream.fileno(), 1)
         yield
     finally:
+        # Flush native diagnostics before restoring the JSON reply descriptor.
+        ctypes.CDLL(None).fflush(None)
         os.dup2(saved, 1)
         os.close(saved)
 
@@ -1053,6 +1056,8 @@ def _emit(result: Any) -> None:
 
     sys.stdout.write(to_json(result, indent=None) + "\n")
     sys.stdout.flush()
+    # Runtime destructors can still write after Python emits the final reply.
+    os.dup2(sys.stderr.fileno(), 1)
 
 
 def main() -> int:
