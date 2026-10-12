@@ -2,7 +2,7 @@
 
 Generate accelerator kernels and reuse optimization skills.
 
-[Documentation](https://qiuchu.site/project/klineage/) · [API reference](https://qiuchu.site/project/klineage/reference/artifacts.html)
+[Documentation](https://qiuchu.site/project/klineage/) · [Paper](https://arxiv.org/abs/2605.28213) · [API reference](https://qiuchu.site/project/klineage/reference/artifacts.html)
 
 ## Quick start
 
