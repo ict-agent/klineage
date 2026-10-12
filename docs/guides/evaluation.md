@@ -208,7 +208,7 @@ service after changing its runtime configuration.
 
 ### Model access
 
-Model and provider settings come from `$CODEX_HOME/config.toml`, or
+With the default Codex runner, model and provider settings come from `$CODEX_HOME/config.toml`, or
 `~/.codex/config.toml` by default. Explicit Python arguments override
 `KLINEAGE_*` variables, which override that configuration. See
 [Configure model access](../getting-started.md#configure-model-access) for the
@@ -220,6 +220,21 @@ reuses `CODEX_HOME`, so files there, including saved credentials, remain visible
 inside its sandbox. Renew expired login before rerunning. Named profiles,
 keyring-only credentials and credential commands are unsupported; use root-level
 settings and a host key variable when needed.
+
+For Claude Code, select `KLINEAGE_RUNNER=claude-code`. Explicit runner arguments
+precede `KLINEAGE_*` settings, then `ANTHROPIC_*` environment settings. See
+[Claude Code setup](../getting-started.md#claude-code-anthropic-messages-api).
+The host bridge supplies `x-api-key` or bearer authentication and preserves
+Anthropic version/beta headers. Session state is isolated under
+`workspace/.klineage/claude-home/`; host Claude configuration is not mounted.
+Both runners retain traces, final replies and statistics and resume their own
+session after a failed attempt. Changing the runner does not change evaluation.
+
+Messages usage is normalized in `stats.jsonl`: `input_tokens` includes uncached,
+cache-write and cache-read inputs; `cached_tokens` reports cache reads and
+`cache_creation_tokens` reports cache writes. `output_tokens` is the final
+cumulative count, and `total_tokens` is inputs plus outputs. Request duration
+comes from the host bridge. Missing provider usage remains absent.
 
 ## Optional device diagnostics
 
@@ -234,7 +249,7 @@ For a host with these CUDA and Nsight Compute installations:
 ```python
 from pathlib import Path
 
-from klineage.harness import AgentRuntime, CodexRunner
+from klineage.harness import AgentRuntime, create_runner
 from klineage.server import Client
 
 agent = AgentRuntime(
@@ -248,7 +263,7 @@ agent = AgentRuntime(
         "CUDA_VISIBLE_DEVICES": "0",
     },
 )
-runner = CodexRunner(
+runner = create_runner(
     Path("agent-workspace/diagnostics"), evaluation=Client(), agent=agent
 )
 ```
@@ -264,8 +279,8 @@ on a shared device so they do not affect each other's measurements.
 
 ## Isolation and embedding
 
-The agent can write its run directory and access its existing Codex home, declared
-inputs and runtimes. Trial sources belong in `current_kernel/`; helper scripts,
+The agent can write its run directory and session state and access declared
+inputs and runtimes. Codex reuses its host home; Claude Code has isolated state. Trial sources belong in `current_kernel/`; helper scripts,
 diagnostics and logs belong in `workspace/`. A task gateway provides evaluation
 access, and a separate bridge handles model requests.
 Workers receive the configured devices and problem inputs; service records stay

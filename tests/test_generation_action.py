@@ -35,7 +35,7 @@ class GenerationActionTests(unittest.TestCase):
         server = self.enterContext(service.start())
         self.client = Client(server.endpoint, self.problem.name)
         self.runner = Mock(return_value=SimpleNamespace(final_message="done"))
-        self.enterContext(patch("klineage.action.action.CodexRunner", return_value=self.runner))
+        self.enterContext(patch("klineage.action.action.create_runner", return_value=self.runner))
 
     def action(self, problem=None):
         return Generation(

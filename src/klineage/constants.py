@@ -42,6 +42,8 @@ SKILL_FILE = "SKILL.md"
 WORK_DIRECTORY = Path("workspace")
 #: Internal workspace state directory.
 STATE_DIRECTORY = "workspace/.klineage"
+#: Per-attempt records shared by every runner.
+RUN_RECORDS_DIRECTORY = "agent-runs"
 #: Directory name for generated or mounted skill memory.
 MEMORY_DIR = "memory"
 #: Skill files available to the agent on demand.

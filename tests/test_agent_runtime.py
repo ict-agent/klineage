@@ -205,7 +205,7 @@ print(json.dumps({'devices':[]}))
         current = kernel()
         trace = self.work / "trace.jsonl"
         trace.write_text(json.dumps({"type": "thread.started", "thread_id": "same-session"}) + "\n")
-        with patch("klineage.action.action.CodexRunner") as factory:
+        with patch("klineage.action.action.create_runner") as factory:
             actions = (
                 Apply(current, workdir=self.work, agent=agent),
                 Decompose(current, workdir=self.work, agent=agent),

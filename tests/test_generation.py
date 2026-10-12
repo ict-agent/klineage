@@ -64,7 +64,7 @@ class GenerationTests(unittest.TestCase):
                 ),
             )
         )
-        self.runner = self.enterContext(patch("klineage.action.action.CodexRunner"))
+        self.runner = self.enterContext(patch("klineage.action.action.create_runner"))
         self.runner.return_value.side_effect = self.emit
 
     def write_problem(self, problem):

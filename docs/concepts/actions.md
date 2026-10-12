@@ -144,9 +144,13 @@ print(raw_text(action_spec("apply")))
 
 Each layout includes descriptions and examples. Layouts are not copied into
 prompts or saved as spec files. Diagnostic scripts, backups, binaries and logs
-stay under `workspace/`; its `.klineage/codex-runs/` directory keeps the prompts,
+stay under `workspace/`; its `.klineage/agent-runs/` directory keeps the prompts,
 traces, statistics and final replies. Each attempt has its own `stats.jsonl`
 beside `trace.jsonl`, recording model requests and evaluation calls.
+
+Actions select their CLI through `KLINEAGE_RUNNER`: `codex` by default or
+`claude-code` for Anthropic-compatible endpoints. Both use the same artifact,
+skill and evaluator interfaces.
 
 ## Stop or retry
 

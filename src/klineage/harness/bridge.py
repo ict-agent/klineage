@@ -21,6 +21,7 @@ from socketserver import ThreadingMixIn, UnixStreamServer
 from urllib.parse import urlsplit
 
 from klineage.harness.logging import ResponseUsage, now, record
+from klineage.harness.protocol import WireAPI
 
 RELAY_PORT = 18081
 BODY_LIMIT = 32 * 1024 * 1024
@@ -29,15 +30,23 @@ CONNECT_TIMEOUT = 10.0
 STREAM_TIMEOUT = 180.0
 POLL_SECONDS = 0.1
 STOP_SECONDS = 2.0
-ALLOWED_PATHS = frozenset(("/responses", "/responses/compact"))
+PROVIDER_PATHS = {
+    WireAPI.RESPONSES: frozenset(("/responses", "/responses/compact")),
+    WireAPI.MESSAGES: frozenset(
+        route + query
+        for route in ("/v1/messages", "/v1/messages/count_tokens")
+        for query in ("", "?beta=true")
+    ),
+}
 REQUEST_HEADERS = frozenset((
+    "anthropic-version", "anthropic-beta", "anthropic-workspace-id",
     "content-type", "accept", "openai-beta", "openai-organization", "openai-project",
     "session_id", "conversation_id", "x-codex-turn-state", "x-codex-turn-metadata",
     "x-codex-beta-features", "originator", "version", "user-agent",
 ))
 RESPONSE_HEADERS = frozenset((
     "content-type", "retry-after", "x-request-id", "openai-processing-ms",
-    "x-codex-turn-state",
+    "x-codex-turn-state", "request-id",
 ))
 HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 PROTECTED_HEADERS = frozenset((
@@ -69,7 +78,9 @@ class Connections:
     daemon_threads = False
     block_on_close = True
 
-    def configure(self, connect, prefix="", headers=None, *, directory=None):
+    def configure(self, connect, prefix="", headers=None, *, directory=None,
+                  wire_api=WireAPI.RESPONSES):
+        self.paths = PROVIDER_PATHS[WireAPI(wire_api)]
         self.connect = connect
         self.prefix = prefix
         self.headers = dict(headers or {})
@@ -134,7 +145,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
     def body_length(self):
         target = self.requestline.split()[1]
-        if target not in ALLOWED_PATHS or self.command != "POST":
+        if target not in self.server.paths or self.command != "POST":
             raise ValueError("unsupported provider route")
         names = set()
         for name, value in self.headers.items():
@@ -300,7 +311,9 @@ class ProviderBridge(Service):
     def __init__(
         self, base_url: str, api_key: str | None, socket_path: Path,
         *, headers: Mapping[str, str] | None = None, directory: Path | None = None,
+        wire_api: WireAPI = WireAPI.RESPONSES,
     ):
+        self.wire_api = WireAPI(wire_api)
         target = urlsplit(base_url)
         if (target.scheme not in ("http", "https") or not target.hostname
                 or target.username or target.password or target.query or target.fragment
@@ -341,7 +354,8 @@ class ProviderBridge(Service):
 
     def command(self, argv, *, python=sys.executable):
         return [str(python), "-m", "klineage.harness.bridge", "--socket",
-                str(self.socket_path), "--port", str(RELAY_PORT), "--", *map(str, argv)]
+                str(self.socket_path), "--port", str(RELAY_PORT),
+                "--wire-api", self.wire_api.value, "--", *map(str, argv)]
 
     def connect(self):
         cls = http.client.HTTPSConnection if self.target.scheme == "https" else http.client.HTTPConnection
@@ -351,8 +365,12 @@ class ProviderBridge(Service):
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
         self.server = UnixServer(str(self.socket_path), ProxyHandler)
         self.socket_path.chmod(0o600)
+        prefix = self.target.path.rstrip("/")
+        if self.wire_api == WireAPI.MESSAGES:
+            prefix = prefix.removesuffix("/v1")
         self.server.configure(
-            self.connect, self.target.path.rstrip("/"), self.headers, directory=self.directory,
+            self.connect, prefix, self.headers, directory=self.directory,
+            wire_api=self.wire_api,
         )
         return self.start()
 
@@ -366,15 +384,16 @@ class ProviderBridge(Service):
 class LoopbackRelay(Service):
     """Sandbox-side HTTP endpoint; its only destination is the mounted socket."""
 
-    def __init__(self, socket_path: Path, *, port=RELAY_PORT):
+    def __init__(self, socket_path: Path, *, port=RELAY_PORT, wire_api=WireAPI.RESPONSES):
         self.socket_path = Path(socket_path)
+        self.wire_api = WireAPI(wire_api)
         self.port = port
         self.server = None
 
     def __enter__(self):
         self.server = RelayServer(("127.0.0.1", self.port), ProxyHandler)
         self.port = self.server.server_port
-        self.server.configure(lambda: UnixConnection(self.socket_path))
+        self.server.configure(lambda: UnixConnection(self.socket_path), wire_api=self.wire_api)
         return self.start()
 
 
@@ -382,13 +401,14 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket", required=True, type=Path)
     parser.add_argument("--port", default=RELAY_PORT, type=int)
+    parser.add_argument("--wire-api", choices=list(WireAPI), default=WireAPI.RESPONSES)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     if not command:
         parser.error("an agent command is required")
 
-    with LoopbackRelay(args.socket, port=args.port):
+    with LoopbackRelay(args.socket, port=args.port, wire_api=args.wire_api):
         process = subprocess.Popen(command)
 
         def terminate(signum, frame):

@@ -25,6 +25,7 @@ from klineage.artifact.tree import (
 from klineage.constants import (
     BUILD_DIRECTORY,
     MAX_RETRIES,
+    RUN_RECORDS_DIRECTORY,
     SKILL_FILE,
     STATE_DIRECTORY,
     TIMEOUT,
@@ -33,7 +34,7 @@ from klineage.constants import (
     RunKind,
 )
 from klineage.errors import StructuredOutputError
-from klineage.harness import AgentRuntime, CodexRunner, session_id
+from klineage.harness import AgentRuntime, create_runner, session_id
 from klineage.memory.storage import load_skill
 from klineage.prompts import action_spec
 from klineage.serialization import raw_text
@@ -100,7 +101,7 @@ class Action:
         self.evaluation = evaluation
         self.agent = agent or AgentRuntime()
         self.read_only = ()
-        self.runner = CodexRunner(
+        self.runner = create_runner(
             self.workdir, timeout=timeout, evaluation=evaluation, agent=self.agent,
         )
 
@@ -290,9 +291,14 @@ def collect_output(
         if card is not None:
             children.append(nested("skillcard", card))
 
-    records = work / STATE_DIRECTORY / "codex-runs"
-    if records.exists():
-        children.append(replace(capture(records), name="records"))
+    records = [
+        work / STATE_DIRECTORY / name for name in (RUN_RECORDS_DIRECTORY, "codex-runs", "claude-runs")
+        if (work / STATE_DIRECTORY / name).is_dir()
+    ]
+    if len(records) == 1:
+        children.append(replace(capture(records[0]), name="records"))
+    elif records:
+        children.append(Node.directory("records", [capture(path) for path in records]))
     schema = action_spec(kind.removeprefix(ACTION_PREFIX))
     tree = Node.directory(".", children, description=schema.description)
     return Artifact.from_tree(kind, tree)

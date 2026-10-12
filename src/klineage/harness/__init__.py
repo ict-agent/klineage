@@ -1,4 +1,4 @@
-"""Codex execution, kernel evaluation, and GPU timing interfaces."""
+"""Agent execution, kernel evaluation, and accelerator timing interfaces."""
 
 from .codex_runner import (
     CodexRunner,
@@ -7,6 +7,8 @@ from .codex_runner import (
     ReasoningEffort,
     session_id,
 )
+from .claude_code_runner import ClaudeCodeRunner, ClaudeCodeRunResult, ClaudeCodeRunnerError
+from .runner import RunnerKind, RunResult, RunnerError, create_runner
 from .eval import (
     CallableKernelEvaluator,
     CallInputs,
@@ -25,6 +27,13 @@ __all__ = [
     "AgentRuntime",
     "CallInputs",
     "CallableKernelEvaluator",
+    "ClaudeCodeRunner",
+    "ClaudeCodeRunResult",
+    "ClaudeCodeRunnerError",
+    "RunnerKind",
+    "RunResult",
+    "RunnerError",
+    "create_runner",
     "CodexRunResult",
     "CodexRunner",
     "CodexRunnerError",

@@ -48,7 +48,7 @@ class ActionServerTests(unittest.TestCase):
         running = self.enterContext(self.service.start())
         self.client = Client(running.endpoint, "gemm")
         self.runner = Mock()
-        self.enterContext(patch("klineage.action.action.CodexRunner", return_value=self.runner))
+        self.enterContext(patch("klineage.action.action.create_runner", return_value=self.runner))
 
     def action(self, **kwargs):
         return Apply(

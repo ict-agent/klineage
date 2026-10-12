@@ -6,6 +6,7 @@ import json
 import os
 import tomllib
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 
 from klineage.utils import safe_file
@@ -18,6 +19,9 @@ TOOL_OUTPUT_TOKENS = 10_000
 OPENAI_BASE_URL = "https://api.openai.com/v1"
 CHATGPT_BASE_URL = "https://chatgpt.com/backend-api/codex"
 DEFAULT_KEY_ENV = "AIPING_API_KEY"
+ANTHROPIC_API_URL = "https://api.anthropic.com"
+ANTHROPIC_KEY_ENV = "ANTHROPIC_API_KEY"
+ANTHROPIC_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN"
 MODEL_OPTIONS = (
     "model_context_window", "model_auto_compact_token_limit", "service_tier",
     "model_reasoning_summary", "model_verbosity", "model_catalog_json",
@@ -172,6 +176,48 @@ def model_settings(
     return result
 
 
+class AnthropicAuth(StrEnum):
+    API_KEY = "api-key"
+    BEARER = "bearer"
+
+
+def anthropic_settings(
+    *, model=None, reasoning_effort=None, api_base_url=None, api_key_env=None,
+    api_key=None, auth_mode=None,
+) -> dict:
+    """Resolve Messages settings without reading host CLI configuration."""
+    endpoint = api_base_url if api_base_url is not None else os.environ.get("KLINEAGE_API_BASE_URL")
+    configured = os.environ.get("ANTHROPIC_BASE_URL") or ANTHROPIC_API_URL
+    endpoint = endpoint if endpoint is not None else configured
+    if not isinstance(endpoint, str) or not endpoint.strip():
+        raise ValueError("api_base_url must be nonempty text")
+    endpoint = endpoint.strip()
+    key_env = api_key_env if api_key_env is not None else os.environ.get("KLINEAGE_API_KEY_ENV")
+    if not key_env:
+        if endpoint.rstrip("/") != configured.rstrip("/") and api_key is None:
+            raise ValueError("a different endpoint requires an explicit api_key or api_key_env")
+        key_env = ANTHROPIC_TOKEN_ENV if os.environ.get(ANTHROPIC_TOKEN_ENV) else ANTHROPIC_KEY_ENV
+    if not isinstance(key_env, str) or not key_env.isidentifier():
+        raise ValueError("api_key_env must name an environment variable")
+    key = api_key if api_key is not None else os.environ.get(key_env)
+    if not key:
+        raise ValueError(f"No API key: set {key_env} on the host")
+    selected = auth_mode or os.environ.get("KLINEAGE_AUTH_MODE")
+    auth = AnthropicAuth(selected) if selected else (
+        AnthropicAuth.BEARER if key_env == ANTHROPIC_TOKEN_ENV else AnthropicAuth.API_KEY
+    )
+    model = model if model is not None else os.environ.get("KLINEAGE_MODEL") or os.environ.get("ANTHROPIC_MODEL")
+    for name, value in (("api_base_url", endpoint), ("api_key", key), ("model", model)):
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"{name} must be nonempty text")
+    headers = {"x-api-key": key} if auth == AnthropicAuth.API_KEY else {"authorization": "Bearer " + key}
+    return {
+        "model": model, "reasoning_effort": reasoning_effort,
+        "api_base_url": endpoint.strip(), "api_key_env": key_env, "api_key": key,
+        "http_headers": headers, "options": {},
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class Provider:
     """A model endpoint routed through a host-side bridge."""
@@ -195,7 +241,11 @@ def resolve_provider(
 def runner_class(provider: Provider, effort: ReasoningEffort):
     """Bind a model, endpoint and context limits to a sandboxed runner."""
 
-    class ProviderRunner(CodexRunner):
+    from .runner import runner_type
+
+    base = runner_type()
+
+    class ProviderRunner(base):
         def __init__(self, *args, **kwargs):
             if kwargs.get("model") is None:
                 kwargs["model"] = provider.model
@@ -204,6 +254,8 @@ def runner_class(provider: Provider, effort: ReasoningEffort):
             kwargs.setdefault("api_key_env", provider.key_env)
             kwargs.setdefault("api_key", provider.key)
             super().__init__(*args, **kwargs)
+            if not isinstance(self, CodexRunner):
+                return
             self.model_catalog = self.state_dir / "model.json"
             model = {
                 "slug": self.model,

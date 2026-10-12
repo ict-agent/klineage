@@ -16,7 +16,9 @@ The flow starts with a **problem artifact**, which defines the computation and
 the workloads it must handle. [Artifacts](concepts/artifacts.md) give problems,
 generated kernels and reusable skills a common representation that connects the stages.
 
-KLineage organizes agent sessions as [Actions](concepts/actions.md).
+KLineage organizes Codex and Claude Code sessions as [Actions](concepts/actions.md).
+[Model configuration](getting-started.md#configure-model-access) selects a
+Responses-compatible or Anthropic Messages-compatible endpoint.
 **Generation** creates a kernel from the problem. **Apply** refines a kernel,
 drawing on procedural memory when useful. **Init** adapts expert implementations,
 while **Decompose** extracts

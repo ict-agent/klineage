@@ -1,7 +1,8 @@
 # Getting started
 
-Klineage requires Linux, Python 3.12+, uv, a compatible Codex executable, and bubblewrap
-with user namespaces enabled.
+Klineage requires Linux, Python 3.12+, uv, and bubblewrap with user namespaces.
+Install either Codex or native Claude Code (tested with 2.1.267, requiring `--bare`)
+on PATH. The runner is independent of the accelerator backend.
 
 ## Install Klineage
 
@@ -21,7 +22,9 @@ Replace `cuda` with the extra for your device; these extras are mutually exclusi
 
 ## Configure model access
 
-KLineage reads the selected model and provider settings from
+### Codex / Responses API
+
+`KLINEAGE_RUNNER=codex` is the default. KLineage reads model and provider settings from
 `$CODEX_HOME/config.toml`, defaulting to `~/.codex/config.toml`. It supports a
 configured host API-key variable or Codex login saved in `auth.json`.
 These environment overrides are optional:
@@ -37,6 +40,47 @@ When using these overrides, replace the endpoint and model ID and populate
 over these variables, which take precedence over config. See the
 [Evaluation guide](guides/evaluation.md#deadlines-runtime-information-and-credentials)
 for credential handling.
+
+### Claude Code / Anthropic Messages API
+
+Select Claude Code for Anthropic-compatible endpoints:
+
+```bash
+export KLINEAGE_RUNNER=claude-code
+export ANTHROPIC_BASE_URL=https://provider.example/anthropic
+export ANTHROPIC_MODEL=provider-model-id
+export ANTHROPIC_API_KEY=your-key
+```
+
+For `Authorization: Bearer` authentication, use `ANTHROPIC_AUTH_TOKEN` instead
+of `ANTHROPIC_API_KEY`. If both are set, the auth token takes precedence.
+The default endpoint is `https://api.anthropic.com`.
+Supply the gateway root, optionally ending in `/v1`; the bridge forwards
+`/v1/messages` and `/v1/messages/count_tokens`, including `?beta=true`.
+The provider must support streaming Messages and tool use.
+
+| Variable | Meaning |
+| --- | --- |
+| `KLINEAGE_RUNNER` | `codex` (default) or `claude-code` |
+| `KLINEAGE_MODEL` | Override `ANTHROPIC_MODEL` |
+| `KLINEAGE_API_BASE_URL` | Override `ANTHROPIC_BASE_URL` |
+| `KLINEAGE_API_KEY_ENV` | Host variable holding the selected credential |
+| `KLINEAGE_AUTH_MODE` | Claude authentication: `api-key` or `bearer` |
+
+Custom key variable names default to `api-key`. Set `KLINEAGE_AUTH_MODE=bearer`
+when the gateway expects a bearer token. Changing the endpoint requires an
+explicit key variable or Python `api_key`; credentials from another endpoint
+are not inherited. Clear stale `KLINEAGE_*` overrides when switching providers.
+Explicit runner arguments take precedence over these variables.
+
+Claude Code runs in `--bare` mode with isolated session storage. KLineage does
+not load host Claude settings, hooks, MCP servers, subscription login or keychain
+credentials. The credential stays in the host bridge; the CLI receives a
+placeholder key and a sandbox-local endpoint. Use a native `claude` executable
+that supports `--bare`, `--print`, `--output-format stream-json` and `--resume`.
+
+The selection applies to generation, extraction and optimization. See
+[Runtime API](reference/runtime.md) for direct Python use.
 
 ## Generate a kernel using Klineage
 
@@ -72,8 +116,8 @@ Kernel artifacts:
 | `workspace/` | Diagnostic scripts, source backups, binaries and logs |
 | `workspace/AGENTS.md` | Agent instructions and available Python APIs |
 | `workspace/.agents/skills/` | Backend guidance and supplied skill memory |
-| `workspace/.klineage/codex-runs/` | Agent prompts, traces, final replies and stderr |
-| `workspace/.klineage/codex-runs/<attempt>/stats.jsonl` | Model request usage and evaluation statistics |
+| `workspace/.klineage/agent-runs/` | Agent prompts, traces, final replies and stderr |
+| `workspace/.klineage/agent-runs/<attempt>/stats.jsonl` | Model request usage and evaluation statistics |
 
 Each version keeps its source and evaluation together, so its metadata lets you
 compare correctness and latency across workloads and versions. A successful run
@@ -81,7 +125,9 @@ returns the last numbered version after every workload passes. The problem link
 points to the original inputs; keep those files available.
 
 Codex reuses your existing `CODEX_HOME`; no separate Codex home is created for
-each run. Artifact layouts are queried through Python when needed.
+each run. Claude Code instead stores resumable sessions under
+`workspace/.klineage/claude-home/`. Keep it to resume retries. Artifact layouts
+are queried through Python when needed.
 
 ## Start an evaluation server
 

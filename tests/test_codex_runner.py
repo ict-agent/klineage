@@ -126,7 +126,7 @@ if prompt == "FIFO_REPLY":
     raise SystemExit(0)
 if prompt.startswith("REDIRECT_STATE:"):
     import shutil
-    state = pathlib.Path("workspace/.klineage/codex-runs")
+    state = pathlib.Path("workspace/.klineage/agent-runs")
     shutil.rmtree(state)
     state.symlink_to(prompt.removeprefix("REDIRECT_STATE:"), target_is_directory=True)
     output_path.write_text("replaced state")
@@ -222,7 +222,7 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertEqual(result.trace_path.parent.name, "successful-run")
         self.assertEqual(
             result.trace_path.parent.parent,
-            (self.work / "workspace/.klineage" / "codex-runs").resolve(),
+            (self.work / "workspace/.klineage" / "agent-runs").resolve(),
         )
         prompt = (result.trace_path.parent / "prompt.txt").read_text()
         self.assertTrue(prompt.startswith("Read `workspace/AGENTS.md`"))
@@ -469,10 +469,10 @@ class CodexRunnerTests(unittest.TestCase):
             with (
                 self.subTest(error=type(error).__name__),
                 patch(
-                    "klineage.harness.codex_runner.subprocess.Popen",
+                    "klineage.harness.runner.subprocess.Popen",
                     return_value=process,
                 ),
-                patch("klineage.harness.codex_runner.stop_process") as stop,
+                patch("klineage.harness.runner.stop_process") as stop,
                 self.assertRaises(type(error)),
             ):
                 runner("interrupt")
@@ -583,14 +583,14 @@ class CodexRunnerTests(unittest.TestCase):
     def test_external_trace_directory(self):
         directory = self.root / "traces"
         result = self.runner(state_dir=directory)("inspect", run_id="external")
-        self.assertEqual(result.trace_path.parent.parent, directory / "codex-runs")
+        self.assertEqual(result.trace_path.parent.parent, directory / "agent-runs")
         self.assertEqual((result.trace_path.parent / "final_message.txt").read_text(), result.final_message)
         args = self.trace_args(result.trace_path)
         self.assertEqual(Path(args[args.index("--output-last-message") + 1]), result.trace_path.parent / "final_message.txt")
 
     def test_relative_external_state(self):
         result = self.runner(state_dir=Path("../traces"))("external", run_id="relative")
-        self.assertEqual(result.trace_path, self.root / "traces/codex-runs/relative/trace.jsonl")
+        self.assertEqual(result.trace_path, self.root / "traces/agent-runs/relative/trace.jsonl")
 
     def test_external_traces_hidden(self):
         directory = self.root / "shared-traces"
@@ -757,7 +757,7 @@ class CodexRunnerTests(unittest.TestCase):
         self.assertEqual(event["codex_home"], str(self.codex_home))
         self.assertEqual(set(self.work.iterdir()), {self.work / "workspace"})
         state = self.work / "workspace/.klineage"
-        self.assertEqual(set(state.iterdir()), {state / "codex-runs"})
+        self.assertEqual(set(state.iterdir()), {state / "agent-runs"})
         self.assertEqual(
             Path(event["args"][event["args"].index("--output-last-message") + 1]),
             result.trace_path.parent / "final_message.txt",

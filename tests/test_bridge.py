@@ -89,6 +89,36 @@ class BridgeTests(unittest.TestCase):
         path = self.directory / "stats.jsonl"
         return [json.loads(line) for line in path.read_text().splitlines()]
 
+    def test_anthropic_routes(self):
+        from klineage.harness.bridge import WireAPI
+
+        self.bridge.close()
+        self.bridge = self.stack.enter_context(ProviderBridge(
+            self.base_url, None, self.path, headers={"x-api-key": "host-secret"},
+            wire_api=WireAPI.MESSAGES,
+        ))
+        self.upstream.chunks = [b'{"type":"message","content":[]}']
+        with LoopbackRelay(self.path, port=0, wire_api=WireAPI.MESSAGES) as relay:
+            for route in ("/v1/messages", "/v1/messages?beta=true", "/v1/messages/count_tokens"):
+                connection = http.client.HTTPConnection("127.0.0.1", relay.port, timeout=2)
+                self.addCleanup(connection.close)
+                connection.request("POST", route, b"{}", {
+                    "x-api-key": "sandbox-key", "Authorization": "Bearer sandbox-token",
+                    "anthropic-version": "2023-06-01", "anthropic-beta": "test-beta",
+                })
+                response = connection.getresponse()
+                self.assertEqual(response.status, HTTPStatus.OK)
+                response.read()
+                path, headers, _ = self.upstream.requests[-1]
+                self.assertEqual(path, "/api" + route)
+                self.assertEqual(headers["x-api-key"], "host-secret")
+                self.assertNotIn("Authorization", headers)
+                self.assertEqual(headers["anthropic-version"], "2023-06-01")
+                self.assertEqual(headers["anthropic-beta"], "test-beta")
+            connection = self.connection()
+            connection.request("POST", "/responses", b"{}")
+            self.assertEqual(connection.getresponse().status, HTTPStatus.BAD_REQUEST)
+
     def usage_response(self):
         return {
             "id": "response-1", "model": "test-model", "object": "response",

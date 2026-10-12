@@ -69,6 +69,28 @@ class LoggingTests(unittest.TestCase):
 
         return patch.dict(os.environ, {LOG_ENV: str(target or self.target)})
 
+    def test_anthropic_stream_usage(self):
+        frames = [
+            {"type": "message_start", "message": {
+                "id": "msg-1", "model": "claude-test", "usage": {
+                    "input_tokens": 10, "output_tokens": 1,
+                    "cache_creation_input_tokens": 4, "cache_read_input_tokens": 6,
+                },
+            }},
+            {"type": "content_block_delta", "delta": {"text": "private"}},
+            {"type": "message_delta", "usage": {"output_tokens": 7}},
+            {"type": "message_stop"},
+        ]
+        stream = b"".join(b"data: " + json.dumps(frame).encode() + b"\n\n" for frame in frames)
+        usage = ResponseUsage("text/event-stream")
+        for offset in range(0, len(stream), 7):
+            usage.feed(stream[offset:offset + 7])
+        self.assertEqual(usage.finish(), {
+            "response_id": "msg-1", "model": "claude-test", "input_tokens": 20,
+            "output_tokens": 7, "total_tokens": 27, "cached_tokens": 6,
+            "cache_creation_tokens": 4,
+        })
+
     def test_collection_is_off_without_configuration(self):
         environment = {k: v for k, v in os.environ.items() if k != LOG_ENV}
         with patch.dict(os.environ, environment, clear=True):

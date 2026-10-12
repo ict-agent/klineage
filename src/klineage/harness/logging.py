@@ -183,6 +183,7 @@ class ResponseUsage:
         self.pending = b""
         self.discarding = False
         self.usage = {}
+        self.message = {}
 
     def feed(self, data: bytes) -> None:
         # Some Responses providers stream SSE without a Content-Type header.
@@ -207,15 +208,49 @@ class ResponseUsage:
             self.discarding = False
         for frame in frames:
             if len(frame) <= USAGE_BUFFER_BYTES:
-                self.usage = usage_from_event(b"\n".join(data_lines(frame))) or self.usage
+                self.capture(b"\n".join(data_lines(frame)))
         self.discarding = self.discarding or len(pending) > USAGE_BUFFER_BYTES
         # Keep enough bytes to recognize a CRLF separator split across reads.
         self.pending = pending[-3:] if self.discarding else pending
 
+    def capture(self, payload: bytes):
+        try:
+            event = json.loads(payload)
+        except (ValueError, TypeError, RecursionError):
+            return
+        if not isinstance(event, dict):
+            return
+        kind = event.get("type")
+        if kind not in ("message", "message_start", "message_delta"):
+            self.usage = usage_from_event(payload) or self.usage
+            return
+        message = event.get("message", {}) if kind == "message_start" else event
+        if not isinstance(message, dict) or not isinstance(message.get("usage"), dict):
+            return
+        # Message deltas carry cumulative output usage, not a new request.
+        self.message.update(message["usage"])
+        for key in ("id", "model"):
+            if key in message:
+                self.message[key] = message[key]
+        usage = self.message
+        fields = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+        if any(type(usage.get(key, 0)) is not int or usage.get(key, 0) < 0 for key in fields):
+            return
+        cached = usage.get("cache_read_input_tokens", 0)
+        created = usage.get("cache_creation_input_tokens", 0)
+        inputs = usage.get("input_tokens", 0) + cached + created
+        outputs = usage.get("output_tokens", 0)
+        self.usage = {
+            "response_id": usage.get("id"), "model": usage.get("model"),
+            "input_tokens": inputs, "output_tokens": outputs,
+            "total_tokens": inputs + outputs, "cached_tokens": cached,
+            "cache_creation_tokens": created,
+        }
+
     def finish(self) -> dict[str, Any]:
         if self.pending and not self.discarding:
             payload = b"\n".join(data_lines(self.pending)) if self.streaming else self.pending
-            self.usage = usage_from_event(payload) or self.usage
+            self.capture(payload)
         return self.usage
 
 

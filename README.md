@@ -6,7 +6,8 @@ Generate accelerator kernels and reuse optimization skills.
 
 ## Quick start
 
-Requires Python 3.12+, uv, Codex and Linux bubblewrap with user namespaces.
+Requires Python 3.12+, uv, Codex or native Claude Code, and Linux bubblewrap
+with user namespaces.
 From the repository root, install the CLI with one backend:
 
 ```bash
@@ -18,7 +19,7 @@ dependencies; configure the matching system driver and toolchain separately.
 See [runtime requirements](docs/getting-started.md).
 If the commands are not on PATH, run `uv tool update-shell` and reopen the terminal.
 
-Model and provider settings default to `$CODEX_HOME/config.toml`
+Codex is the default runner. Its model and provider settings come from `$CODEX_HOME/config.toml`
 (`~/.codex/config.toml` when `CODEX_HOME` is unset). These overrides are optional:
 
 ```bash
@@ -28,6 +29,20 @@ export KLINEAGE_MODEL=provider-model-id
 ```
 
 When overriding the key variable, populate `MODEL_API_KEY` on the host.
+
+For an Anthropic Messages-compatible endpoint, select Claude Code:
+
+```bash
+export KLINEAGE_RUNNER=claude-code
+export ANTHROPIC_BASE_URL=https://provider.example/anthropic
+export ANTHROPIC_MODEL=provider-model-id
+export ANTHROPIC_API_KEY=your-key
+```
+
+Use `ANTHROPIC_AUTH_TOKEN` instead for bearer authentication. `KLINEAGE_MODEL`,
+`KLINEAGE_API_BASE_URL` and `KLINEAGE_API_KEY_ENV` override the Anthropic variables;
+clear previous overrides when switching providers.
+See [model access](docs/getting-started.md#configure-model-access).
 
 Generate a kernel from a problem directory containing `definition.json` and
 at least one workload in `workloads.jsonl`:

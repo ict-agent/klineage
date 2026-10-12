@@ -13,6 +13,8 @@ optimizing implementations and hosting evaluation. Install them using
 
 The first three commands use the model configuration described in
 [Configure model access](../getting-started.md#configure-model-access).
+Set `KLINEAGE_RUNNER=claude-code` for Anthropic Messages or leave it unset for
+Codex/Responses. The evaluator configuration is independent of that choice.
 Use a fresh work directory for each run.
 
 ## Generate a kernel

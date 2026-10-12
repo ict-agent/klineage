@@ -81,7 +81,9 @@ In a development environment with KLineage, PyTorch and NumPy installed:
 uv run --no-sync python -m unittest discover -s tests
 ```
 
-CPU tests cover artifact formats, transport, dispatch and isolation. Set
+CPU tests cover artifact formats, both agent runners, provider streaming,
+transport, dispatch and isolation. Runner tests use fake CLIs and local HTTP
+providers, so they require Linux/bubblewrap but no paid model access. Set
 `KLINEAGE_CUDA_TESTS=1` in a configured CUDA environment to enable optional CUDA
 tests. New backends also need the
 [hardware checks](guides/extending.md#check-the-implementation).
@@ -110,3 +112,7 @@ directory under `agent-workspace/`.
 Use `--model`, `--base-url` and `--output` to override defaults, and `--agent-*`
 options to configure local diagnostics. The campaign passes its model explicitly,
 overriding `KLINEAGE_MODEL`. Run the script with `--help` for all options.
+
+For Anthropic campaigns, set `KLINEAGE_RUNNER=claude-code` and
+`KLINEAGE_API_KEY_ENV=AIPING_API_KEY`, then pass `--base-url` and `--model`
+for the Messages gateway. Set `KLINEAGE_AUTH_MODE=bearer` for bearer authentication.

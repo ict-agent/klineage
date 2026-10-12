@@ -71,7 +71,7 @@ class ActionArtifactTests(unittest.TestCase):
         shutil.rmtree(self.work / "versions")
         self.runner = Mock(return_value=SimpleNamespace(final_message="done"))
         self.enterContext(
-            patch("klineage.action.action.CodexRunner", return_value=self.runner)
+            patch("klineage.action.action.create_runner", return_value=self.runner)
         )
 
     def test_base_returns_artifact(self):
@@ -187,7 +187,7 @@ class ActionArtifactTests(unittest.TestCase):
 
         self.runner.side_effect = generate
         with patch(
-            "klineage.action.action.CodexRunner",
+            "klineage.action.action.create_runner",
             return_value=self.runner,
         ) as factory:
             result = Apply(self.current, workdir=self.work, max_retries=1).run()
