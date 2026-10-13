@@ -3,6 +3,7 @@
 Decompose records reusable optimizations as SkillCards; Apply exposes supplied
 cards to the agent for later kernels. Each card contains a Markdown recipe, scope and prerequisites.
 See [Reuse skill memory](../concepts/actions.md#reuse-skill-memory) for the workflow.
+Bundled cards are stored in `knowledge/skillcards/`.
 
 ## Describe a skill
 

@@ -85,9 +85,8 @@ The selection applies to generation, extraction and optimization. See
 ## Generate a kernel using Klineage
 
 Klineage uses the [FlashInfer Trace](<https://github.com/flashinfer-ai/flashinfer-trace>)
-format for problem definitions and workloads. The repository includes five examples:
-`problems/gemm`, `problems/conv2d`, `problems/fmha`, `problems/gdn` and `problems/topk`.
-Each problem has its own directory with the following structure:
+format for problem definitions and workloads. The repository includes
+`problems/gemm`, with the following structure:
 
 ```text
 problems/gemm/
