@@ -49,6 +49,10 @@ class Backend(ABC):
     timing: ClassVar[ModuleType]
     device_patterns: ClassVar[tuple[str, ...]] = ()
 
+    def device_access(self, nodes, environment):
+        """Select sandbox device nodes and their runtime visibility."""
+        return nodes, dict(environment)
+
     @abstractmethod
     def bench(
         self,

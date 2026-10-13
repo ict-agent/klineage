@@ -135,8 +135,8 @@ class AgentRuntime:
     def local(cls, backend: Backend) -> AgentRuntime:
         """Use the current interpreter and accessible devices of one backend.
 
-        Visibility variables are preserved; device nodes are selected by family,
-        not inferred from logical device indices. Host credentials are omitted.
+        Backends select device nodes and sandbox visibility. Ascend exposes its
+        current physical NPU as logical device 0. Host credentials are omitted.
         Toolchains outside system mounts are exposed read-only; the backend's
         compiler directory is added to PATH. The default constructor remains device-free.
 
@@ -155,12 +155,12 @@ class AgentRuntime:
         info = backend.info()
         if not info["available"]:
             raise RuntimeError(f"{backend.kind} is unavailable to this process")
-        devices = device_nodes(backend)
+        environment = runtime_environment({BACKEND_ENV: str(backend.kind)})
+        devices, environment = backend.device_access(device_nodes(backend), environment)
         if not devices:
             raise RuntimeError(
                 f"no accessible {backend.kind} device nodes; configure AgentRuntime explicitly"
             )
-        environment = runtime_environment({BACKEND_ENV: str(backend.kind)})
         mounts = runtime_mounts(info, environment)
         compiler = info.get("compiler")
         if compiler and Path(compiler).is_absolute():

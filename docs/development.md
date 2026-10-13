@@ -89,6 +89,7 @@ Runner tests use fake CLIs and local HTTP
 providers, so they require Linux/bubblewrap but no paid model access. Set
 `KLINEAGE_CUDA_TESTS=1` in a configured CUDA environment for native CUDA tests.
 For Ascend, use `KLINEAGE_ASCEND_TESTS=1` and `ASCEND_ARCH`, with
-`KLINEAGE_ASCEND_DEVICE` selecting the sandbox's physical device. New backends
+`ASCEND_RT_VISIBLE_DEVICES` selecting the controller's NPU. The sandbox mounts
+the active physical device and remaps it to logical device 0. New backends
 also need the
 [hardware checks](guides/extending.md#check-the-implementation).

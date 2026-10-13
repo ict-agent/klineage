@@ -18,6 +18,7 @@ from klineage.constants import BUILD_DIRECTORY, KERNEL_METADATA
 from klineage.utils import safe_name
 
 from . import timing
+from .device import select_device
 
 CFLAGS = ("-O3", "-std=c++17")
 BUILD_ERROR_BYTES = 16 * 1024
@@ -111,6 +112,9 @@ class AscendBackend(Backend):
     timing = timing
     device_patterns = ("davinci[0-9]*", "davinci_manager", "devmm_svm", "hisi_hdc")
     bench = staticmethod(timing.bench)
+
+    def device_access(self, nodes, environment):
+        return select_device(nodes, environment)
 
     def info(self):
         from klineage.backend.runtime import load_torch, runtime_info

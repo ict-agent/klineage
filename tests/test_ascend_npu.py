@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from klineage.backend.ascend.kernel import AscendBackend, compile_native
-from klineage.harness.sandbox import AgentRuntime
+from klineage.harness.sandbox import AgentRuntime, Sandbox, runtime_paths
 from klineage.server.worker import WorkerRuntime
 
 RUN_ASCEND = os.environ.get("KLINEAGE_ASCEND_TESTS") == "1"
-TEST_DEVICE = os.environ.get("KLINEAGE_ASCEND_DEVICE")
+SMOKE_TIMEOUT = 60
 
 
 @unittest.skipUnless(RUN_ASCEND, "set KLINEAGE_ASCEND_TESTS=1 on an Ascend device")
@@ -18,15 +19,8 @@ class AscendExecutionTests(unittest.TestCase):
     def test_sandbox_device(self):
         backend = AscendBackend()
         runtime = AgentRuntime.local(backend)
-        devices = runtime.device_nodes
-        if TEST_DEVICE is not None:
-            devices = tuple(
-                path for path in devices
-                if not path.name.removeprefix("davinci").isdigit()
-                or path.name == f"davinci{TEST_DEVICE}"
-            )
         worker = WorkerRuntime(
-            python=runtime.python, device_nodes=devices,
+            python=runtime.python, device_nodes=runtime.device_nodes,
             read_only=runtime.read_only, environment=runtime.environment,
         )
         with tempfile.TemporaryDirectory() as directory:
@@ -34,6 +28,28 @@ class AscendExecutionTests(unittest.TestCase):
             info = worker.info(backend, build_root=root / "build", log_dir=root / "logs")
             self.assertTrue(info["available"])
             self.assertEqual(info["device_architecture"], backend.info()["device_architecture"])
+
+    def test_sandbox_matmul(self):
+        runtime = AgentRuntime.local(AscendBackend())
+        source = """
+import torch, torch_npu
+SIDE = 16
+assert torch.npu.device_count() == 1
+value = torch.ones((SIDE, SIDE), device="npu")
+torch.testing.assert_close((value @ value).cpu(), torch.full((SIDE, SIDE), float(SIDE)))
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            sandbox = Sandbox(
+                directory, devices=runtime.device_nodes,
+                read_only=(*runtime_paths(runtime.python), *runtime.read_only),
+                environment=runtime.environment,
+            )
+            result = subprocess.run(
+                sandbox.command([str(runtime.python), "-c", source]),
+                env=sandbox.environment, capture_output=True, text=True,
+                timeout=SMOKE_TIMEOUT, check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_native_compile(self):
         # Exercise the installed compiler and linker, not a mocked subprocess.

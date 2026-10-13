@@ -100,6 +100,8 @@ def generate(
             )
             server = stack.enter_context(service.start("unix://" + str(root / "evaluation.sock")))
             evaluation = Client(server.endpoint, spec.name, timeout=timeout)
+            if not evaluation.info()["device"]["available"]:
+                raise RuntimeError(f"{backend.kind} evaluation worker is unavailable")
         link_problem(work, evaluation.problem_id, reference)
         result = Generation(
             spec,

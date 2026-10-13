@@ -569,13 +569,6 @@ class LocalRuntimeTests(unittest.TestCase):
                 "nvidia-caps/nvidia-cap2",
             ),
             "hip": ("kfd", "dri/renderD128", "dri/renderD130"),
-            "ascendc": (
-                "davinci0",
-                "davinci3",
-                "davinci_manager",
-                "devmm_svm",
-                "hisi_hdc",
-            ),
         }
         for group in names.values():
             for name in group:

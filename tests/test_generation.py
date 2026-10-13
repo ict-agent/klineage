@@ -61,7 +61,7 @@ class GenerationTests(unittest.TestCase):
             patch(
                 "klineage.cli.generation.WorkerRuntime",
                 side_effect=lambda **_: SimpleNamespace(
-                    info=lambda backend, **kwargs: backend.info(),
+                    info=lambda backend, **kwargs: {"available": True, **backend.info()},
                     evaluate=lambda candidate, **kwargs: measured(candidate),
                 ),
             )
@@ -181,6 +181,20 @@ class GenerationTests(unittest.TestCase):
         for options in ({"timeout": 0}, {"max_retries": -1}):
             with self.subTest(options=options), self.assertRaises(ValueError):
                 generate(self.path, workdir=self.work, **options)
+        self.runner.assert_not_called()
+
+    def test_worker_unavailable(self):
+        backend = get_backend("ascendc")
+        self.worker.side_effect = lambda **_: SimpleNamespace(
+            info=lambda *args, **kwargs: {"available": False},
+            evaluate=lambda candidate, **kwargs: measured(candidate),
+        )
+        with (
+            patch("klineage.cli.generation.detect_backend", return_value=backend),
+            patch.object(type(backend), "info", return_value={"available": True, "platform": "ascend"}),
+            self.assertRaisesRegex(RuntimeError, "evaluation worker.*unavailable"),
+        ):
+            generate(self.path, workdir=self.work, max_retries=0)
         self.runner.assert_not_called()
 
     def test_cli_emits_kernel_json(self):
