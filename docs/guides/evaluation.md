@@ -143,9 +143,9 @@ With `KLINEAGE_SERVER` configured, source files are submitted without local
 compilation. Otherwise evaluation runs directly on the local backend, without
 starting a server listener. Both paths return the same Evaluation and save the
 same version layout. A remote failure does not trigger local evaluation.
-An optional `reference`
-provides a timing baseline; the problem's reference implementation remains the
-correctness oracle.
+When `reference` is omitted or `None`, the problem's reference implementation
+is the timing baseline. An explicit `reference` overrides that baseline;
+the problem's implementation remains the correctness oracle.
 
 Evaluation saves each returned Kernel, including failed evaluations:
 
@@ -176,7 +176,7 @@ only while their registered problem is unchanged.
 
 ## Per-workload results
 
-Each workload runs in its own worker. The candidate and optional baseline use
+Each workload runs in its own worker. The candidate and selected baseline use
 the same inputs, backend and measurement policy for that case. Read the results
 by workload UUID:
 

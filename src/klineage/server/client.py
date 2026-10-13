@@ -202,7 +202,7 @@ class Client:
                 `problems/<problem_id>` symlink points to the original problem.
             reference (Kernel | Path | str | Evaluation | None): Timing baseline:
                 a Kernel, directory, accepted job ID or prior `Evaluation` for
-                the same problem.
+                the same problem. None uses the problem's reference implementation.
             timeout (float | None): Request budget in seconds; defaults to the
                 client's timeout.
             problem_id: Registered problem to evaluate, defaulting to the bound

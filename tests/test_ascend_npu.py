@@ -96,7 +96,10 @@ input()
                         log_dir=root / "logs",
                     )
                     diagnostics = "\n".join(path.read_text() for path in (root / "logs").rglob("*.log"))
-                    self.assertTrue(result.accepted, diagnostics)
+                    self.assertTrue(result.compile_passed, diagnostics)
+                    self.assertTrue(result.correctness_passed, diagnostics)
+                    self.assertGreater(result.latency_ms or 0, 0)
+                    self.assertGreater(result.reference_latency_ms or 0, 0)
                 finally:
                     process.communicate("\n", timeout=SMOKE_TIMEOUT)
 

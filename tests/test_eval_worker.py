@@ -372,6 +372,8 @@ class WorkloadProcessTests(unittest.TestCase):
         self.assertTrue(result.accepted)
         self.assertEqual(tuple(result.workloads), ("small", "large"))
         self.assertTrue(all(value.accepted for value in result.workloads.values()))
+        self.assertTrue(all(value.reference_latency_ms == 1.0 for value in result.workloads.values()))
+        self.assertIsNone(result.reference_latency_ms)
 
 
 class EvalTransportTests(unittest.TestCase):

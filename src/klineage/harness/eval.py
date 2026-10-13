@@ -24,6 +24,7 @@ from klineage.artifact.problem import (
     trace_inputs,
     trace_module,
 )
+from klineage.artifact.tree import Node
 from klineage.backend import Backend, detect_backend, get_backend
 from klineage.backend.runtime import (
     current_device,
@@ -35,6 +36,7 @@ from klineage.backend.runtime import (
 from klineage.backend.timing import bench
 from klineage.constants import (
     NUMERICAL_TOLERANCE,
+    SUBMISSION_DIRECTORY,
 )
 from klineage.harness.logging import now
 from klineage.harness.process import run_process
@@ -87,8 +89,8 @@ class ProblemRuntime:
     ``check_outputs`` receives ``(candidate_output, reference_output)``.  It may
     return a boolean, or raise an assertion for a detailed failure.  Returning
     ``None`` is treated as success to support assertion-style checkers. The
-    problem reference is always the correctness oracle; a supplied Kernel
-    reference is only the performance baseline.
+    problem reference is the correctness oracle and default timing baseline;
+    a supplied Kernel overrides only the timing baseline.
 
     Attributes:
         make_inputs: Create positional inputs for each correctness or timing phase.
@@ -129,7 +131,7 @@ class CallableKernelEvaluator:
 
         Args:
             kernel: Candidate with its callable already built.
-            reference: Optional built kernel used only as a timing baseline.
+            reference: Built timing baseline; None uses the problem reference.
             workload: Selected workload binding the kernel's tensor contract.
 
         Returns:
@@ -172,14 +174,17 @@ class CallableKernelEvaluator:
             timing = bench(kernel, args=clone_inputs(original).args, policy=self.policy)
             timing_evidence(asdict(timing), timing.median_ms)
             print("Timing evidence: " + to_json(timing, indent=None), file=sys.stderr)
-            reference_latency_ms = None
-            passed = True
-            if reference is not None:
-                baseline = bench(
-                    reference, args=clone_inputs(original).args, policy=self.policy
+            if reference is None:
+                # Bind the oracle to a source-free artifact with the same target.
+                reference = type(kernel)(
+                    kernel.tree.with_child(Node.directory(SUBMISSION_DIRECTORY.name))
                 )
-                reference_latency_ms = baseline.median_ms
-                passed = verify_performance(timing, baseline)
+                object.__setattr__(reference, "function", self.runtime.reference)
+            baseline = bench(
+                reference, args=clone_inputs(original).args, policy=self.policy
+            )
+            reference_latency_ms = baseline.median_ms
+            passed = verify_performance(timing, baseline)
         except Exception as error:  # noqa: BLE001 - Record gates; propagate interrupts.
             print(f"Timing failed: {error}", file=sys.stderr)
             return ValidationResult(True, True, False)
@@ -336,7 +341,7 @@ class EvaluationRuntime:
             include_paths: Additional compiler include directories.
             build_root: Worker build directory.
             log_dir: Directory for request, process and result records.
-            reference: Optional artifact used only as a performance baseline.
+            reference: Timing baseline; None uses each workload's problem reference.
             timeout: Optional total budget for this call, capped by the runtime's
                 configured timeout. Does not change later calls.
 

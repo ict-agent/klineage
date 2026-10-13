@@ -13,6 +13,7 @@ from unittest.mock import Mock, patch
 from kernel_fixtures import make_kernel, write_kernel
 from problem_fixtures import io_problem
 
+from klineage.artifact import load_problem
 from klineage.backend.cuda import CudaKernel
 from klineage.backend.cuda import timing as cuda_timing
 from klineage.backend.runtime import bench_events
@@ -121,18 +122,52 @@ class CallableEvaluatorTests(unittest.TestCase):
             check_outputs=lambda actual, expected: actual == expected,
         )
 
-    def test_success_uses_runtime_reference_and_same_backend(self):
+    def test_default_reference(self):
         candidate = self.build(body="return sum(value)")
-        backend = FakeBackend([1.0])
+        function = candidate.function
+        runtime = self.runtime(sum, ([1, 2, 3],))
+        backend = FakeBackend([1.0, 2.0])
         result = self.evaluator(
-            self.runtime(sum, ([1, 2, 3],)),
+            runtime,
             backend=backend,
-        ).evaluate(candidate)
+        ).evaluate(candidate, reference=None)
         self.assertTrue(result.accepted)
         self.assertEqual(result.latency_ms, 1.0)
-        self.assertIsNone(result.reference_latency_ms)
-        self.assertEqual(len(backend.calls), 1)
+        self.assertEqual(result.reference_latency_ms, 2.0)
+        self.assertEqual(len(backend.calls), 2)
         self.assertIs(backend.calls[0][0], candidate)
+        baseline, args, _ = backend.calls[1]
+        self.assertEqual(load_problem(baseline), load_problem(candidate))
+        self.assertIs(baseline.function, runtime.reference)
+        self.assertEqual(baseline(*args), 6)
+        self.assertIs(candidate.function, function)
+
+    def test_default_slowdown(self):
+        result = self.evaluator(
+            self.runtime(), backend=FakeBackend([2.0, 1.0]),
+        ).evaluate(self.build())
+        self.assertTrue(result.compile_passed)
+        self.assertTrue(result.correctness_passed)
+        self.assertFalse(result.profile_passed)
+        self.assertEqual(result.reference_latency_ms, 1.0)
+
+    def test_reference_override(self):
+        reference = self.build("reference", body="return value + 1")
+        backend = FakeBackend([1.0, 2.0])
+        result = self.evaluator(self.runtime(), backend=backend).evaluate(
+            self.build(), reference=reference,
+        )
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.reference_latency_ms, 2.0)
+        self.assertIs(backend.calls[1][0], reference)
+
+    def test_default_timing_failure(self):
+        evaluator = self.evaluator(self.runtime(), backend=FakeBackend([]))
+        with patch.object(worker, "bench", side_effect=[timing_result(), RuntimeError("baseline failed")]):
+            result = evaluator.evaluate(self.build())
+        self.assertTrue(result.compile_passed)
+        self.assertTrue(result.correctness_passed)
+        self.assertFalse(result.profile_passed)
 
     def test_rejects_paired_slowdown(self):
         result = self.evaluator(

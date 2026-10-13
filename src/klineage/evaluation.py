@@ -39,6 +39,7 @@ def evaluate(
         kernel: Kernel artifact or its source directory.
         reference: Optional timing baseline: a Kernel, directory or Evaluation.
             A job ID is accepted only with a configured service.
+            None uses the problem's reference implementation.
         work: Output directory; defaults to the current directory.
         timeout: Optional evaluation budget in seconds.
 
