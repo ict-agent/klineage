@@ -1,6 +1,6 @@
 ---
 name: ascendc
-description: Write or inspect KLineage AscendC bundles for Ascend NPUs, including CANN compilation, torch_npu bindings, and caller-stream ordering.
+description: Write or inspect KLineage AscendC bundles for Ascend NPUs, including CANN compilation, torch_npu bindings, caller-stream ordering, and msprof profiling.
 ---
 
 # AscendC
@@ -69,13 +69,50 @@ Use `klineage.evaluate(Path("current_kernel"))`; evaluation automatically append
 the complete result under `versions/0`, `versions/1`, ... including failures.
 Finish with an accepted latest version; use `klineage.result(best_reply)`
 to append an earlier accepted job as the latest version.
-With an explicitly supplied CANN runtime and NPU, write diagnostic scripts and use
-CANN profiling tools directly. Diagnostic timings do not replace service validation;
-avoid concurrent diagnostics and service benchmarks on the same device. Read
-[bench](../bench/SKILL.md) for correctness, NPU event timing, and evidence.
+Read [bench](../bench/SKILL.md) for correctness, NPU event timing, and evidence.
+
+## Profile with msprof
+
+After correctness passes, use `msprof op` to investigate kernel bottlenecks and
+`msprof` for application timelines. Check `msprof --help` and `msprof op --help`
+for the installed CANN version and supported metrics.
+
+Run profiling in a controller-provided NPU-enabled diagnostic environment while
+the evaluator is idle; exit that process before the next evaluation. Default
+agents have no NPU access, and the evaluation API does not collect msprof reports.
+If profiling is unavailable, retain the error and continue with evaluation timings.
+
+Write `workspace/profile_kernel.py` to build/load a fixed candidate and replay
+the problem's shapes, dtypes, layouts and inputs on the caller's stream. Prepare
+inputs and warm up before the selected capture. The script must launch the
+kernel itself; `klineage.evaluate()` executes in a separate worker.
+Replace `gemm_device` with the actual device-kernel name prefix:
+
+```bash
+kernel_name=gemm_device
+profile_script=workspace/profile_kernel.py
+profile_python=$(command -v python)
+mkdir -p workspace/msprof
+msprof op --kernel-name="$kernel_name" --launch-count=1 \
+  --aic-metrics=PipeUtilization --output=workspace/msprof/op \
+  "$profile_python" "$profile_script"
+msprof --application="$profile_python $profile_script" --output=workspace/msprof/timeline
+```
+
+Filter by kernel name so input generation and reference operations are excluded.
+Inspect Cube/Vector utilization, memory-transfer activity, cache traffic and
+synchronization stalls. Use supported `Memory`, `L2Cache` or
+`ResourceConflictRatio` metrics to test a specific hypothesis. Read exported
+reports or open them in MindStudio Insight. Retain the candidate version,
+workload, command and report paths under `workspace/`.
+
+Profiling adds overhead. Validate each resulting change with an unprofiled
+`klineage.evaluate()` run; its timings determine acceptance.
 
 References: [Ascend native extension example](https://github.com/Ascend/op-plugin/blob/master/examples/cpp_extension_asc/README.md),
-[TorchNPU storage formats](https://github.com/Ascend/pytorch/blob/master/torch_npu/csrc/framework/FormatHelper.cpp).
+[TorchNPU storage formats](https://github.com/Ascend/pytorch/blob/master/torch_npu/csrc/framework/FormatHelper.cpp),
+[msprof op](https://www.hiascend.com/doc_center/source/en/CANNCommunityEdition/850/devaids/optool/atlasopdev_16_0082.html),
+[msprof](https://www.hiascend.com/doc_center/source/en/CANNCommunityEdition/850/devaids/profiling/atlasprofiling_16_0011.html).
 
 The config.toml entry_point is a host callable with all launch parameters defined
 in source. Compute dynamic launch dimensions from the inputs and acquire the

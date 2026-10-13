@@ -75,9 +75,11 @@ must be corrected or replaced by an accepted result.
 ## Inspect performance
 
 Get a correct, measured implementation before spending the remaining budget on
-profiling. With available devices and tools, use `ncu` or the relevant HIP/Ascend
-profiler to investigate a specific question. Put scripts, binaries and reports
-in `workspace/`. `Kernel.load_kernel()` can build a callable for local diagnostics.
+profiling. With available devices and tools, use `ncu` for CUDA, `msprof op` or
+`msprof` for Ascend, or the relevant HIP profiler to investigate a specific
+question. The AscendC skill provides commands and device-access requirements.
+Put scripts, binaries and reports in `workspace/`. `Kernel.load_kernel()` can
+build a callable for local diagnostics.
 
 Run diagnostics and evaluation sequentially on a device. If a profiler is absent
 or lacks counter permissions, retain the error and use other available evidence.
