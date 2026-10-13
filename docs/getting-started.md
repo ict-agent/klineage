@@ -129,6 +129,10 @@ each run. Claude Code instead stores resumable sessions under
 `workspace/.klineage/claude-home/`. Keep it to resume retries. Artifact layouts
 are queried through Python when needed.
 
+Ascend generation keeps NPU access in the evaluation worker because its driver
+reserves devices per sandbox. Agents compile locally and submit measurements
+through `klineage.evaluate()`; query the device through `klineage.info()`.
+
 ## Start an evaluation server
 
 The CLI starts a local evaluator by default. To reuse an evaluator across

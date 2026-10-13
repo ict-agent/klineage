@@ -53,6 +53,10 @@ class Backend(ABC):
         """Select sandbox device nodes and their runtime visibility."""
         return nodes, dict(environment)
 
+    def agent_devices(self, nodes):
+        """Allow direct diagnostics when agent and worker can share devices."""
+        return nodes
+
     @abstractmethod
     def bench(
         self,

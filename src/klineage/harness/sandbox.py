@@ -8,7 +8,7 @@ import shutil
 import stat
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
@@ -174,6 +174,13 @@ class AgentRuntime:
             read_only=mounts,
             environment=environment,
         )
+
+    def for_agent(self, backend: Backend) -> AgentRuntime:
+        """Keep exclusive devices available to the evaluation worker."""
+        devices = backend.agent_devices(self.device_nodes)
+        if devices == self.device_nodes:
+            return self
+        return replace(self, device_nodes=devices)
 
     def __post_init__(self):
         python = Path(self.python).expanduser().absolute()

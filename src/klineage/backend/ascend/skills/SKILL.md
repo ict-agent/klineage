@@ -7,6 +7,9 @@ description: Write or inspect KLineage AscendC bundles for Ascend NPUs, includin
 
 The service uses CANN and compatible PyTorch/torch_npu. Tensors use `device="npu"`.
 Use `klineage.info()` for its SoC and toolchain.
+Generation agents are device-free by default: the evaluation worker owns NPU
+access. Use `klineage.info()` and `klineage.evaluate()`; local `npu-smi` and
+`torch.npu` checks do not describe the evaluator's device availability.
 Inspect the actual SoC's execution units, memory levels,
 alignment, supported types, and synchronization rules; CUDA thread and shared-memory
 assumptions do not describe an Ascend kernel.

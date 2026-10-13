@@ -46,8 +46,9 @@ def generate(
         evaluation: Existing service client; inferred from `KLINEAGE_SERVER` when
             set. If neither is supplied, start a local service. Existing services
             require locally accessible registered problem directories.
-        agent: Agent runtime override. Defaults to local device access with a
-            local service, or a device-free runtime with an existing service.
+        agent: Agent runtime override. Defaults to local device access when the
+            backend supports sharing; Ascend keeps devices in the evaluator.
+            Existing services default to a device-free agent.
 
     Returns:
         The measured Kernel, with its sources and problem reference retained in
@@ -109,7 +110,7 @@ def generate(
             timeout=timeout,
             max_retries=max_retries,
             evaluation=evaluation,
-            agent=agent or runtime,
+            agent=agent or runtime.for_agent(backend),
         ).run()
     return result.part("kernel", Kernel)
 

@@ -116,6 +116,10 @@ class AscendBackend(Backend):
     def device_access(self, nodes, environment):
         return select_device(nodes, environment)
 
+    def agent_devices(self, nodes):
+        # The driver reserves devices per sandbox; evaluation owns NPU access.
+        return ()
+
     def info(self):
         from klineage.backend.runtime import load_torch, runtime_info
 

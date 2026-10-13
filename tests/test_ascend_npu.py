@@ -3,8 +3,12 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
+
+from kernel_fixtures import make_kernel
+from problem_fixtures import problem_spec
 
 from klineage.backend.ascend.kernel import AscendBackend, compile_native
 from klineage.harness.sandbox import AgentRuntime, Sandbox, runtime_paths
@@ -12,6 +16,7 @@ from klineage.server.worker import WorkerRuntime
 
 RUN_ASCEND = os.environ.get("KLINEAGE_ASCEND_TESTS") == "1"
 SMOKE_TIMEOUT = 60
+POLL_SECONDS = 0.05
 
 
 @unittest.skipUnless(RUN_ASCEND, "set KLINEAGE_ASCEND_TESTS=1 on an Ascend device")
@@ -50,6 +55,50 @@ torch.testing.assert_close((value @ value).cpu(), torch.full((SIDE, SIDE), float
                 timeout=SMOKE_TIMEOUT, check=False,
             )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_worker_with_live_agent(self):
+        backend = AscendBackend()
+        runtime = AgentRuntime.local(backend)
+        agent = runtime.for_agent(backend)
+        worker = WorkerRuntime(
+            python=runtime.python, device_nodes=runtime.device_nodes,
+            read_only=runtime.read_only, environment=runtime.environment,
+            timeout=SMOKE_TIMEOUT,
+        )
+        problem = problem_spec(language="python", platform="ascend", size=16)
+        kernel = make_kernel("smoke", problem, {"kernel.py": "def run(a, b): return a @ b\n"})
+        source = """
+from pathlib import Path
+import torch, torch_npu
+Path('ready').write_text(str(torch.npu.is_available()))
+input()
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sandbox = Sandbox(
+                root, devices=agent.device_nodes,
+                read_only=(*runtime_paths(agent.python), *agent.read_only),
+                environment=agent.environment,
+            )
+            with (root / "agent.log").open("w+") as log:
+                process = subprocess.Popen(
+                    sandbox.command([str(agent.python), "-c", source]),
+                    env=sandbox.environment, stdin=subprocess.PIPE,
+                    stdout=log, stderr=log, text=True,
+                )
+                try:
+                    deadline = time.monotonic() + SMOKE_TIMEOUT
+                    while not (root / "ready").exists() and time.monotonic() < deadline:
+                        time.sleep(POLL_SECONDS)
+                    self.assertEqual((root / "ready").read_text(), "False")
+                    result = worker.evaluate(
+                        kernel, include_paths=(), build_root=root / "build",
+                        log_dir=root / "logs",
+                    )
+                    diagnostics = "\n".join(path.read_text() for path in (root / "logs").rglob("*.log"))
+                    self.assertTrue(result.accepted, diagnostics)
+                finally:
+                    process.communicate("\n", timeout=SMOKE_TIMEOUT)
 
     def test_native_compile(self):
         # Exercise the installed compiler and linker, not a mocked subprocess.

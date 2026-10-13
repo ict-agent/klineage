@@ -197,6 +197,19 @@ class GenerationTests(unittest.TestCase):
             generate(self.path, workdir=self.work, max_retries=0)
         self.runner.assert_not_called()
 
+    def test_ascend_device_owner(self):
+        backend = get_backend("ascendc")
+        self.runtime = AgentRuntime(device_nodes=(Path("/dev/null"),))
+        self.local_runtime.return_value = self.runtime
+        with (
+            patch("klineage.cli.generation.detect_backend", return_value=backend),
+            patch.object(type(backend), "info", return_value={"available": True, "platform": "ascend"}),
+        ):
+            result = generate(self.path, workdir=self.work, max_retries=0)
+        self.assertTrue(result.validation.accepted)
+        self.assertEqual(self.runner.call_args.kwargs["agent"].device_nodes, ())
+        self.assertEqual(self.worker.call_args.kwargs["device_nodes"], self.runtime.device_nodes)
+
     def test_cli_emits_kernel_json(self):
         output = io.StringIO()
         candidate = make_kernel("generated", self.problem)
