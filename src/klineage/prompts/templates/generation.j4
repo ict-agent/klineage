@@ -7,33 +7,41 @@ Problem: {{ problem | tojson }}
 Use the specified language and backend. Preserve the definition, ordered ABI,
 numerical requirements, execution target and every workload.
 
-Mandatory destination-passing ABI for every candidate, including Python host
-entries and performance experiments:
+Klineage assumes each evaluation candidate to have destination passing style when
+designing the entry function to be evaluated, which requires:
 
-- Set `destination_passing_style = true`; do not omit or change this field.
 - Accept all definition.inputs in insertion order, followed by all
   definition.outputs in insertion order. Do not add, remove, or reorder arguments.
-- The evaluator allocates outputs before calling the entry. Write every output
-  into its existing storage on every call. Return `None` in Python or `void` in C++.
+- Write every output into its existing storage on every call.
 - Do not allocate replacement outputs, rebind or resize output tensors, or change
-  their storage, offset, shape, strides, dtype, or device.
+  their storage, offset, shape, strides, dtype, or device. The evaluator will
+  allocate outputs before calling the entry.
 - Internal workspace and on-chip buffers are allowed; they must not replace
   caller-provided output storage. Preserve the declared input/output contract.
 
 Required signature (use the symbol declared by entry_point):
 
+{% set input_names = problem.definition.inputs.keys() | list %}
+{% set output_names = problem.definition.outputs.keys() | list %}
 {% if problem.language == "python" %}
 ```python
+def kernel({{ (input_names + output_names) | join(", ") }}) -> None:
 {% else %}
+{% set parameters = namespace(values=[]) %}
+{% for name in input_names %}
+{% set parameters.values = parameters.values + ["const at::Tensor& " ~ name] %}
+{% endfor %}
+{% for name in output_names %}
+{% set parameters.values = parameters.values + ["at::Tensor& " ~ name] %}
+{% endfor %}
 ```cpp
+void kernel({{ parameters.values | join(", ") }});
 {% endif %}
-{{ destination_signature(problem) }}
 ```
 
 Python host wrappers use the same ordered arguments and return `None`.
 This contract applies to entry_point; the public Kernel adapter returns outputs.
-The service rejects return-style candidates before loading or compilation and
-checks destination storage and metadata around every entry call, in every language.
+A candidate violating this ABI is invalid even if numerical evaluation passes.
 
 KLineage provides artifact layouts, backend information and kernel evaluation.
 

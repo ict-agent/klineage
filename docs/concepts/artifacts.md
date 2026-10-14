@@ -138,15 +138,6 @@ The entry path is relative to `solution/`. With destination-passing style, the
 host function receives output tensors after the inputs; the Kernel callable
 allocates those outputs and returns them to its caller.
 
-The evaluation service requires `destination_passing_style = true` for every
-candidate, including Python host entries. Missing or false values fail before
-loading or compilation. Inputs come first, then outputs, each in definition
-insertion order. The entry returns `None` in Python or `void` in C++ and writes
-into the supplied storage without replacing or resizing it.
-Destination calls check the return value, storage identity, address, offset,
-shape, strides, dtype and device. Internal workspace and on-chip buffers are allowed.
-Timing baselines can still use return style.
-
 See [CUDA implementation](backends.md#cuda-implementation) for building and timing,
 and [Evaluation guide](../guides/evaluation.md) for measuring a candidate.
 

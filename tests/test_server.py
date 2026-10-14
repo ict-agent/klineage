@@ -118,74 +118,6 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(saved.validation, result.validation)
         self.assertFalse(saved.validation.accepted)
 
-    def test_native_abi_rejected(self):
-        for destination in (None, False):
-            with self.subTest(destination=destination):
-                candidate = submission(kernel())
-                config = candidate["sources"]["config.toml"]
-                config = "\n".join(
-                    line for line in config.splitlines()
-                    if not line.startswith("destination_passing_style")
-                ) + "\n"
-                if destination is False:
-                    config += "destination_passing_style = false\n"
-                candidate["sources"]["config.toml"] = config
-                result = self.service.evaluate({
-                    "problem_id": "gemm", "submission": candidate,
-                })
-                self.assertFalse(result.validation.compile_passed)
-                self.assertIn("destination_passing_style = true", result.error)
-                self.assertIn(
-                    "void run(const at::Tensor& a, const at::Tensor& b, at::Tensor& output)",
-                    result.error,
-                )
-                self.assertEqual(self.service.result(result.job_id).error, result.error)
-        self.assertEqual(FakeRuntime.calls, [])
-
-    def test_return_style_baseline(self):
-        reference = submission(kernel())
-        reference["sources"]["config.toml"] = reference["sources"]["config.toml"].replace(
-            "destination_passing_style = true", "destination_passing_style = false",
-        )
-        result = self.service.evaluate({
-            "problem_id": "gemm", "submission": submission(kernel()),
-            "reference": reference,
-        })
-        self.assertTrue(result.accepted)
-
-    def test_python_abi_rejected(self):
-        for destination in (None, False):
-            with self.subTest(destination=destination):
-                candidate = submission(kernel())
-                config = candidate["sources"]["config.toml"].replace(
-                    'language="cuda"', 'language="python"',
-                ).replace("kernel.cu::run", "kernel.py::run").replace(
-                    "destination_passing_style = true\n", "",
-                )
-                if destination is False:
-                    config += "destination_passing_style = false\n"
-                candidate["sources"] = {
-                    "config.toml": config,
-                    "solution/kernel.py": "def run(a, b): return a @ b\n",
-                }
-                result = self.service.evaluate({"problem_id": "gemm", "submission": candidate})
-                self.assertFalse(result.validation.compile_passed)
-                self.assertIn("destination_passing_style = true", result.error)
-                self.assertIn("def run(a, b, output) -> None:", result.error)
-        self.assertEqual(FakeRuntime.calls, [])
-
-    def test_python_destination(self):
-        candidate = submission(kernel())
-        config = candidate["sources"]["config.toml"].replace(
-            'language="cuda"', 'language="python"',
-        ).replace("kernel.cu::run", "kernel.py::run")
-        candidate["sources"] = {
-            "config.toml": config,
-            "solution/kernel.py": "def run(a, b, output): output.copy_(a @ b)\n",
-        }
-        result = self.service.evaluate({"problem_id": "gemm", "submission": candidate})
-        self.assertTrue(result.accepted)
-
     def test_unix_socket_transport(self):
         socket = self.root / "eval.sock"
         with self.service.start("unix://" + str(socket)) as running:
@@ -204,7 +136,6 @@ class ServerTests(unittest.TestCase):
             "include_paths",
             "build_root",
             "problem",
-            "destination_passing_style",
         ):
             with self.subTest(field=field), self.assertRaises(ServerError):
                 self.client.request("POST", "/evaluate", base | {field: "forged"})

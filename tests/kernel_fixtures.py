@@ -92,7 +92,6 @@ def make_kernel(name, problem, source_files=None, validation=None, compile_flags
             "config.toml": (
                 f'[solution]\nname="{name}"\ndefinition="{problem.name}"\nauthor="test"\n'
                 f'[build]\nlanguage="{problem.language}"\nentry_point="{entry}::run"\n'
-                + ("destination_passing_style = true\n" if problem.language != "python" else "")
             ),
             **{f"solution/{path}": text for path, text in sources.items()},
         }

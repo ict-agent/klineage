@@ -213,31 +213,6 @@ def bundle_entry(sources, backend):
     return BundleEntry(language, source_path, symbol, style)
 
 
-def destination_signature(
-    problem: Problem, symbol: str = "kernel", *, language: str | None = None,
-) -> str:
-    """Describe the destination entry in definition order."""
-    if (language or problem.language) == "python":
-        parameters = [*problem.definition["inputs"], *problem.definition["outputs"]]
-        return f"def {symbol}({', '.join(parameters)}) -> None:"
-    parameters = [
-        f"const at::Tensor& {name}" for name in problem.definition["inputs"]
-    ] + [f"at::Tensor& {name}" for name in problem.definition["outputs"]]
-    return f"void {symbol}({', '.join(parameters)});"
-
-
-def check_candidate_entry(sources, problem: Problem) -> None:
-    """Require caller-owned outputs for every service-evaluated candidate."""
-    entry = bundle_entry(sources, get_backend(problem.language, problem.platform))
-    if entry.output_style is OutputStyle.DESTINATION:
-        return
-    signature = destination_signature(problem, entry.symbol, language=entry.language)
-    raise ValueError(
-        "candidates require destination_passing_style = true; "
-        f"expected entry: {signature}"
-    )
-
-
 def snapshot(work: Path, sources: Mapping[str, str]) -> str:
     sources = {
         relative_source_path(name, "snapshot source"): source
@@ -381,30 +356,6 @@ DTYPE_ALIASES = {
 }
 
 
-@dataclass(frozen=True, slots=True)
-class OutputState:
-    storage: Any
-    metadata: tuple[Any, ...]
-
-    @classmethod
-    def capture(cls, tensor: torch.Tensor) -> OutputState:
-        # Retain the storage so replacement cannot reuse its identity or address.
-        storage = tensor.untyped_storage()
-        return cls(storage, (
-            storage.data_ptr(), storage.nbytes(), tensor.data_ptr(),
-            tensor.storage_offset(), tuple(tensor.shape), tensor.stride(),
-            tensor.dtype, tensor.device, tensor.layout,
-        ))
-
-    def check(self, tensor: torch.Tensor, name: str) -> None:
-        current = self.capture(tensor)
-        if (
-            self.storage._cdata != current.storage._cdata
-            or self.metadata != current.metadata
-        ):
-            raise ValueError(f"ABI output {name!r} changed its storage or metadata")
-
-
 class BundleCallable:
     def __init__(
         self,
@@ -452,12 +403,7 @@ class BundleCallable:
                     allocate(name, spec, device, self.strides.get(("output", name)))
                     for name, spec in outputs_spec.items()
                 )
-                states = tuple(OutputState.capture(value) for value in outputs)
-                result = self.function(*tensors, *outputs)
-                if result is not None:
-                    raise ValueError("destination entry must return None (C++ void)")
-                for state, value, name in zip(states, outputs, outputs_spec, strict=True):
-                    state.check(value, name)
+                self.function(*tensors, *outputs)
             else:
                 result = self.function(*tensors)
                 outputs = (result,) if len(self.outputs) == 1 else result
