@@ -19,30 +19,6 @@ designing the entry function to be evaluated, which requires:
 - Internal workspace and on-chip buffers are allowed; they must not replace
   caller-provided output storage. Preserve the declared input/output contract.
 
-Required signature (use the symbol declared by entry_point):
-
-{% set input_names = problem.definition.inputs.keys() | list %}
-{% set output_names = problem.definition.outputs.keys() | list %}
-{% if problem.language == "python" %}
-```python
-def kernel({{ (input_names + output_names) | join(", ") }}) -> None:
-{% else %}
-{% set parameters = namespace(values=[]) %}
-{% for name in input_names %}
-{% set parameters.values = parameters.values + ["const at::Tensor& " ~ name] %}
-{% endfor %}
-{% for name in output_names %}
-{% set parameters.values = parameters.values + ["at::Tensor& " ~ name] %}
-{% endfor %}
-```cpp
-void kernel({{ parameters.values | join(", ") }});
-{% endif %}
-```
-
-Python host wrappers use the same ordered arguments and return `None`.
-This contract applies to entry_point; the public Kernel adapter returns outputs.
-A candidate violating this ABI is invalid even if numerical evaluation passes.
-
 KLineage provides artifact layouts, backend information and kernel evaluation.
 
 Query the output layout when needed: `from klineage.prompts import action_spec`;
