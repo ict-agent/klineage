@@ -27,6 +27,7 @@ from klineage.artifact.tree import (
     load_artifact,
 )
 from klineage.backend import backends
+from klineage.backend.runtime import destination_signature
 from klineage.constants import BUNDLE_CONFIG, VERSIONS_DIRECTORY
 from klineage.memory import SkillCard
 from klineage.serialization import raw_text, restore, to_json
@@ -131,6 +132,7 @@ def prompt_environment() -> Environment:
     )
     environment.globals.update(
         artifact_language=artifact_language,
+        destination_signature=destination_signature,
     )
     return environment
 

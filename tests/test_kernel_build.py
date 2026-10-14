@@ -307,6 +307,80 @@ class DynamicABITests(unittest.TestCase):
                 fn(torch.ones(rows, 2), torch.ones(rows, 2)), torch.full((rows, 2), 2.0)
             )
 
+    def test_destination_return(self):
+        def add(x, y, out):
+            out.copy_(x + y)
+            return out
+
+        fn = BundleCallable(self.problem, add, OutputStyle.DESTINATION)
+        with self.assertRaisesRegex(ValueError, "must return None"):
+            fn(torch.ones(3, 2), torch.ones(3, 2))
+
+    def test_destination_changes(self):
+        def replace_data(x, y, out):
+            out.data = x + y
+
+        def replace_storage(x, y, out):
+            out.set_(x + y)
+
+        def change_stride(x, y, out):
+            out.as_strided_(out.shape, (1, out.shape[0]))
+
+        def change_shape(x, y, out):
+            out.resize_(2, 3)
+
+        def change_dtype(x, y, out):
+            out.data = out.to(torch.float64)
+
+        def grow_storage(x, y, out):
+            out.untyped_storage().resize_(out.untyped_storage().nbytes() * 2)
+
+        for function in (
+            replace_data, replace_storage, change_stride, change_shape,
+            change_dtype, grow_storage,
+        ):
+            with self.subTest(function=function.__name__):
+                fn = BundleCallable(self.problem, function, OutputStyle.DESTINATION)
+                with self.assertRaisesRegex(ValueError, "output 'out'.*storage or metadata"):
+                    fn(torch.ones(3, 2), torch.ones(3, 2))
+
+    def test_empty_storage_rejected(self):
+        def replace_storage(x, y, out):
+            out.set_(torch.empty_like(out))
+
+        fn = BundleCallable(self.problem, replace_storage, OutputStyle.DESTINATION)
+        with self.assertRaisesRegex(ValueError, "output 'out'.*storage or metadata"):
+            fn(torch.empty(0, 2), torch.empty(0, 2))
+
+    def test_destination_offset(self):
+        out = torch.empty(8)[:6].view(3, 2)
+
+        def change_offset(x, y, out):
+            out.as_strided_(out.shape, out.stride(), 1)
+
+        fn = BundleCallable(self.problem, change_offset, OutputStyle.DESTINATION)
+        with patch("klineage.backend.runtime.allocate", return_value=out):
+            with self.assertRaisesRegex(ValueError, "output 'out'.*storage or metadata"):
+                fn(torch.ones(3, 2), torch.ones(3, 2))
+
+    def test_ordered_destinations(self):
+        spec = {"shape": [2], "dtype": "float32"}
+        problem = io_problem(
+            inputs={"z": spec, "a": spec}, outputs={"y": spec, "b": spec},
+        )
+        destinations = []
+
+        def run(z, a, y, b):
+            destinations.extend((y, b))
+            y.copy_(z - a)
+            b.copy_(z + a)
+
+        fn = BundleCallable(problem, run, OutputStyle.DESTINATION)
+        result = fn(torch.full((2,), 3.0), torch.ones(2))
+        for actual, destination, expected in zip(result, destinations, (2.0, 4.0)):
+            self.assertIs(actual, destination)
+            torch.testing.assert_close(actual, torch.full((2,), expected))
+
     def test_repeated_axis_conflict(self):
         function = Mock()
         fn = BundleCallable(self.problem, function, OutputStyle.RETURN)
@@ -347,6 +421,9 @@ class DynamicABITests(unittest.TestCase):
             fn(torch.ones(3, 2), torch.ones(3, 2))
 
     def test_case_specific_strides(self):
+        def add(x, y, out):
+            out.copy_(x + y)
+
         cases = (workload(3), workload(7))
         for case in cases:
             rows = case["axes"]["N"]
@@ -354,7 +431,7 @@ class DynamicABITests(unittest.TestCase):
                 strides = {("output", "out"): (1, rows)}
                 fn = BundleCallable(
                     dynamic_problem(cases),
-                    lambda x, y, out: out.copy_(x + y),
+                    add,
                     OutputStyle.DESTINATION,
                     strides,
                     workload=case,

@@ -7,6 +7,34 @@ Problem: {{ problem | tojson }}
 Use the specified language and backend. Preserve the definition, ordered ABI,
 numerical requirements, execution target and every workload.
 
+Mandatory destination-passing ABI for every candidate, including Python host
+entries and performance experiments:
+
+- Set `destination_passing_style = true`; do not omit or change this field.
+- Accept all definition.inputs in insertion order, followed by all
+  definition.outputs in insertion order. Do not add, remove, or reorder arguments.
+- The evaluator allocates outputs before calling the entry. Write every output
+  into its existing storage on every call. Return `None` in Python or `void` in C++.
+- Do not allocate replacement outputs, rebind or resize output tensors, or change
+  their storage, offset, shape, strides, dtype, or device.
+- Internal workspace and on-chip buffers are allowed; they must not replace
+  caller-provided output storage. Preserve the declared input/output contract.
+
+Required signature (use the symbol declared by entry_point):
+
+{% if problem.language == "python" %}
+```python
+{% else %}
+```cpp
+{% endif %}
+{{ destination_signature(problem) }}
+```
+
+Python host wrappers use the same ordered arguments and return `None`.
+This contract applies to entry_point; the public Kernel adapter returns outputs.
+The service rejects return-style candidates before loading or compilation and
+checks destination storage and metadata around every entry call, in every language.
+
 KLineage provides artifact layouts, backend information and kernel evaluation.
 
 Query the output layout when needed: `from klineage.prompts import action_spec`;

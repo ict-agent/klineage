@@ -31,6 +31,7 @@ from klineage.artifact.problem import (
     problem_reference,
 )
 from klineage.backend import Backend, get_backend
+from klineage.backend.runtime import check_candidate_entry
 from klineage.serialization import restore, to_json
 from klineage.utils import safe_file, write_json
 
@@ -112,9 +113,11 @@ class Service:
     """Own registered problems, serialized device access and measured records.
 
     Requests supply source text; the service supplies problem references, include
-    paths and evaluation policy. The default runtime isolates worker filesystem
-    access. Candidate and oracle execute in the same worker, so isolation is not
-    proof against a candidate modifying the in-process checker.
+    paths and evaluation policy. All candidates, including Python entries, must
+    use destination passing; timing baselines may use return style. The default
+    runtime isolates worker filesystem access. Candidate and oracle execute in
+    the same worker, so isolation is not proof against a candidate modifying
+    the in-process checker.
 
     Args:
         root: Service-owned directory for in-memory problems, jobs and diagnostics.
@@ -309,6 +312,7 @@ class Service:
         try:
             if not workload_ids:
                 raise ValueError("problem has no workloads to evaluate")
+            check_candidate_entry(request["submission"]["sources"], self.problem(problem_id))
             locked = self.lock.acquire(
                 timeout=max(0, budget - (time.monotonic() - started))
             )
