@@ -1,6 +1,7 @@
 # KLineage
-
-Generate accelerator kernels and reuse optimization skills.
+Klineage is an agentic harness for accelerator kernel generation and optimization, with reusable skills extracted from expert implementations.
+Klineage builds upon the ability of existing harness like Codex and Claude Code. It is designed to provide minimal abstraction for artifact organization, knowledge management and benchmarking
+for kernel agents across hardwares.
 
 [Documentation](https://qiuchu.site/project/klineage/) · [Paper](https://arxiv.org/abs/2605.28213) · [API reference](https://qiuchu.site/project/klineage/reference/artifacts.html)
 
