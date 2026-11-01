@@ -37,7 +37,9 @@ in each version's metadata.
 ::: klineage.artifact.Kernel
     options:
       members:
+        - kernel_spec
         - load_kernel
+        - build_kernel
         - validation
         - __call__
 

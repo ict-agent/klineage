@@ -29,8 +29,8 @@ Keep metadata at the Kernel root. Put skills, repository copies, diagnostic scri
 binaries, caches and run records under workspace/.
 Use normalized relative paths without symlinks, `..`, backslashes, or NUL bytes.
 Keep the bundle below 16 MiB and 1024 files.
-Use one exact layout from `CudaBackend().kernel_spec()` (`from klineage.backend.cuda import CudaBackend`). Additional source
-or header files must be declared in the backend's Node layout.
+Use one exact layout from `CudaKernel.kernel_spec()` (`from klineage.backend.cuda import CudaKernel`). Additional source
+or header files must be declared in the Kernel class's Node layout.
 
 Copy [config.toml](assets/add_one/config.toml) and adapt:
 

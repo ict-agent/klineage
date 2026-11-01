@@ -3,8 +3,6 @@
 import os
 from inspect import isabstract
 
-from klineage.artifact.tree import TYPE_ID
-
 from .ascend import AscendBackend
 from .cuda import CudaBackend
 from .hip import HipBackend
@@ -27,22 +25,18 @@ def register_backend(backend: Backend) -> None:
     format. It does not probe device availability or import vendor libraries.
 
     Args:
-        backend: Driver with a kernel layout, builder, and timing provider.
+        backend: Driver with a concrete Kernel, schema, and timing provider.
 
     Raises:
-        TypeError: The backend or timing provider lacks a required interface.
+        TypeError: The Kernel or timing provider lacks a required interface.
         ValueError: The backend kind, language, or artifact kind is registered.
     """
-    from klineage.artifact.kernel import kernel_layouts
+    from klineage.artifact.kernel import Kernel, kernel_layouts
 
-    if not isinstance(backend, Backend) or isabstract(type(backend)):
-        raise TypeError("backend requires a concrete Backend implementation")
-    kernel_kind = getattr(backend, "kernel_kind", None)
-    if not isinstance(kernel_kind, str) or not TYPE_ID.fullmatch(kernel_kind):
-        raise TypeError("backend requires a kernel_kind identifier")
-    if not callable(backend.kernel_spec) or not callable(backend.build_kernel):
-        raise TypeError("backend requires kernel_spec and build_kernel methods")
-    kernel_layouts(backend)
+    cls = getattr(backend, "kernel_type", None)
+    if not isinstance(cls, type) or not issubclass(cls, Kernel) or isabstract(cls):
+        raise TypeError("backend requires a concrete kernel.py implementation")
+    kernel_layouts(cls)
     timing = getattr(backend, "timing", None)
     timing_name = getattr(timing, "NAME", None)
     if (
@@ -54,19 +48,11 @@ def register_backend(backend: Backend) -> None:
         raise TypeError("backend requires a timing.py provider")
     if any(
         item.kind == backend.kind or item.language == backend.language
-        or item.kernel_kind == kernel_kind
+        or item.kernel_type.artifact_kind == cls.artifact_kind
         for item in REGISTERED_BACKENDS
     ):
         raise ValueError(f"backend already registered: {backend.kind}")
     REGISTERED_BACKENDS.append(backend)
-
-
-def get_kernel_backend(kind: str) -> Backend:
-    """Resolve a serialized kernel kind without probing device libraries."""
-    for backend in REGISTERED_BACKENDS:
-        if backend.kernel_kind == kind:
-            return backend
-    raise TypeError(f"{kind} is not a Kernel of a known backend")
 
 
 def platform_backend(platform: str) -> Backend | None:

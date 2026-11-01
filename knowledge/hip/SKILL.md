@@ -32,8 +32,8 @@ The controller configures `HIP_HOME` or `ROCM_HOME`; report missing toolchains.
 Select architecture flags from the installed DCU; do not copy CUDA flags.
 The default layout has `config.toml` and `solution/kernel.hip`. Keep binaries,
 caches, expert repositories and measurements outside submission/.
-Follow an exact layout from `HipBackend().kernel_spec()` (`from klineage.backend.hip import HipBackend`); additional source
-or header files must be declared in the backend's Node layout.
+Follow an exact layout from `HipKernel.kernel_spec()` (`from klineage.backend.hip import HipKernel`); additional source
+or header files must be declared in the Kernel class's Node layout.
 
 ## Binding and execution
 

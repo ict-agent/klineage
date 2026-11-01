@@ -1,16 +1,17 @@
 # Accelerator Backend
 
-A backend connects KLineage to an accelerator. It defines the kernel layout,
-builds and measures kernels, and reports device and runtime information.
+A backend connects KLineage to an accelerator. Its Kernel class defines how an
+implementation is organized and built. Its Backend class measures that kernel
+and reports the device and runtime information needed to run it.
 
 ## Design
 
-Each backend implements four interfaces:
+The two classes divide the work into four interfaces:
 
 | Interface | Purpose |
 | --- | --- |
-| `Backend.kernel_spec()` | Describe the kernel's file layout |
-| `Backend.build_kernel(kernel)` | Build the implementation and return a callable |
+| `Kernel.kernel_spec()` | Describe the kernel's file layout |
+| `Kernel.build_kernel()` | Build the implementation and return a callable |
 | `Backend.bench()` | Measure a loaded kernel |
 | `Backend.info()` | Report device, architecture and runtime information |
 
@@ -49,8 +50,8 @@ See [Getting started](../getting-started.md) for installation and
 
 ## CUDA implementation
 
-`CudaBackend` defines the CUDA layout, builds kernels, supplies device information
-and delegates measurement to
+`CudaKernel` defines the CUDA file layout and compilation path.
+`CudaBackend` supplies device information and delegates measurement to
 `klineage.backend.cuda.timing`.
 
 <figure class="diagram" tabindex="0" aria-label="Read the CUDA entry, compile the sources, and prepare the callable.">
@@ -106,12 +107,13 @@ for sandbox configuration.
 
 ## Add a backend
 
-Each backend provides `kernel.py` and `timing.py`. The first defines its Backend
-and compilation helpers; the second implements measurement. Guidance in
-`knowledge/<backend>/SKILL.md` teaches the agent how to author kernels.
+Each backend provides `kernel.py` and `timing.py`. The first defines its Kernel,
+Backend and compilation helpers; the second implements measurement. Other modules
+can be added as needed. `knowledge/<backend>/SKILL.md` teaches the agent how
+to author kernels for that platform.
 
 Implement the four interfaces above, then register the Backend for selection.
-All backends use the shared `Kernel` artifact. Follow the
+Artifact layouts remain owned by their Kernel classes. Follow the
 [Extension guide](../guides/extending.md#add-a-device-implementation) for the module
 layout, timing contract and registration steps. The
 [Backend and timing API](../reference/backends.md) provides the full signatures.

@@ -4,7 +4,7 @@ import importlib
 import os
 from pathlib import Path
 
-from klineage.artifact.kernel import KERNEL
+from klineage.artifact.kernel import KERNEL, Kernel
 from klineage.artifact.tree import Node
 from klineage.backend.kernel import Backend, BackendKind
 from klineage.constants import BUILD_DIRECTORY, KERNEL_METADATA, KNOWLEDGE_ROOT
@@ -30,29 +30,21 @@ DEVICE_LIMITS = (
 )
 
 
-class CudaBackend(Backend):
-    """CUDA kernel layout, compilation, discovery and CUPTI timing.
+class CudaKernel(Kernel):
+    """CUDA artifact supporting native .cu sources and Python host entries.
 
-    ``info()`` distinguishes the actual device architecture from the compilation
-    target overridden by TORCH_CUDA_ARCH_LIST. Timing requires FlashInfer and
-    CUPTI 13 or newer; it does not fall back to CUDA event timing.
+    ``submission/config.toml`` selects a host function whose source owns its
+    binding, launch parameters, and stream selection. Native entries build
+    through PyTorch's extension loader and nvcc; the shared loader adapts the
+    problem's tensor ABI. Load a directory with ``Kernel.load_kernel``.
     """
 
-    kind = BackendKind.CUDA
-    language = "cuda"
-    device_type = "cuda"
-    platform_prefixes = ("cuda", "nvidia", "sm")
-    skill_root = KNOWLEDGE_ROOT / "cuda"
-    kernel_kind = "kernel.cuda"
+    __slots__ = ()
+    artifact_kind = "kernel.cuda"
     entry_suffixes = (".cu",)
-    timing = timing
-    device_patterns = (
-        "nvidia[0-9]*", "nvidiactl", "nvidia-uvm", "nvidia-uvm-tools",
-        "nvidia-caps/nvidia-cap[0-9]*",
-    )
-    bench = staticmethod(timing.bench)
 
-    def kernel_spec(self):
+    @classmethod
+    def kernel_spec(cls):
         from klineage.artifact.tree import file_ref
 
         submission = Node.directory(
@@ -67,7 +59,7 @@ class CudaBackend(Backend):
                     "The entry source supplies its Python/pybind11 binding and obtains the current stream. "
                     'Use language="cuda" for native sources or language="python" for a Python host entry.',
                     one_shot=file_ref(
-                        self.skill_root / "assets/add_one/config.toml"
+                        CudaBackend.skill_root / "assets/add_one/config.toml"
                     ),
                 ),
                 Node.directory(
@@ -84,13 +76,35 @@ class CudaBackend(Backend):
         )
 
     def build_kernel(
-        self, kernel, build_root=BUILD_DIRECTORY, *, include_paths=(), strides=None, workload=None
+        self, build_root=BUILD_DIRECTORY, *, include_paths=(), strides=None, workload=None
     ):
         from klineage.backend.runtime import BundleLoader
 
         return BundleLoader(
             build_root, include_paths=include_paths, compiler=compile_native
-        ).build(kernel, backend=self, strides=strides, workload=workload)
+        ).build(self, backend=CudaBackend(), strides=strides, workload=workload)
+
+
+class CudaBackend(Backend):
+    """CUDA discovery and CUPTI timing with the CudaKernel artifact format.
+
+    ``info()`` distinguishes the actual device architecture from the compilation
+    target overridden by TORCH_CUDA_ARCH_LIST. Timing requires FlashInfer and
+    CUPTI 13 or newer; it does not fall back to CUDA event timing.
+    """
+
+    kind = BackendKind.CUDA
+    language = "cuda"
+    device_type = "cuda"
+    platform_prefixes = ("cuda", "nvidia", "sm")
+    skill_root = KNOWLEDGE_ROOT / "cuda"
+    kernel_type = CudaKernel
+    timing = timing
+    device_patterns = (
+        "nvidia[0-9]*", "nvidiactl", "nvidia-uvm", "nvidia-uvm-tools",
+        "nvidia-caps/nvidia-cap[0-9]*",
+    )
+    bench = staticmethod(timing.bench)
 
     def info(self):
         from klineage.backend.runtime import load_torch, runtime_info
@@ -148,7 +162,7 @@ def compile_native(sources, build_root, *, include_paths=(), compile_flags=()):
             build_root,
             include_paths,
             options,
-            CudaBackend.entry_suffixes,
+            CudaKernel.entry_suffixes,
             compile_extension,
         )
 

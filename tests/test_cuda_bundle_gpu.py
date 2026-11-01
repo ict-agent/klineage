@@ -7,9 +7,10 @@ from kernel_fixtures import load_entry, make_kernel, write_kernel
 from problem_fixtures import io_problem
 from runtime_fixtures import BundleCase
 
-from klineage.artifact import Kernel, source_files
+from klineage.artifact import source_files
 from klineage.artifact.tree import read_source_tree
 from klineage.backend import get_backend
+from klineage.backend.cuda import CudaKernel
 
 RUN_CUDA = os.environ.get("KLINEAGE_CUDA_TESTS") == "1"
 SIZE = 1027
@@ -30,7 +31,7 @@ class CudaBundleExecutionTests(BundleCase):
     def test_cuda_skill_example(self):
         # Compile the skill's shipped files, including its actual ABI checks.
         files = read_source_tree(get_backend("cuda").skill_root / "assets/add_one", "example")
-        kernel = Kernel.load_kernel(write_kernel(make_kernel("add-one", self.problem, files), self.root / "kernel"))
+        kernel = CudaKernel.load_kernel(write_kernel(make_kernel("add-one", self.problem, files), self.root / "kernel"))
         self.check(kernel)
 
         # Call pybind11 directly to exercise the example's own ABI checks.
@@ -61,7 +62,7 @@ class CudaBundleExecutionTests(BundleCase):
         kernel = self.kernel(
             {"kernel.py": "def run(x): return x + 1"}, entry="kernel.py::run"
         )
-        current = Kernel.load_kernel(
+        current = CudaKernel.load_kernel(
             write_kernel(
                 make_kernel(
                     "python", self.problem, source_files(kernel.find("submission"))

@@ -189,7 +189,7 @@ def bundle_entry(sources, backend):
         if language != "python":
             if language != backend.language:
                 raise ValueError("build language differs from the device backend")
-            suffixes = backend.entry_suffixes
+            suffixes = backend.kernel_type.entry_suffixes
         entry = nonempty(build["entry_point"], "build entry_point")
         parts = entry.split("::")
         if entry != build["entry_point"] or len(parts) != 2:
@@ -262,8 +262,6 @@ class BundleLoader:
         target = get_backend(problem.language, problem.platform)
         if target.kind != backend.kind:
             raise ValueError("kernel backend differs from its problem target")
-        if kernel.kind != backend.kernel_kind:
-            raise ValueError("kernel kind differs from its backend")
         sources = source_files(kernel.find("submission"))
         entry = bundle_entry(sources, backend)
         metadata = json.loads(raw_text(kernel.find("metadata.json")))

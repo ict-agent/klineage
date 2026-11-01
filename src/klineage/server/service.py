@@ -208,7 +208,7 @@ class Service:
                     )
         return {
             "backend": str(self.backend.kind),
-            "kernel_kind": self.backend.kernel_kind,
+            "kernel_kind": self.backend.kernel_type.artifact_kind,
             "device": deepcopy(self.device_info),
             "problems": list(self.problems),
             "problem_paths": {name: str(path) for name, path in self.problem_paths.items()},
@@ -225,7 +225,7 @@ class Service:
 
     def kernel(self, problem_id: str, value: dict) -> Kernel:
         value = check_submission(value)
-        if value["kind"] != self.backend.kernel_kind:
+        if value["kind"] != self.backend.kernel_type.artifact_kind:
             raise ValueError("kernel kind differs from service backend")
         reference = self.check_problem(problem_id)
         metadata = {
@@ -234,8 +234,7 @@ class Service:
             "validation": None,
             "problem": reference,
         }
-        return Kernel.from_tree(
-            self.backend.kernel_kind,
+        return self.backend.kernel_type(
             Node.directory(
                 ".",
                 (
@@ -347,8 +346,7 @@ class Service:
 
         metadata = json.loads(kernel.find("metadata.json").content)
         metadata["validation"] = validation
-        kernel = Kernel.from_tree(
-            self.backend.kernel_kind,
+        kernel = self.backend.kernel_type(
             kernel.tree.with_child(json_node("metadata.json", metadata))
         )
         logs = [directory / "error.log", *(directory / "evaluations").rglob("*")]

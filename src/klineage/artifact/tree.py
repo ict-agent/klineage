@@ -477,8 +477,7 @@ def load_artifact(path: Path, artifact_type: type[Artifact] = Artifact) -> Artif
                 from klineage.backend import get_backend
 
                 problem = load_problem(Artifact(ArtifactKind.KERNEL, tree))
-                backend = get_backend(problem.language, problem.platform)
-                return Kernel(tree, kind=backend.kernel_kind)
+                artifact_type = get_backend(problem.language, problem.platform).kernel_type
         else:
             tree = replace(capture(path), name=ROOT_NAME)
         if artifact_type.artifact_kind is None:

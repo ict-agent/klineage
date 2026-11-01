@@ -95,7 +95,7 @@ See the [Artifact API](../reference/artifacts.md) for signatures.
 
 ## CUDA Kernel Artifact
 
-`Kernel` combines kernel metadata with the configuration and source code
+`CudaKernel` combines kernel metadata with the configuration and source code
 needed to build an implementation:
 
 ```text
@@ -111,10 +111,10 @@ The source defines the host entry function, device computation and launch
 parameters. The problem stays in its original directory and is referenced from
 metadata.
 
-`CudaBackend().kernel_spec()` returns the native Node layout. CUDA also supports
+`CudaKernel.kernel_spec()` returns the native Node layout. CUDA also supports
 an empty submission for generation from scratch and a Python host-entry layout:
 
-::: klineage.backend.cuda.CudaBackend.kernel_spec
+::: klineage.backend.cuda.CudaKernel.kernel_spec
     options:
       show_root_heading: true
       show_source: true

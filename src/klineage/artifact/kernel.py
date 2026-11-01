@@ -9,12 +9,13 @@ import math
 import os
 import shutil
 import stat
-from collections.abc import Mapping, Sequence
+from abc import ABC, abstractmethod
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from klineage.artifact.tree import (
     MAX_INLINE_BYTES,
@@ -37,10 +38,6 @@ from klineage.constants import (
 )
 from klineage.serialization import raw_bytes, raw_text, restore
 from klineage.utils import DirectoryMode, operation_id, safe_directory, safe_file
-
-if TYPE_CHECKING:
-    from klineage.backend import Backend
-
 
 VALIDATION_GATES = ("compile_passed", "correctness_passed", "profile_passed")
 
@@ -175,10 +172,10 @@ KERNEL = Node.directory(
 )
 
 
-class Kernel(Artifact):
+class Kernel(Artifact, ABC):
     """A kernel source artifact that becomes callable after ``load_kernel``.
 
-    Backends define ``kernel_spec`` and ``build_kernel``. The tree
+    Backend subclasses define ``kernel_spec`` and ``build_kernel``. The tree
     contains metadata and submission sources; ``metadata.json`` references the
     original problem directory and its execution target. Constructing or restoring
     a tree does not compile it. ``load_kernel`` builds the entry callable, whose
@@ -186,7 +183,6 @@ class Kernel(Artifact):
 
     Args:
         tree: Kernel tree rooted at ``.`` and matching the backend's specification.
-        kind: Backend artifact identifier; defaults to the tree's artifact type.
 
     Attributes:
         function (Callable[..., Any] | None): Built entry callable, or ``None``
@@ -197,14 +193,12 @@ class Kernel(Artifact):
 
     __slots__ = ("function",)
 
-    def __init__(self, tree: Node, *, kind: str | None = None):
-        Artifact.__init__(self, kind if kind is not None else tree.artifact_type, tree)
+    def __init__(self, tree: Node):
+        Artifact.__init__(self, self.artifact_kind, tree)
 
     def __post_init__(self):
-        from klineage.backend import get_kernel_backend
-
         errors = []
-        for layout in kernel_layouts(get_kernel_backend(self.kind)):
+        for layout in kernel_layouts(type(self)):
             try:
                 layout.check(self.tree)
             except ValueError as error:
@@ -220,6 +214,28 @@ class Kernel(Artifact):
         object.__setattr__(self, "function", None)
 
     @classmethod
+    def from_tree(cls, kind: str, tree: Node):
+        """Restore a concrete Kernel; the abstract interface uses known backends."""
+        if cls is Kernel:
+            from klineage.backend import backends
+
+            for backend in backends():
+                if backend.kernel_type.artifact_kind == kind:
+                    return backend.kernel_type.from_tree(kind, tree)
+            raise TypeError(f"{kind} is not a Kernel of a known backend")
+        return super().from_tree(kind, tree)
+
+    @classmethod
+    @abstractmethod
+    def kernel_spec(cls) -> Node:
+        """Return this backend's kernel file structure, constraints and examples.
+
+        Subclasses implement this specification; construction and loading use
+        it to reject malformed subtrees with path-specific errors.
+        """
+        raise NotImplementedError
+
+    @classmethod
     def load_kernel(
         cls, build_root: Path = CURRENT_KERNEL_DIRECTORY, *, include_paths: Sequence[Path] = ()
     ) -> Kernel:
@@ -231,10 +247,10 @@ class Kernel(Artifact):
                 external dependencies and are not added to the artifact.
 
         Returns:
-            A ``Kernel`` callable with the problem's ordered
+            A backend-specific ``Kernel`` callable with the problem's ordered
             input ABI: call it as ``outputs = kernel(*inputs)``. Destination-passing
             outputs are allocated by the adapter. Calling ``Kernel.load_kernel`` selects the backend from
-            the referenced problem.
+            the referenced problem; subclass calls require a matching target.
 
         Raises:
             NotADirectoryError: ``build_root`` is not a directory.
@@ -251,17 +267,47 @@ class Kernel(Artifact):
         if not root.is_dir():
             raise NotADirectoryError(f"{root}: expected a Kernel directory")
         tree = capture_kernel(root)
-        value = Artifact(ArtifactKind.KERNEL, tree)
+        value = Artifact(ArtifactKind.KERNEL, tree) if cls is Kernel else cls(tree)
         problem = load_problem(value)
         try:
             backend = get_backend(problem.language, problem.platform)
         except ValueError as error:
             raise ValueError(f"{KERNEL_METADATA}/problem: {error}") from error
-        value = cls(tree, kind=backend.kernel_kind)
+        if cls is Kernel:
+            value = backend.kernel_type(tree)
+        elif not isinstance(value, backend.kernel_type):
+            raise ValueError(
+                f"{KERNEL_METADATA}/problem: target differs from {cls.__name__}"
+            )
         cache = root.parent / STATE_DIRECTORY / BUILD_DIRECTORY
-        function = backend.build_kernel(value, cache, include_paths=include_paths)
+        function = value.build_kernel(cache, include_paths=include_paths)
         object.__setattr__(value, "function", function)
         return value
+
+    @abstractmethod
+    def build_kernel(
+        self,
+        build_root: Path = BUILD_DIRECTORY,
+        *,
+        include_paths: Sequence[Path] = (),
+        strides: Mapping[tuple[str, str], tuple[int, ...]] | None = None,
+        workload: Mapping[str, Any] | None = None,
+    ) -> Callable[..., Any]:
+        """Build this tree and return its entry callable without attaching it.
+
+        Args:
+            build_root: Directory for staged sources and build outputs.
+            include_paths: External compiler include directories.
+            strides: Optional tensor element strides keyed by ``(role, name)``,
+                with role ``input`` or ``output``, for the entry adapter.
+            workload: Optional workload used to bind the entry's tensor ABI.
+                Without a binding, dynamic axes are inferred from call inputs.
+
+        Returns:
+            An entry callable accepting the problem's ordered inputs. Subclasses
+            own compilation and loading; ``load_kernel`` stores this callable.
+        """
+        raise NotImplementedError
 
     @property
     def validation(self):
@@ -276,13 +322,13 @@ class Kernel(Artifact):
         ``RuntimeError`` if the kernel has not been built.
         """
         if self.function is None:
-            raise RuntimeError("Kernel is not built; use Kernel.load_kernel()")
+            raise RuntimeError("Kernel is not built; use its backend's load_kernel()")
         return self.function(*inputs)
 
 
-def kernel_layouts(backend: Backend) -> tuple[Node, ...]:
-    """Define native, source-free and Python-entry layouts for a backend."""
-    native = backend.kernel_spec()
+def kernel_layouts(kernel_type: type[Kernel]) -> tuple[Node, ...]:
+    """Define native, source-free and Python-entry layouts for a Kernel type."""
+    native = kernel_type.kernel_spec()
     if not isinstance(native, Node):
         raise TypeError("kernel_spec must return a Node")
     python_entry = native.with_child(Node.directory(SUBMISSION_DIRECTORY.name, (

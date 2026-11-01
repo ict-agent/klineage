@@ -4,7 +4,7 @@ import importlib
 import os
 from pathlib import Path
 
-from klineage.artifact.kernel import KERNEL
+from klineage.artifact.kernel import KERNEL, Kernel
 from klineage.artifact.tree import Node
 from klineage.backend.kernel import Backend, BackendKind
 from klineage.constants import BUILD_DIRECTORY, KERNEL_METADATA, KNOWLEDGE_ROOT
@@ -18,26 +18,20 @@ HIP_ARCH_ENV = "PYTORCH_ROCM_ARCH"
 HIP_HOME = Path("/opt/dtk")
 
 
-class HipBackend(Backend):
-    """Hygon HIP discovery and current-stream event timing.
+class HipKernel(Kernel):
+    """Hygon HIP artifact supporting native sources and Python host entries.
 
-    PyTorch exposes HIP tensors through its ``cuda`` device API. Device metadata
-    reports the detected architecture separately from PYTORCH_ROCM_ARCH, and
-    timing rejects cold-L2 requests.
+    Native .hip, .cpp, or .cu entries build through DTK hipcc and HIP-enabled
+    PyTorch. The host entry declared in config.toml owns bindings and launches;
+    the shared loader adapts the problem's tensor ABI.
     """
 
-    kind = BackendKind.HYGON
-    language = "hip"
-    device_type = "cuda"
-    platform_prefixes = ("hygon", "hip", "dcu", "dtk")
-    skill_root = KNOWLEDGE_ROOT / "hip"
-    kernel_kind = "kernel.hip"
+    __slots__ = ()
+    artifact_kind = "kernel.hip"
     entry_suffixes = (".hip", ".cpp", ".cu")
-    timing = timing
-    device_patterns = ("kfd", "dri/renderD[0-9]*")
-    bench = staticmethod(timing.bench)
 
-    def kernel_spec(self):
+    @classmethod
+    def kernel_spec(cls):
         submission = Node.directory(
             "submission",
             description="HIP host entry and device implementation. Use DTK hipcc with HIP-enabled PyTorch; native entry sources use .hip, .cpp or .cu.",
@@ -65,13 +59,32 @@ class HipBackend(Backend):
         )
 
     def build_kernel(
-        self, kernel, build_root=BUILD_DIRECTORY, *, include_paths=(), strides=None, workload=None
+        self, build_root=BUILD_DIRECTORY, *, include_paths=(), strides=None, workload=None
     ):
         from klineage.backend.runtime import BundleLoader
 
         return BundleLoader(
             build_root, include_paths=include_paths, compiler=compile_native
-        ).build(kernel, backend=self, strides=strides, workload=workload)
+        ).build(self, backend=HipBackend(), strides=strides, workload=workload)
+
+
+class HipBackend(Backend):
+    """Hygon HIP discovery and current-stream event timing.
+
+    PyTorch exposes HIP tensors through its ``cuda`` device API. Device metadata
+    reports the detected architecture separately from PYTORCH_ROCM_ARCH, and
+    timing rejects cold-L2 requests.
+    """
+
+    kind = BackendKind.HYGON
+    language = "hip"
+    device_type = "cuda"
+    platform_prefixes = ("hygon", "hip", "dcu", "dtk")
+    skill_root = KNOWLEDGE_ROOT / "hip"
+    kernel_type = HipKernel
+    timing = timing
+    device_patterns = ("kfd", "dri/renderD[0-9]*")
+    bench = staticmethod(timing.bench)
 
     def info(self):
         from klineage.backend.runtime import load_torch, runtime_info
@@ -124,7 +137,7 @@ def compile_native(sources, build_root, *, include_paths=(), compile_flags=()):
             build_root,
             include_paths,
             options,
-            HipBackend.entry_suffixes,
+            HipKernel.entry_suffixes,
             compile_extension,
         )
 

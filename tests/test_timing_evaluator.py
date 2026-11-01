@@ -13,7 +13,8 @@ from unittest.mock import Mock, patch
 from kernel_fixtures import make_kernel, write_kernel
 from problem_fixtures import io_problem
 
-from klineage.artifact import Kernel, load_problem
+from klineage.artifact import load_problem
+from klineage.backend.cuda import CudaKernel
 from klineage.backend.cuda import timing as cuda_timing
 from klineage.backend.runtime import bench_events
 from klineage.harness import eval as worker
@@ -112,7 +113,7 @@ class CallableEvaluatorTests(unittest.TestCase):
             '[build]\nlanguage="python"\nentry_point="kernel.py::run"\n',
             "solution/kernel.py": f"def run(value): {body}\n",
         }
-        return Kernel.load_kernel(write_kernel(make_kernel(name, self.problem, sources), self.root / name))
+        return CudaKernel.load_kernel(write_kernel(make_kernel(name, self.problem, sources), self.root / name))
 
     def runtime(self, reference=lambda x: x, inputs=(1,)):
         return ProblemRuntime(
@@ -362,14 +363,12 @@ class BackendWorkerTests(unittest.TestCase):
 
         for name in ("hip-events", "npu-events"):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
-                backend = SimpleNamespace(
-                    timing=SimpleNamespace(NAME=name, DEFAULT_POLICY=timing.TimingPolicy(cold_l2=False)),
-                    build_kernel=Mock(return_value=lambda: None),
-                )
+                backend = SimpleNamespace(timing=SimpleNamespace(NAME=name, DEFAULT_POLICY=timing.TimingPolicy(cold_l2=False)))
                 kernel = kernel_fixture()
                 accepted = worker.ValidationResult(True, True, True, 1.0)
                 with (
                     patch.object(worker, "restore", return_value=kernel),
+                    patch.object(type(kernel), "build_kernel", return_value=lambda: None),
                     patch.object(worker, "get_backend", return_value=backend),
                     patch.object(worker, "trace_module"),
                     patch.object(worker, "load_inputs", return_value={}) as inputs,

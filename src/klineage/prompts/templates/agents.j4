@@ -14,7 +14,7 @@ Query the problem, evaluation hardware and toolchain, and backend layout:
 
 ```python
 import klineage
-from klineage.artifact import Kernel, Problem
+from klineage.artifact import Problem
 from klineage.backend import get_backend
 from klineage.serialization import raw_text
 
@@ -22,10 +22,10 @@ problem = klineage.problem()
 backend = get_backend(problem.language, problem.platform)
 print(klineage.info())
 print(raw_text(Problem.problem_spec()))
-print(raw_text(backend.kernel_spec()))
+print(raw_text(backend.kernel_type.kernel_spec()))
 ```
 
-Use `help(klineage.evaluate)` or `help(Kernel.load_kernel)` for
+Use `help(klineage.evaluate)` or `help(backend.kernel_type.load_kernel)` for
 signatures and docstrings. Read relevant guidance under `workspace/.agents/skills/`.
 
 ## Evaluate kernel artifact

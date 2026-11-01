@@ -477,12 +477,14 @@ class ServerInfoTests(unittest.TestCase):
 import os,sys,uuid
 from pathlib import Path
 from klineage.backend import register_backend
-from klineage.backend.cuda import CudaBackend
+from klineage.backend.cuda import CudaBackend,CudaKernel
+class InfoKernel(CudaKernel):
+    artifact_kind = 'kernel.' + {name!r}
 class InfoBackend(CudaBackend):
     kind = {name!r}
     language = {name!r}
     platform_prefixes = ({name!r},)
-    kernel_kind = 'kernel.' + {name!r}
+    kernel_type = InfoKernel
     def info(self):
         return {{'available': True, 'prefix': sys.prefix,
                 'setting': os.environ.get('DEVICE_SETTING'),

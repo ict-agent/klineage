@@ -5,7 +5,6 @@ import hashlib
 import json
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 from problem_fixtures import problem_spec
 
@@ -51,7 +50,7 @@ def kernel(
 ) -> Kernel:
     return make_kernel(
         name=name,
-        source_files={get_backend(language, platform).kernel_spec().find("submission").find("solution").children[0].name: source},
+        source_files={get_backend(language, platform).kernel_type.kernel_spec().find("submission").find("solution").children[0].name: source},
         problem=problem_spec(case, language, platform),
         validation=validation,
     )
@@ -96,7 +95,7 @@ def make_kernel(name, problem, source_files=None, validation=None, compile_flags
             ),
             **{f"solution/{path}": text for path, text in sources.items()},
         }
-    backend = get_backend(problem.language, problem.platform)
+    cls = get_backend(problem.language, problem.platform).kernel_type
     tree = Node.directory(
         ".",
         (
@@ -112,15 +111,19 @@ def make_kernel(name, problem, source_files=None, validation=None, compile_flags
             Node.directory("submission", source_tree(sources).children),
         ),
     )
-    for layout in kernel_layouts(backend):
+    for layout in kernel_layouts(cls):
         try:
             layout.check(tree)
         except ValueError:
             continue
-        return Kernel(tree, kind=backend.kernel_kind)
+        return cls(tree)
 
-    with patch.object(backend, "kernel_spec", return_value=tree):
-        return Kernel(tree, kind=backend.kernel_kind)
+    class FixtureKernel(cls):
+        @classmethod
+        def kernel_spec(cls):
+            return tree
+
+    return FixtureKernel(tree)
 
 
 def edit_kernel(current, **changes):
