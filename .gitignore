@@ -13,3 +13,7 @@ agent-workspace/
 baseline/
 .vscode/
 .DS_Store
+
+# Track only the online softmax example.
+/knowledge/skillcards/*
+!/knowledge/skillcards/fmha.online-softmax-20260913T100234.595042Z-87218d/
