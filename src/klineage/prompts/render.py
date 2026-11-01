@@ -3,33 +3,20 @@
 from __future__ import annotations
 
 import re
-import tomllib
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
 from jinja2 import (
-    ChoiceLoader,
     Environment,
-    FileSystemLoader,
     PackageLoader,
-    PrefixLoader,
     StrictUndefined,
     select_autoescape,
 )
 
-from klineage.artifact.kernel import KERNEL, Kernel, capture_kernel, latest_kernel
-from klineage.artifact.problem import load_problem
-from klineage.artifact.tree import (
-    Artifact,
-    ArtifactKind,
-    Node,
-    load_artifact,
-)
-from klineage.backend import backends
-from klineage.constants import BUNDLE_CONFIG, VERSIONS_DIRECTORY
+from klineage.artifact.kernel import KERNEL
+from klineage.artifact.tree import Node
 from klineage.memory import SkillCard
-from klineage.serialization import raw_text, restore, to_json
+from klineage.serialization import to_json
 
 PROMPT_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*(?:/[a-z][a-z0-9_]*)?$")
 
@@ -104,17 +91,7 @@ def action_spec(stage: str) -> Node:
 @lru_cache(maxsize=1)
 def prompt_environment() -> Environment:
     environment = Environment(
-        loader=ChoiceLoader(
-            (
-                PackageLoader("klineage.prompts", "templates"),
-                PrefixLoader(
-                    {
-                        backend.language: FileSystemLoader(backend.skill_root.parent / "prompts")
-                        for backend in backends()
-                    }
-                ),
-            )
-        ),
+        loader=PackageLoader("klineage.prompts", "templates"),
         autoescape=select_autoescape(default=False),
         undefined=StrictUndefined,
         trim_blocks=True,
@@ -129,44 +106,11 @@ def prompt_environment() -> Environment:
     environment.policies["json.dumps_function"] = (
         lambda value, **options: to_json(value, indent=options.get("indent"))
     )
-    environment.globals.update(
-        artifact_language=artifact_language,
-    )
     return environment
 
 
-def artifact_language(value: Any) -> str:
-    if isinstance(value, (str, Path)):
-        path = Path(value).expanduser()
-        if not path.exists():
-            return ""
-        if path.is_dir() and (path / VERSIONS_DIRECTORY).exists():
-            path = latest_kernel(path)
-        artifact = (
-            Artifact(ArtifactKind.KERNEL, capture_kernel(path))
-            if path.is_dir() else load_artifact(path)
-        )
-    elif isinstance(value, (Artifact, dict)):
-        artifact = value if isinstance(value, Artifact) else restore(value, Artifact)
-    else:
-        return ""
-    if artifact.kind != ArtifactKind.KERNEL and not artifact.kind.startswith("kernel."):
-        artifact = artifact.part("kernel", Kernel)
-    submission = artifact.find("submission")
-    if not submission:
-        return load_problem(artifact).language
-    if not isinstance(submission, Node):
-        raise ValueError("submission: expected exactly one directory")
-    config = submission.find(BUNDLE_CONFIG)
-    if not config:
-        return load_problem(artifact).language
-    if not isinstance(config, Node):
-        raise ValueError(f"submission/{BUNDLE_CONFIG}: expected exactly one file")
-    return tomllib.loads(raw_text(config))["build"]["language"]
-
-
 def render_prompt(name: str, /, **context: Any) -> str:
-    """Render a task or backend-owned template with strict variables."""
+    """Render a task template with strict variables."""
 
     if not PROMPT_NAME_RE.fullmatch(name):
         raise ValueError(f"invalid prompt template name: {name!r}")

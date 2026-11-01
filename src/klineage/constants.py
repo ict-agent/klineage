@@ -4,6 +4,25 @@ from enum import StrEnum
 from pathlib import Path
 
 
+def platform_knowledge() -> Path:
+    """Locate guidance beside the source or through the installed file record."""
+    root = Path(__file__).resolve().parents[2] / "knowledge/platform"
+    if root.is_dir():
+        return root
+
+    from importlib.metadata import distribution
+
+    # Workers may use a different interpreter from the package's installation.
+    example = ("platform", "cuda", "SKILL.md")
+    for entry in distribution("klineage").files or ():
+        if entry.parts[-len(example):] == example:
+            return entry.locate().resolve().parent.parent
+    raise FileNotFoundError("installed platform guidance is missing")
+
+
+PLATFORM_KNOWLEDGE = platform_knowledge()
+
+
 class RunKind(StrEnum):
     """Operation names used in prompts and workspace directories."""
 

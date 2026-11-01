@@ -17,6 +17,7 @@ Keep implementation beside the component that owns it:
 | `src/klineage/server/` | Evaluation service, client and transport |
 | `src/klineage/memory/` | Skill cards, storage and retrieval |
 | `src/klineage/cli/` | Command implementations and shared options |
+| `knowledge/platform/` | Backend guidance and optimization skill cards |
 
 Tests live in `tests/`. Local experiments
 and generated outputs under `experiment/` are ignored by Git.

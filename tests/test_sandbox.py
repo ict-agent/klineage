@@ -19,7 +19,7 @@ from kernel_fixtures import make_kernel
 from problem_fixtures import problem_spec
 
 from klineage.artifact import load_problem
-from klineage.backend import get_backend
+from klineage.backend import backends, get_backend
 from klineage.harness import AgentRuntime, CodexRunner
 from klineage.harness.eval import WorkerError
 from klineage.harness.sandbox import Sandbox
@@ -310,6 +310,18 @@ print(json.dumps({'home': os.environ['HOME']}))
         self.assertEqual(result["home"], "/home/agent")
         self.assertNotIn("--dev-bind", command)
 
+    def test_platform_skill_mounts(self):
+        runner = self.runner()
+        with (
+            patch("klineage.harness.runner.Sandbox") as sandbox,
+            runner.execution(self.work / "reply.txt", self.work / "run"),
+        ):
+            paths = tuple(map(Path, sandbox.call_args.kwargs["read_only"]))
+        for backend in backends():
+            self.assertIn(backend.skill_root, paths)
+            cards = backend.skill_root.parent / "skillcards"
+            self.assertFalse(any(cards.is_relative_to(path) for path in paths))
+
     def test_explicit_runtime_launch(self):
         agent = AgentRuntime(
             python=self.python, device_nodes=(Path("/dev/null"),),
@@ -390,6 +402,13 @@ class WorkerSandboxTests(unittest.TestCase):
         runtime = runtime or WorkerRuntime(timeout=WORKER_TIMEOUT)
         with patch("klineage.harness.eval.WORKER_ENTRY", code):
             return runtime.invoke(self.request, self.logs, "sandbox")
+
+    def test_platform_skill_mounts(self):
+        paths = tuple(map(Path, WorkerRuntime().read_only))
+        for backend in backends():
+            self.assertIn(backend.skill_root, paths)
+            cards = backend.skill_root.parent / "skillcards"
+            self.assertFalse(any(cards.is_relative_to(path) for path in paths))
 
     def test_service_files_hidden(self):
         code = f"""

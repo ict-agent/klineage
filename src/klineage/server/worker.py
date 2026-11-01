@@ -11,6 +11,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from klineage.artifact import Kernel, load_problem
+from klineage.backend import backends
 from klineage.harness.eval import EvaluationRuntime, WorkerError
 from klineage.harness.process import run_process
 from klineage.harness.sandbox import (
@@ -85,7 +86,11 @@ class WorkerRuntime(EvaluationRuntime):
             environment=runtime_environment(environment), worker_plugins=worker_plugins,
         )
         plugins = plugin_paths(self.worker_plugins)
-        self.read_only = (*runtime_paths(python), PACKAGE_SOURCE, *plugins, *read_only)
+        self.read_only = (
+            *runtime_paths(python), PACKAGE_SOURCE, *plugins, *read_only,
+            # Layout examples live outside the package source tree.
+            *(backend.skill_root for backend in backends()),
+        )
         self.device_nodes = tuple(device_nodes)
         search_paths = [str(path.parent) for path in plugins]
         if self.environment.get("PYTHONPATH"):

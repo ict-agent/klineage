@@ -7,7 +7,7 @@ from pathlib import Path
 from klineage.artifact.kernel import KERNEL
 from klineage.artifact.tree import Node
 from klineage.backend.kernel import Backend, BackendKind
-from klineage.constants import BUILD_DIRECTORY, KERNEL_METADATA
+from klineage.constants import BUILD_DIRECTORY, KERNEL_METADATA, PLATFORM_KNOWLEDGE
 from klineage.utils import safe_name
 
 from . import timing
@@ -30,7 +30,7 @@ class HipBackend(Backend):
     language = "hip"
     device_type = "cuda"
     platform_prefixes = ("hygon", "hip", "dcu", "dtk")
-    skill_root = Path(__file__).with_name("skills")
+    skill_root = PLATFORM_KNOWLEDGE / "hip"
     kernel_kind = "kernel.hip"
     entry_suffixes = (".hip", ".cpp", ".cu")
     timing = timing

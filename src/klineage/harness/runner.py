@@ -311,6 +311,8 @@ class AgentRunner:
         read_only = [
             *runtime_paths(self.agent.python, self.program),
             PACKAGE_ROOT.parent, *self.agent.read_only, *self.read_only,
+            # Platform guidance lives outside the package source tree.
+            *(backend.skill_root for backend in backends()),
         ]
         memory = self.work_dir / MEMORY_DIRECTORY
         if memory.is_dir():

@@ -13,7 +13,6 @@ outputs. Preserve the complete input problem, including its numerical requiremen
 Read the action layout when needed: `from klineage.prompts import action_spec`;
 inspect `action_spec("decompose")` with `klineage.serialization.raw_text`.
 
-{% set target_language = artifact_language(input_kernel) %}
 {% include "backend.j4" %}
 
 - Use workspace/.agents/skills/bench/SKILL.md for harness measurements.
@@ -23,12 +22,6 @@ inspect `action_spec("decompose")` with `klineage.serialization.raw_text`.
 
 For the SkillCard layout, import `SkillCard` from `klineage.memory` and inspect
 `SkillCard.schema` with `klineage.serialization.raw_text` when needed.
-
-{% if target_language == "cuda" %}
-This CUDA-only GEMM example illustrates the card format. Its memory spaces,
-thread mapping, and instructions are not prerequisites for HIP or AscendC cards.
-{% include "cuda/decompose_gemm.j4" %}
-{% endif %}
 
 # Procedure
 
