@@ -92,7 +92,7 @@ class GenerationTests(unittest.TestCase):
         candidate = make_kernel(
             spec.name,
             spec,
-            {backend.kernel_type.kernel_spec().find("submission").find("solution").children[0].name: "// generated"},
+            {backend.kernel_spec().find("submission").find("solution").children[0].name: "// generated"},
         )
         # An agent may retain the supplied problem reference in its source tree.
         metadata = json.loads(candidate.find("metadata.json").content)
@@ -120,7 +120,7 @@ class GenerationTests(unittest.TestCase):
             ):
                 work = self.root / str(backend.kind)
                 result = generate(self.path, workdir=work, timeout=30, max_retries=0)
-                self.assertEqual(result.kind, backend.kernel_type.artifact_kind)
+                self.assertEqual(result.kind, backend.kernel_kind)
                 self.assertTrue(result.validation.accepted)
                 spec = load_problem(result)
                 self.assertEqual(spec.language, backend.language)

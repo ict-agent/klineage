@@ -474,14 +474,12 @@ print(json.dumps({{'headers': 'readonly'}}))
         plugin = directory / f"{plugin_name}.py"
         plugin.write_text(f"""
 from klineage.backend import register_backend
-from klineage.backend.cuda.kernel import CudaBackend,CudaKernel
-class TestKernel(CudaKernel):
-    artifact_kind={plugin_name!r}
+from klineage.backend.cuda.kernel import CudaBackend
 class TestBackend(CudaBackend):
     kind={plugin_name!r}
     language={plugin_name!r}
     platform_prefixes=({plugin_name!r},)
-    kernel_type=TestKernel
+    kernel_kind={plugin_name!r}
 register_backend(TestBackend())
 """)
         with patch.object(sys, "path", [str(directory), *sys.path]):

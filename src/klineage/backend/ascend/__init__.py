@@ -1,9 +1,8 @@
 """ascendc backend public interface."""
 
-from .kernel import ASCEND_ARCH_ENV, AscendBackend, AscendFormat, AscendKernel
+from .kernel import ASCEND_ARCH_ENV, AscendBackend, AscendFormat
 
 __all__ = [
-    "AscendKernel",
     "AscendBackend",
     "ASCEND_ARCH_ENV",
     "AscendFormat",

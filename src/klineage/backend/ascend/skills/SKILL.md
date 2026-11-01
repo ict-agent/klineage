@@ -37,8 +37,8 @@ Do not guess a compiler architecture from a marketing model name. Older CANN
 installations lacking this compiler mode need a supported toolkit.
 The default layout has `config.toml` and `solution/kernel.cpp`. Keep binaries,
 caches, expert repositories and measurements outside submission/.
-Follow an exact layout from `AscendKernel.kernel_spec()` (`from klineage.backend.ascend import AscendKernel`); other filenames
-or headers must be declared in the Kernel class's Node layout.
+Follow an exact layout from `AscendBackend().kernel_spec()` (`from klineage.backend.ascend import AscendBackend`); other filenames
+or headers must be declared in the backend's Node layout.
 
 ## Binding and execution
 

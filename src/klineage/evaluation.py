@@ -111,7 +111,7 @@ def info() -> dict:
     backend = detect_backend()
     paths = local_problems()
     return {
-        "backend": str(backend.kind), "kernel_kind": backend.kernel_type.artifact_kind,
+        "backend": str(backend.kind), "kernel_kind": backend.kernel_kind,
         "device": backend.info(), "problems": list(paths),
         "problem_paths": {name: str(path) for name, path in paths.items()},
         "timeout": DEFAULT_TIMEOUT,

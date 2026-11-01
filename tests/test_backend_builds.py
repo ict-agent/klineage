@@ -320,7 +320,7 @@ class BackendBundleTests(unittest.TestCase):
         problem = load_problem(original).replace(
             language=backend.language, platform=backend.kind
         )
-        return make_kernel("test", problem, {("kernel" + backend.kernel_type.entry_suffixes[0]): "// native kernel"})
+        return make_kernel("test", problem, {("kernel" + backend.entry_suffixes[0]): "// native kernel"})
 
     def test_native_bundle_backend(self):
         for backend in backends():
@@ -329,13 +329,13 @@ class BackendBundleTests(unittest.TestCase):
                 config = (
                     '[solution]\nname="test"\ndefinition="gemm"\nauthor="test"\n'
                     f'[build]\nlanguage="{backend.language}"\n'
-                    f'entry_point="{("kernel" + backend.kernel_type.entry_suffixes[0])}::run"\n'
+                    f'entry_point="{("kernel" + backend.entry_suffixes[0])}::run"\n'
                 )
-                current = edit_kernel(current, source_files={'config.toml': config, f'solution/{("kernel" + backend.kernel_type.entry_suffixes[0])}': '// entry', 'solution/helper.cpp': '// helper', 'solution/helper.h': '// header'})
+                current = edit_kernel(current, source_files={'config.toml': config, f'solution/{("kernel" + backend.entry_suffixes[0])}': '// entry', 'solution/helper.cpp': '// helper', 'solution/helper.h': '// header'})
                 self.assertEqual(load_entry(self.loader, current)(2), 3)
                 self.assertEqual(
                     {Path(path).name for path in self.compiles[-1][2]},
-                    {("kernel" + backend.kernel_type.entry_suffixes[0]), "helper.cpp"},
+                    {("kernel" + backend.entry_suffixes[0]), "helper.cpp"},
                 )
 
     def test_cache_backend_arch(self):
@@ -425,56 +425,80 @@ class NpuInputTests(unittest.TestCase):
 
 
 class KernelPortTests(unittest.TestCase):
-
-    def test_new_kernel_registration(self):
-        from dataclasses import replace
-
-        from kernel_fixtures import kernel
-
+    def test_backend_registration(self):
         from klineage.artifact import Kernel, Node
-        from klineage.backend.cuda import CudaBackend, CudaKernel
+        from klineage.backend.cuda import CudaBackend
         from klineage.backend.registry import REGISTERED_BACKENDS
 
-        class ExampleKernel(CudaKernel):
-            artifact_kind = "kernel.example"
-
-            @classmethod
-            def kernel_spec(cls):
-                spec = super().kernel_spec()
-                return replace(
-                    spec,
-                    children=(
-                        *spec.children,
-                        Node.file("notes.txt", description="Backend notes."),
-                    ),
-                )
-
         class ExampleBackend(CudaBackend):
-            kernel_type = ExampleKernel
+            kind = "example"
+            language = "example"
+            kernel_kind = "kernel.example"
 
-            def __init__(self):
-                super().__init__()
-                object.__setattr__(self, "kind", "example")
-                object.__setattr__(self, "language", "example")
+            def kernel_spec(self):
+                return super().kernel_spec().with_child(Node.file("notes.txt"))
 
-
-        self.addCleanup(REGISTERED_BACKENDS.remove, backend := ExampleBackend())
+        backend = ExampleBackend()
         register_backend(backend)
+        self.addCleanup(REGISTERED_BACKENDS.remove, backend)
         tree = Node.directory(".", kernel().tree.children)
         with self.assertRaisesRegex(ValueError, "notes.txt"):
-            ExampleKernel(tree)
-        value = ExampleKernel(tree.with_child(Node.file("notes.txt", "example")))
+            Kernel(tree, kind=backend.kernel_kind)
+        value = Kernel(
+            tree.with_child(Node.file("notes.txt", "example")), kind=backend.kernel_kind,
+        )
         restored = from_json(to_json(value), Kernel)
-        self.assertIsInstance(restored, ExampleKernel)
+        self.assertIs(type(restored), Kernel)
         self.assertEqual(restored, value)
         self.assertEqual(restored.find("notes.txt").description, "")
         empty = tree.with_child(Node.directory("submission"))
-        self.assertIsInstance(ExampleKernel(empty), ExampleKernel)
+        self.assertIs(type(Kernel(empty, kind=backend.kernel_kind)), Kernel)
         python = tree.with_child(Node.directory("submission", (
             Node.file("config.toml", "configuration"),
             Node.directory("solution", (Node.file("kernel.py", "def run(): pass"),)),
         )))
-        self.assertIsInstance(ExampleKernel(python.with_child(Node.file("notes.txt", "notes"))), ExampleKernel)
+        self.assertIs(type(Kernel(
+            python.with_child(Node.file("notes.txt", "notes")), kind=backend.kernel_kind,
+        )), Kernel)
+
+    def test_invalid_backend_contracts(self):
+        from klineage.backend.cuda import CudaBackend
+
+        backend = CudaBackend()
+        for attribute, value in (
+            ("kernel_kind", ""),
+            ("kernel_spec", lambda: None),
+            ("build_kernel", None),
+        ):
+            with (
+                self.subTest(attribute=attribute),
+                patch.object(backend, attribute, value),
+                self.assertRaises(TypeError),
+            ):
+                register_backend(backend)
+
+    def test_duplicate_kernel_kind(self):
+        from klineage.backend.cuda import CudaBackend
+
+        class DuplicateBackend(CudaBackend):
+            kind = "duplicate"
+            language = "duplicate"
+
+        with self.assertRaises(ValueError):
+            register_backend(DuplicateBackend())
+
+    def test_shared_kernel_roundtrip(self):
+        from klineage.artifact import Kernel
+
+        for backend in backends():
+            with self.subTest(backend=backend.kind):
+                value = kernel(language=backend.language, platform=backend.platform_prefixes[0])
+                restored = from_json(to_json(value), Kernel)
+                self.assertIs(type(value), Kernel)
+                self.assertIs(type(restored), Kernel)
+                self.assertEqual(restored.kind, backend.kernel_kind)
+                self.assertEqual(restored, value)
+                self.assertIsNone(restored.function)
 
 
 class BackendTests(unittest.TestCase):

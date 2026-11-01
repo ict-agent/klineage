@@ -1,8 +1,7 @@
 Read workspace/AGENTS.md for the harness interfaces.
 
-A backend represents an accelerator family. It provides a Kernel type, latency
-measurement, and hardware and runtime information. The Kernel type defines the
-artifact layout and builds an executable kernel.
+A backend represents an accelerator family. It defines the kernel layout, builds
+kernels, measures latency, and reports hardware and runtime information.
 
 Select the problem's backend and query its information:
 
@@ -14,7 +13,7 @@ from klineage.serialization import raw_text
 problem = klineage.problem()
 backend = get_backend(problem.language, problem.platform)
 print(klineage.info())
-print(raw_text(backend.kernel_type.kernel_spec()))
+print(raw_text(backend.kernel_spec()))
 print(backend.skill_root / "SKILL.md")
 ```
 
@@ -24,7 +23,7 @@ runtime and toolchain. `backend.info()` queries the local process instead.
 from `klineage.backend` detects an available local backend.
 
 `kernel_spec()` returns the primary file layout. For all supported layouts,
-including Python host entries, use `kernel_layouts(backend.kernel_type)` from
+including Python host entries, use `kernel_layouts(backend)` from
 `klineage.artifact` and render each with `raw_text`. Read the printed SKILL.md
 path for platform-specific guidance and examples.
 

@@ -548,8 +548,8 @@ def evaluate_request(request: Mapping[str, Any]) -> ValidationResult:
         object.__setattr__(
             kernel,
             "function",
-            kernel.build_kernel(
-                config.build_root,
+            backend.build_kernel(
+                kernel, config.build_root,
                 include_paths=config.include_paths,
                 strides=strides,
                 workload=workload,
@@ -559,8 +559,8 @@ def evaluate_request(request: Mapping[str, Any]) -> ValidationResult:
             object.__setattr__(
                 reference,
                 "function",
-                reference.build_kernel(
-                    config.build_root,
+                backend.build_kernel(
+                    reference, config.build_root,
                     include_paths=config.include_paths,
                     strides=strides,
                     workload=workload,

@@ -11,7 +11,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from klineage.artifact.kernel import KERNEL, Kernel
+from klineage.artifact.kernel import KERNEL
 from klineage.artifact.tree import Node
 from klineage.backend.kernel import Backend, BackendKind
 from klineage.constants import BUILD_DIRECTORY, KERNEL_METADATA
@@ -46,20 +46,25 @@ def check_storage(tensor):
         ) from None
 
 
-class AscendKernel(Kernel):
-    """AscendC artifact supporting native sources and Python host entries.
+class AscendBackend(Backend):
+    """Ascend discovery and current-stream NPU event timing through torch_npu.
 
-    Native .asc or .cpp entries build with CANN bisheng and an explicit
-    ASCEND_ARCH target. The host entry declared in config.toml owns bindings and
-    launches; the shared loader adapts the problem's tensor ABI.
+    Metadata describes the device, CANN toolchain, and compilation target from
+    ASCEND_ARCH. Event timing rejects cold-L2 requests.
     """
 
-    __slots__ = ()
-    artifact_kind = "kernel.ascendc"
+    kind = BackendKind.ASCEND
+    language = "ascendc"
+    device_type = "npu"
+    platform_prefixes = ("ascend", "npu")
+    skill_root = Path(__file__).with_name("skills")
+    kernel_kind = "kernel.ascendc"
     entry_suffixes = (".asc", ".cpp")
+    timing = timing
+    device_patterns = ("davinci[0-9]*", "davinci_manager", "devmm_svm", "hisi_hdc")
+    bench = staticmethod(timing.bench)
 
-    @classmethod
-    def kernel_spec(cls):
+    def kernel_spec(self):
         submission = Node.directory(
             "submission",
             description="AscendC host entry and device implementation. Use CANN bisheng -x asc; native entry sources use .asc or .cpp.",
@@ -87,31 +92,13 @@ class AscendKernel(Kernel):
         )
 
     def build_kernel(
-        self, build_root=BUILD_DIRECTORY, *, include_paths=(), strides=None, workload=None
+        self, kernel, build_root=BUILD_DIRECTORY, *, include_paths=(), strides=None, workload=None
     ):
         from klineage.backend.runtime import BundleLoader
 
         return BundleLoader(
             build_root, include_paths=include_paths, compiler=compile_native
-        ).build(self, backend=AscendBackend(), strides=strides, workload=workload)
-
-
-class AscendBackend(Backend):
-    """Ascend discovery and current-stream NPU event timing through torch_npu.
-
-    Metadata describes the device, CANN toolchain, and compilation target from
-    ASCEND_ARCH. Event timing rejects cold-L2 requests.
-    """
-
-    kind = BackendKind.ASCEND
-    language = "ascendc"
-    device_type = "npu"
-    platform_prefixes = ("ascend", "npu")
-    skill_root = Path(__file__).with_name("skills")
-    kernel_type = AscendKernel
-    timing = timing
-    device_patterns = ("davinci[0-9]*", "davinci_manager", "devmm_svm", "hisi_hdc")
-    bench = staticmethod(timing.bench)
+        ).build(kernel, backend=self, strides=strides, workload=workload)
 
     def device_access(self, nodes, environment):
         return select_device(nodes, environment)
@@ -172,7 +159,7 @@ def compile_native(sources, build_root, *, include_paths=(), compile_flags=()):
         build_root,
         include_paths,
         options,
-        AscendKernel.entry_suffixes,
+        AscendBackend.entry_suffixes,
         compile_ascend,
     )
 

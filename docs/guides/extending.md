@@ -117,12 +117,12 @@ handler in their inheritance chain. See the
 
 ## Add a device implementation
 
-A backend needs a Kernel class, device information and a timing implementation.
+A backend defines the kernel layout, builder, device information and timing.
 Keep them in this layout, adding other modules as needed:
 
 ```text
 klineage/backend/example/
-  __init__.py         # Public Kernel and Backend classes
+  __init__.py         # Public Backend class
   kernel.py           # File layout, builder and device information
   timing.py           # Latency measurement
   skills/SKILL.md      # Kernel authoring guidance for the agent
@@ -132,24 +132,25 @@ An external package can use the same organization. Keep imports usable without
 device libraries; load the vendor runtime inside build, timing and information
 calls.
 
-### Define the Kernel
+### Define the layout and builder
 
-Subclass `Kernel` and choose a unique `artifact_kind`. Implement:
+Subclass `Backend` and choose a unique `kernel_kind`. Implement:
 
 | Method | Responsibility |
 | --- | --- |
 | `kernel_spec()` | Return the complete Node layout, including metadata and submission files |
-| `build_kernel()` | Build the source and return its host callable |
+| `build_kernel(kernel)` | Build the source and return its host callable |
 
 Keep the original problem directory reference in `metadata.json`. The source
 entry owns its launch parameters and bindings. Report invalid configuration or
 source layout with the failing file or field path.
 
-Reuse `Kernel.load_kernel()` for directory loading and the existing handlers for
-serialization. The builder receives a separate compiler-output directory,
+Use the shared `Kernel` artifact, `Kernel.load_kernel()` for directory loading,
+and the existing serialization handlers. The builder receives the Kernel,
+a separate compiler-output directory,
 `include_paths`, and optional `strides` and `workload` bindings. A workload selects
 one case without replacing the Kernel's reference to the whole problem.
-See the [Kernel API](../reference/artifacts.md#klineage.artifact.Kernel) for signatures.
+See the [Backend API](../reference/backends.md#klineage.backend.Backend) for signatures.
 
 The shared `BundleLoader` supports PyTorch tensor inputs and outputs. If you use
 it, supply a compiler callback and supported entry suffixes. A different tensor
@@ -167,8 +168,8 @@ runtime also needs integration with the evaluation harness.
 
 ### Implement timing and device information
 
-The Backend connects the Kernel to its timing module and reports runtime
-information. This skeleton assumes `ExampleKernel` and `timing.py` are implemented:
+The Backend also supplies timing and runtime information. This skeleton assumes
+`timing.py` is implemented:
 
 ```python
 from pathlib import Path
@@ -182,10 +183,17 @@ class ExampleBackend(Backend):
     language = "example"
     device_type = "example"
     platform_prefixes = ("example",)
-    kernel_type = ExampleKernel
+    kernel_kind = "kernel.example"
+    entry_suffixes = (".example",)
     skill_root = Path(__file__).with_name("skills")
     timing = timing
     bench = staticmethod(timing.bench)
+
+    def kernel_spec(self):
+        raise NotImplementedError("Define the kernel layout")
+
+    def build_kernel(self, kernel, build_root, *, include_paths=(), strides=None, workload=None):
+        raise NotImplementedError("Build the host callable")
 
     def info(self):
         raise NotImplementedError("Query the vendor runtime")

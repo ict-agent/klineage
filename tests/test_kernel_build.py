@@ -5,7 +5,6 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
-from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -25,8 +24,7 @@ from klineage.artifact import (
 )
 from klineage.artifact import kernel as storage
 from klineage.artifact.tree import read_source_tree
-from klineage.backend import get_backend
-from klineage.backend.cuda import CudaKernel
+from klineage.backend import backends, get_backend
 from klineage.backend.runtime import BundleCallable, OutputStyle, bundle_entry, snapshot
 from klineage.errors import StructuredOutputError
 
@@ -63,7 +61,7 @@ class KernelBuildTests(unittest.TestCase):
         self.directory = write_kernel(self.current, self.root / "current_kernel")
 
     def test_directory_load(self):
-        current = CudaKernel.load_kernel(build_root=self.directory)
+        current = Kernel.load_kernel(build_root=self.directory)
         self.assertEqual(current(3), 4)
         self.assertEqual(load_problem(current), self.problem)
         self.assertEqual(
@@ -72,7 +70,7 @@ class KernelBuildTests(unittest.TestCase):
         self.assertNotIn("problem", {node.name for node in current.tree.children})
 
     def test_load_changed_files(self):
-        current = CudaKernel.load_kernel(self.directory)
+        current = Kernel.load_kernel(self.directory)
         (self.directory / "submission/solution/kernel.py").write_text(
             "def run(x): return x + 2"
         )
@@ -80,33 +78,23 @@ class KernelBuildTests(unittest.TestCase):
         self.assertEqual((current(3), loaded(3)), (4, 5))
 
     def test_failed_reload_is_isolated(self):
-        current = CudaKernel.load_kernel(self.directory)
+        current = Kernel.load_kernel(self.directory)
         (self.directory / "submission/solution/kernel.py").write_text("def run(:")
         with self.assertRaises(SyntaxError):
-            CudaKernel.load_kernel(self.directory)
+            Kernel.load_kernel(self.directory)
         self.assertEqual(current(3), 4)
 
     def test_generic_backend_spec(self):
-        class ExtendedKernel(CudaKernel):
-            artifact_kind = "kernel.cuda.test_build"
-
-            @classmethod
-            def kernel_spec(cls):
-                schema = super().kernel_spec()
-                return replace(schema, children=(
-                    *schema.children, Node.file("notes.txt", description="Backend notes."),
-                ))
-
-
+        backend = get_backend("cuda")
+        spec = backend.kernel_spec().with_child(Node.file("notes.txt"))
         notes = self.directory / "notes.txt"
         notes.write_text("platform-specific metadata")
-        backend = SimpleNamespace(kernel_type=ExtendedKernel)
         with (
-            patch("klineage.backend.get_backend", return_value=backend),
-            patch.object(ExtendedKernel, "build_kernel", return_value=lambda x: x + 1),
+            patch.object(backend, "kernel_spec", return_value=spec),
+            patch.object(backend, "build_kernel", return_value=lambda x: x + 1),
         ):
             loaded = Kernel.load_kernel(self.directory)
-            self.assertIsInstance(loaded, ExtendedKernel)
+            self.assertIs(type(loaded), Kernel)
             self.assertEqual(loaded.find("notes.txt").content, notes.read_text())
             self.assertEqual(loaded(3), 4)
             notes.unlink()
@@ -114,10 +102,33 @@ class KernelBuildTests(unittest.TestCase):
                 Kernel.load_kernel(self.directory)
 
     def test_wrong_backend_rejected(self):
-        from klineage.backend.ascend import AscendKernel
+        with self.assertRaisesRegex(ValueError, "backend differs"):
+            get_backend("ascendc").build_kernel(self.current, self.root / "build")
 
-        with self.assertRaisesRegex(ValueError, "metadata.json/problem: target"):
-            AscendKernel.load_kernel(self.directory)
+    def test_wrong_kind_rejected(self):
+        forged = Kernel(
+            Node.directory(".", self.current.tree.children),
+            kind=get_backend("hip").kernel_kind,
+        )
+        with self.assertRaisesRegex(ValueError, "backend"):
+            get_backend("cuda").build_kernel(forged, self.root / "build")
+
+    def test_backend_directory_loads(self):
+        for backend in backends():
+            with self.subTest(backend=backend.kind):
+                problem = self.problem.replace(platform=backend.platform_prefixes[0])
+                current = make_kernel("increment", problem, SOURCES)
+                directory = write_kernel(current, self.root / str(backend.kind))
+                restored = load_artifact(directory, Kernel)
+                self.assertIs(type(restored), Kernel)
+                self.assertEqual(restored.kind, backend.kernel_kind)
+                self.assertIsNone(restored.function)
+
+                with patch("klineage.backend.runtime.load_torch", return_value=torch):
+                    loaded = Kernel.load_kernel(directory)
+                self.assertIs(type(loaded), Kernel)
+                self.assertEqual(loaded.kind, backend.kernel_kind)
+                self.assertEqual(loaded(3), 4)
 
 
 class KernelSnapshotTests(unittest.TestCase):
@@ -150,12 +161,10 @@ class KernelSnapshotTests(unittest.TestCase):
         data = self.work / "weights.bin"
         data.write_bytes(b"\x00\xff\x80\r\n")
         tree = self.current.tree.with_child(Node.file("weights.bin", reference=file_ref(data)))
-        class BinaryKernel(CudaKernel):
-            @classmethod
-            def kernel_spec(cls):
-                return super().kernel_spec().with_child(Node.file("weights.bin"))
-
-        current = BinaryKernel(tree)
+        backend = get_backend("cuda")
+        spec = backend.kernel_spec().with_child(Node.file("weights.bin"))
+        with patch.object(backend, "kernel_spec", return_value=spec):
+            current = Kernel(tree)
         saved = storage.snapshot_kernel(current, self.work)
         self.assertEqual((saved / "weights.bin").read_bytes(), data.read_bytes())
         data.write_bytes(b"changed")

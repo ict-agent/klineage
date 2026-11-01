@@ -136,7 +136,7 @@ from klineage.prompts import action_spec
 from klineage.serialization import raw_text
 
 print(raw_text(Problem.problem_spec()))
-for layout in kernel_layouts(get_backend("cuda").kernel_type):
+for layout in kernel_layouts(get_backend("cuda")):
     print(raw_text(layout))
 print(raw_text(SkillCard.schema))
 print(raw_text(action_spec("apply")))
