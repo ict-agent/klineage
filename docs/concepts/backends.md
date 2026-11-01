@@ -108,7 +108,7 @@ for sandbox configuration.
 
 Each backend provides `kernel.py` and `timing.py`. The first defines its Backend
 and compilation helpers; the second implements measurement. Guidance in
-`knowledge/platform/<backend>/SKILL.md` teaches the agent how to author kernels.
+`knowledge/<backend>/SKILL.md` teaches the agent how to author kernels.
 
 Implement the four interfaces above, then register the Backend for selection.
 All backends use the shared `Kernel` artifact. Follow the

@@ -4,23 +4,23 @@ from enum import StrEnum
 from pathlib import Path
 
 
-def platform_knowledge() -> Path:
+def knowledge_root() -> Path:
     """Locate guidance beside the source or through the installed file record."""
-    root = Path(__file__).resolve().parents[2] / "knowledge/platform"
+    root = Path(__file__).resolve().parents[2] / "knowledge"
     if root.is_dir():
         return root
 
     from importlib.metadata import distribution
 
     # Workers may use a different interpreter from the package's installation.
-    example = ("platform", "cuda", "SKILL.md")
+    example = ("cuda", "SKILL.md")
     for entry in distribution("klineage").files or ():
         if entry.parts[-len(example):] == example:
             return entry.locate().resolve().parent.parent
     raise FileNotFoundError("installed platform guidance is missing")
 
 
-PLATFORM_KNOWLEDGE = platform_knowledge()
+KNOWLEDGE_ROOT = knowledge_root()
 
 
 class RunKind(StrEnum):

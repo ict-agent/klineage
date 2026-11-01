@@ -7,7 +7,7 @@ from pathlib import Path
 from klineage.artifact.kernel import KERNEL
 from klineage.artifact.tree import Node
 from klineage.backend.kernel import Backend, BackendKind
-from klineage.constants import BUILD_DIRECTORY, KERNEL_METADATA, PLATFORM_KNOWLEDGE
+from klineage.constants import BUILD_DIRECTORY, KERNEL_METADATA, KNOWLEDGE_ROOT
 
 from . import timing
 
@@ -42,7 +42,7 @@ class CudaBackend(Backend):
     language = "cuda"
     device_type = "cuda"
     platform_prefixes = ("cuda", "nvidia", "sm")
-    skill_root = PLATFORM_KNOWLEDGE / "cuda"
+    skill_root = KNOWLEDGE_ROOT / "cuda"
     kernel_kind = "kernel.cuda"
     entry_suffixes = (".cu",)
     timing = timing

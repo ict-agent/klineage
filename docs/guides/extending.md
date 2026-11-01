@@ -125,7 +125,7 @@ klineage/backend/example/
   __init__.py         # Public Backend class
   kernel.py           # File layout, builder and device information
   timing.py           # Latency measurement
-knowledge/platform/example/
+knowledge/example/
   SKILL.md            # Kernel authoring guidance for the agent
 ```
 
@@ -186,7 +186,7 @@ class ExampleBackend(Backend):
     platform_prefixes = ("example",)
     kernel_kind = "kernel.example"
     entry_suffixes = (".example",)
-    skill_root = Path("knowledge/platform/example").resolve()
+    skill_root = Path("knowledge/example").resolve()
     timing = timing
     bench = staticmethod(timing.bench)
 

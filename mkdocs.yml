@@ -10,7 +10,7 @@ use_directory_urls: false
 strict: true
 watch:
   - src/klineage
-  - knowledge/platform
+  - knowledge
 
 extra_css:
   - assets/stylesheets/diagrams.css

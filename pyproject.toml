@@ -69,4 +69,4 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 data = { data = "knowledge" }
-source-exclude = ["knowledge/platform/skillcards/**"]
+source-exclude = ["knowledge/skillcards/**"]

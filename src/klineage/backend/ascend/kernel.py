@@ -14,7 +14,7 @@ from typing import Any
 from klineage.artifact.kernel import KERNEL
 from klineage.artifact.tree import Node
 from klineage.backend.kernel import Backend, BackendKind
-from klineage.constants import BUILD_DIRECTORY, KERNEL_METADATA, PLATFORM_KNOWLEDGE
+from klineage.constants import BUILD_DIRECTORY, KERNEL_METADATA, KNOWLEDGE_ROOT
 from klineage.utils import safe_name
 
 from . import timing
@@ -57,7 +57,7 @@ class AscendBackend(Backend):
     language = "ascendc"
     device_type = "npu"
     platform_prefixes = ("ascend", "npu")
-    skill_root = PLATFORM_KNOWLEDGE / "ascend"
+    skill_root = KNOWLEDGE_ROOT / "ascend"
     kernel_kind = "kernel.ascendc"
     entry_suffixes = (".asc", ".cpp")
     timing = timing
